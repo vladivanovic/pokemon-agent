@@ -40,6 +40,14 @@ class ActionRequest(BaseModel):
     actions: list[str]
 
 
+class EventRequest(BaseModel):
+    """Body for POST /event — the agent pushes narration to the dashboard."""
+    type: str                       # "reasoning" | "decision" | "key_moment" | "alert"
+    text: Optional[str] = None      # for reasoning / decision / alert
+    description: Optional[str] = None  # for key_moment
+    category: Optional[str] = None     # key_moment category: milestone/badge/catch/alert
+
+
 class SaveRequest(BaseModel):
     """Body for POST /save and POST /load."""
     name: str
@@ -401,6 +409,27 @@ async def screenshot_base64():
         return {"image": b64, "format": "png"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Screenshot error: {e}")
+
+
+@app.post("/event")
+async def push_event(req: EventRequest):
+    """Push an agent-narration event to the dashboard (broadcast over WS).
+
+    The agent calls this to make its reasoning visible on the stream:
+      - type "reasoning" / "decision" / "alert": send `text`
+      - type "key_moment": send `description` (+ optional `category`:
+        milestone | badge | catch | alert)
+    These are display-only; they are NOT stored in conversation history.
+    """
+    event: dict = {"type": req.type}
+    if req.text is not None:
+        event["text"] = req.text
+    if req.description is not None:
+        event["description"] = req.description
+    if req.category is not None:
+        event["category"] = req.category
+    await broadcast(event)
+    return {"success": True, "broadcast_to": len(_ws_clients)}
 
 
 @app.post("/action")

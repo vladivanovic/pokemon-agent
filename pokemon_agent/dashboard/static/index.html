@@ -3,154 +3,181 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hermes Plays Pokémon</title>
-    <link rel="stylesheet" href="style.css?v=4">
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎮</text></svg>">
+    <title>Hermes Plays Pokémon — Field Log</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css?v=8">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%23142d14'/><rect x='3' y='3' width='10' height='10' fill='%238bac0f'/><rect x='6' y='6' width='4' height='4' fill='%23142d14'/></svg>">
 </head>
 <body>
-    <!-- Header -->
-    <header class="header">
-        <div class="header-title">
-            <pre class="ascii-title">
- ╦ ╦╔═╗╦═╗╔╦╗╔═╗╔═╗  ╔═╗╦  ╔═╗╦ ╦╔═╗
- ╠═╣║╣ ╠╦╝║║║║╣ ╚═╗  ╠═╝║  ╠═╣╚╦╝╚═╗
- ╩ ╩╚═╝╩╚═╩ ╩╚═╝╚═╝  ╩  ╩═╝╩ ╩ ╩ ╚═╝
-        ╔═╗╔═╗╦╔═╔═╗╔╦╗╔═╗╔╗╔
-        ╠═╝║ ║╠╩╗║╣ ║║║║ ║║║║
-        ╩  ╚═╝╩ ╩╚═╝╩ ╩╚═╝╝╚╝</pre>
+<div class="frame">
+
+    <!-- ===================== TOP BAR ===================== -->
+    <header class="topbar">
+        <div class="brand">
+            <span class="brand-mark">◆</span>
+            <span class="brand-name">HERMES PLAYS POKÉMON</span>
+            <span class="brand-sub" id="gameName">Red / Field Log</span>
         </div>
-        <div class="header-status">
-            <span class="status-dot" id="statusDot"></span>
-            <span class="status-text" id="statusText">Connecting...</span>
-        </div>
+        <nav class="run-meta">
+            <div class="meta-cell">
+                <span class="meta-k">RUN</span>
+                <span class="meta-v" id="metaRun">#001</span>
+            </div>
+            <div class="meta-cell">
+                <span class="meta-k">SESSION</span>
+                <span class="meta-v" id="metaSession">0:00:00</span>
+            </div>
+            <div class="meta-cell">
+                <span class="meta-k">TURN</span>
+                <span class="meta-v" id="metaTurn">0</span>
+            </div>
+            <div class="meta-cell status-cell" id="statusCell">
+                <span class="status-dot" id="statusDot"></span>
+                <span class="meta-v" id="statusText">connecting</span>
+            </div>
+        </nav>
     </header>
 
-    <!-- Main Content Grid -->
-    <main class="main-grid">
-        <!-- Left Panel: AI Log -->
-        <section class="panel log-panel">
-            <div class="panel-header">
-                <span class="panel-icon">🧠</span>
-                <span class="panel-title">AI Thought Process & Action Log</span>
-                <button class="btn-clear" id="btnClearLog" title="Clear log">✕</button>
+    <!-- ===================== MAIN ===================== -->
+    <main class="layout">
+
+        <!-- LEFT: reasoning stream (the protagonist) -->
+        <section class="col col-stream">
+            <div class="col-head">
+                <span class="col-title">FIELD LOG</span>
+                <span class="col-tag" id="streamTag">live reasoning</span>
+                <button class="ghost-btn" id="btnClearLog" title="clear">clear</button>
             </div>
-            <div class="log-container" id="logContainer">
-                <div class="log-entry log-status">
-                    <span class="log-time">--:--:--</span>
-                    <span class="log-text">Dashboard initializing...</span>
+            <div class="stream" id="logContainer">
+                <div class="entry e-sys">
+                    <span class="e-time">--:--:--</span>
+                    <span class="e-body">Field log initialising…</span>
                 </div>
             </div>
         </section>
 
-        <!-- Right Panel: Game View -->
-        <section class="panel game-panel">
-            <div class="panel-header">
-                <span class="panel-icon">🎮</span>
-                <span class="panel-title">Game Screen</span>
-                <span class="panel-meta" id="frameCount"></span>
-            </div>
-
-            <!-- Game Screen with corner brackets -->
-            <div class="game-screen-wrapper">
-                <div class="game-screen-frame">
-                    <img id="gameScreen" class="game-screen" alt="Game Screen"
+        <!-- CENTER: game screen + grid map -->
+        <section class="col col-stage">
+            <div class="stage">
+                <div class="screen-shell">
+                    <div class="screen-deco tl"></div><div class="screen-deco tr"></div>
+                    <div class="screen-deco bl"></div><div class="screen-deco br"></div>
+                    <img id="gameScreen" class="screen" alt="game"
                          src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPj/HwADBwIAMCbHYQAAAABJRU5ErkJggg==">
-                    <div class="game-screen-overlay" id="screenOverlay">
-                        <span class="overlay-text">Waiting for game...</span>
-                    </div>
+                    <div class="screen-wait" id="screenOverlay"><span>awaiting signal…</span></div>
+                    <div class="dialog-strip hidden" id="dialogOverlay"><span id="dialogText"></span></div>
+                </div>
+                <div class="screen-toggle">
+                    <button class="tog active" id="togGame" data-mode="game">SCREEN</button>
+                    <button class="tog" id="togGrid" data-mode="grid">GRID MAP</button>
+                    <span class="frame-meta" id="frameCount"></span>
                 </div>
             </div>
 
-            <!-- Stats Grid -->
-            <div class="stats-grid">
-                <div class="stat-item">
-                    <span class="stat-label">Badges</span>
-                    <div class="badges-row" id="badgesRow">
-                        <span class="badge-circle empty" title="Boulder">○</span>
-                        <span class="badge-circle empty" title="Cascade">○</span>
-                        <span class="badge-circle empty" title="Thunder">○</span>
-                        <span class="badge-circle empty" title="Rainbow">○</span>
-                        <span class="badge-circle empty" title="Soul">○</span>
-                        <span class="badge-circle empty" title="Marsh">○</span>
-                        <span class="badge-circle empty" title="Volcano">○</span>
-                        <span class="badge-circle empty" title="Earth">○</span>
-                    </div>
+            <!-- location + position readout -->
+            <div class="readout">
+                <div class="ro-cell ro-wide">
+                    <span class="ro-k">LOCATION</span>
+                    <span class="ro-v" id="statMap">—</span>
                 </div>
-                <div class="stat-item">
-                    <span class="stat-label">Map</span>
-                    <span class="stat-value" id="statMap">---</span>
+                <div class="ro-cell">
+                    <span class="ro-k">CELL</span>
+                    <span class="ro-v" id="statCell">E5</span>
                 </div>
-                <div class="stat-item">
-                    <span class="stat-label">Position</span>
-                    <span class="stat-value" id="statPosition">(--, --)</span>
+                <div class="ro-cell">
+                    <span class="ro-k">POS</span>
+                    <span class="ro-v" id="statPosition">(—, —)</span>
                 </div>
-                <div class="stat-item">
-                    <span class="stat-label">Money</span>
-                    <span class="stat-value stat-money" id="statMoney">$---</span>
+                <div class="ro-cell">
+                    <span class="ro-k">MONEY</span>
+                    <span class="ro-v" id="statMoney">₽—</span>
                 </div>
-                <div class="stat-item">
-                    <span class="stat-label">Play Time</span>
-                    <span class="stat-value" id="statPlayTime">--:--:--</span>
-                </div>
-                <div class="stat-item">
-                    <span class="stat-label">Turns</span>
-                    <span class="stat-value" id="statTurns">0</span>
+                <div class="ro-cell">
+                    <span class="ro-k">PLAYTIME</span>
+                    <span class="ro-v" id="statPlayTime">0:00:00</span>
                 </div>
             </div>
 
-            <!-- Battle Info (hidden when not in battle) -->
-            <div class="battle-info hidden" id="battleInfo">
-                <div class="panel-header">
-                    <span class="panel-icon">⚔️</span>
-                    <span class="panel-title">Battle</span>
-                </div>
-                <div class="battle-content" id="battleContent"></div>
+            <!-- battle bar -->
+            <div class="battle-bar hidden" id="battleInfo">
+                <span class="bb-label">BATTLE</span>
+                <span class="bb-body" id="battleContent"></span>
             </div>
         </section>
+
+        <!-- RIGHT: instruments -->
+        <aside class="col col-instruments">
+
+            <!-- Badges -->
+            <div class="inst">
+                <div class="inst-head">GYM BADGES</div>
+                <div class="badges" id="badgesRow"></div>
+            </div>
+
+            <!-- Objectives -->
+            <div class="inst">
+                <div class="inst-head">OBJECTIVES</div>
+                <ul class="objectives" id="objectivesList">
+                    <li class="obj obj-primary" data-key="primary">
+                        <span class="obj-tier">P</span>
+                        <span class="obj-text">Deliver Oak's Parcel · get Pokédex</span>
+                    </li>
+                    <li class="obj obj-secondary" data-key="secondary">
+                        <span class="obj-tier">S</span>
+                        <span class="obj-text">Reach Pewter City · Boulder Badge</span>
+                    </li>
+                    <li class="obj obj-tertiary" data-key="tertiary">
+                        <span class="obj-tier">T</span>
+                        <span class="obj-text">Catch a Grass/Electric type</span>
+                    </li>
+                </ul>
+            </div>
+
+            <!-- Tension gauges -->
+            <div class="inst">
+                <div class="inst-head">TELEMETRY</div>
+                <div class="gauge">
+                    <div class="gauge-row">
+                        <span class="gauge-k">STUCK</span>
+                        <span class="gauge-v" id="stuckVal">0</span>
+                    </div>
+                    <div class="gauge-track"><div class="gauge-fill stuck" id="stuckFill"></div></div>
+                </div>
+                <div class="counters">
+                    <div class="counter">
+                        <span class="ctr-v" id="ctrBlackouts">0</span>
+                        <span class="ctr-k">BLACKOUTS</span>
+                    </div>
+                    <div class="counter">
+                        <span class="ctr-v" id="ctrCaught">0</span>
+                        <span class="ctr-k">CAUGHT</span>
+                    </div>
+                    <div class="counter">
+                        <span class="ctr-v" id="ctrActions">0</span>
+                        <span class="ctr-k">ACTIONS</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Milestones -->
+            <div class="inst inst-grow">
+                <div class="inst-head">MILESTONES</div>
+                <ol class="timeline" id="timeline">
+                    <li class="tl-empty">no milestones yet — the journey begins.</li>
+                </ol>
+            </div>
+        </aside>
     </main>
 
-    <!-- Bottom Panel: Team -->
-    <section class="panel team-panel">
-        <div class="panel-header">
-            <span class="panel-icon">⚡</span>
-            <span class="panel-title">Current Team</span>
-        </div>
-        <div class="team-container" id="teamContainer">
-            <!-- Empty team slots -->
-            <div class="team-card empty-card">
-                <div class="team-name">Empty</div>
-                <div class="empty-pokeball">○</div>
-            </div>
-            <div class="team-card empty-card">
-                <div class="team-name">Empty</div>
-                <div class="empty-pokeball">○</div>
-            </div>
-            <div class="team-card empty-card">
-                <div class="team-name">Empty</div>
-                <div class="empty-pokeball">○</div>
-            </div>
-            <div class="team-card empty-card">
-                <div class="team-name">Empty</div>
-                <div class="empty-pokeball">○</div>
-            </div>
-            <div class="team-card empty-card">
-                <div class="team-name">Empty</div>
-                <div class="empty-pokeball">○</div>
-            </div>
-            <div class="team-card empty-card">
-                <div class="team-name">Empty</div>
-                <div class="empty-pokeball">○</div>
-            </div>
-        </div>
-    </section>
+    <!-- ===================== PARTY BELT ===================== -->
+    <footer class="belt">
+        <div class="belt-head">PARTY</div>
+        <div class="belt-cards" id="teamContainer"></div>
+    </footer>
 
-    <!-- Dialog overlay (shown when dialog is active) -->
-    <div class="dialog-overlay hidden" id="dialogOverlay">
-        <div class="dialog-box">
-            <span class="dialog-text" id="dialogText"></span>
-        </div>
-    </div>
-
-    <script src="app.js?v=4"></script>
+</div>
+<script src="app.js?v=8"></script>
 </body>
 </html>

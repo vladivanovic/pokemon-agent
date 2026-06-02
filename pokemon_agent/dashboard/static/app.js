@@ -1,591 +1,313 @@
-/* ============================================
-   Hermes Plays Pokémon — Dashboard Client
-   Pure vanilla JS, no frameworks
-   ============================================ */
-
+/* =================================================================
+   HERMES PLAYS POKÉMON — Field Log client
+   Vanilla JS, no framework. Binds to the pokemon-agent server's
+   REST /state + WebSocket /ws contract:
+     - WS event {type:"action", actions:[...], state_after:{...}}
+     - WS event {type:"screenshot", data:{image:b64}}
+     - WS event {type:"state_update", state:{...}}
+     - WS event {type:"reasoning"|"decision"|"key_moment"|"alert", ...}
+       (pushed by the agent via POST /event)
+   ================================================================= */
 (function () {
     'use strict';
 
-    // --- Constants ---
-    const BADGE_NAMES = ['Boulder', 'Cascade', 'Thunder', 'Rainbow', 'Soul', 'Marsh', 'Volcano', 'Earth'];
-    const TYPE_COLORS = {
-        Normal: '#A8A878', Fire: '#F08030', Water: '#6890F0', Grass: '#78C850',
-        Electric: '#F8D030', Ice: '#98D8D8', Fighting: '#C03028', Poison: '#A040A0',
-        Ground: '#E0C068', Flying: '#A890F0', Psychic: '#F85888', Bug: '#A8B820',
-        Rock: '#B8A038', Ghost: '#705898', Dragon: '#7038F8', Dark: '#705848',
-        Steel: '#B8B8D0', Fairy: '#EE99AC'
+    var BADGE_NAMES = ['Boulder','Cascade','Thunder','Rainbow','Soul','Marsh','Volcano','Earth'];
+    var BADGE_INIT  = ['BLD','CSC','THD','RBW','SOU','MSH','VOL','ERT'];
+    var TYPE_COLORS = {
+        Normal:'#9a9577', Fire:'#d9482f', Water:'#4f7bd6', Grass:'#6f9b1e',
+        Electric:'#c9a227', Ice:'#7fb6b6', Fighting:'#a33725', Poison:'#7e4a86',
+        Ground:'#b89a4e', Flying:'#8779c4', Psychic:'#c25478', Bug:'#869520',
+        Rock:'#8a7a38', Ghost:'#5a4878', Dragon:'#5838c4', Dark:'#4a3c34', Steel:'#8a8aa0'
     };
-    const POLL_INTERVAL = 3000;
-    const WS_RECONNECT_BASE = 1000;
-    const WS_RECONNECT_MAX = 30000;
+    var POLL_MS = 2500, WS_BASE = 1000, WS_MAX = 20000, STUCK_MAX = 12;
 
-    // --- State ---
-    let ws = null;
-    let wsConnected = false;
-    let wsReconnectDelay = WS_RECONNECT_BASE;
-    let wsReconnectTimer = null;
-    let pollTimer = null;
-    let screenshotTimer = null;
-    let autoScroll = true;
-    let turnCount = 0;
-    let lastStateJSON = '';
-    let hasReceivedFrame = false;
+    // --- state ---
+    var ws=null, wsLive=false, wsDelay=WS_BASE, wsTimer=null, pollTimer=null;
+    var autoScroll=true, turnCount=0, actionCount=0, lastStateJSON='', hasFrame=false;
+    var sessionStart=Date.now();
+    var lastPosKey=null, stuck=0, blackouts=0, caught=0, prevPartyAlive=null;
+    var seenMoments={}, gridMode=false, baseURL=loc();
 
-    // --- DOM refs ---
-    const $ = (id) => document.getElementById(id);
-    const statusDot = $('statusDot');
-    const statusText = $('statusText');
-    const logContainer = $('logContainer');
-    const gameScreen = $('gameScreen');
-    const screenOverlay = $('screenOverlay');
-    const teamContainer = $('teamContainer');
-    const badgesRow = $('badgesRow');
-    const statMap = $('statMap');
-    const statPosition = $('statPosition');
-    const statMoney = $('statMoney');
-    const statPlayTime = $('statPlayTime');
-    const statTurns = $('statTurns');
-    const battleInfo = $('battleInfo');
-    const battleContent = $('battleContent');
-    const dialogOverlay = $('dialogOverlay');
-    const dialogText = $('dialogText');
-    const frameCount = $('frameCount');
-    const btnClearLog = $('btnClearLog');
+    var $ = function(id){ return document.getElementById(id); };
+    function loc(){ return window.location.protocol+'//'+window.location.host; }
+    function wsurl(){ return (location.protocol==='https:'?'wss:':'ws:')+'//'+location.host+'/ws'; }
+    function pad(n){ return n<10?'0'+n:''+n; }
+    function clock(){ var d=new Date(); return pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds()); }
 
-    // --- Utilities ---
-    function getBaseURL() {
-        return window.location.protocol + '//' + window.location.host;
+    // ---- session timer ----
+    setInterval(function(){
+        var s=Math.floor((Date.now()-sessionStart)/1000);
+        var h=Math.floor(s/3600), m=Math.floor((s%3600)/60), ss=s%60;
+        $('metaSession').textContent = h+':'+pad(m)+':'+pad(ss);
+    }, 1000);
+
+    // ---- status ----
+    function setStatus(live, text){
+        var dot=$('statusDot');
+        dot.className='status-dot '+(live?'live':'dead');
+        $('statusText').textContent=text||(live?'live':'offline');
     }
 
-    function getWSURL() {
-        var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        return proto + '//' + window.location.host + '/ws';
+    // ---- stream (the protagonist) ----
+    function entry(kind, label, body){
+        var box=$('logContainer');
+        var e=document.createElement('div');
+        e.className='entry e-'+kind;
+        var t=document.createElement('span'); t.className='e-time'; t.textContent=clock();
+        var b=document.createElement('span'); b.className='e-body';
+        if(label){ var l=document.createElement('span'); l.className='e-label'; l.textContent=label; b.appendChild(l); }
+        b.appendChild(document.createTextNode(body));
+        e.appendChild(t); e.appendChild(b); box.appendChild(e);
+        while(box.children.length>400) box.removeChild(box.firstChild);
+        if(autoScroll) box.scrollTop=box.scrollHeight;
     }
 
-    function timeNow() {
-        var d = new Date();
-        return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
-    }
-
-    function pad(n) {
-        return n < 10 ? '0' + n : '' + n;
-    }
-
-    function formatPlayTime(pt) {
-        if (!pt) return '--:--:--';
-        return pad(pt.hours || 0) + ':' + pad(pt.minutes || 0) + ':' + pad(pt.seconds || 0);
-    }
-
-    // --- Connection Status ---
-    function setStatus(connected, text) {
-        if (connected) {
-            statusDot.classList.add('connected');
-        } else {
-            statusDot.classList.remove('connected');
-        }
-        statusText.textContent = text || (connected ? 'Connected' : 'Disconnected');
-    }
-
-    // --- Logging ---
-    function addLog(type, text) {
-        var entry = document.createElement('div');
-        entry.className = 'log-entry log-' + type;
-
-        var timeSpan = document.createElement('span');
-        timeSpan.className = 'log-time';
-        timeSpan.textContent = timeNow();
-
-        var textSpan = document.createElement('span');
-        textSpan.className = 'log-text';
-        textSpan.textContent = text;
-
-        entry.appendChild(timeSpan);
-        entry.appendChild(textSpan);
-        logContainer.appendChild(entry);
-
-        // Limit log entries to prevent memory issues
-        while (logContainer.children.length > 500) {
-            logContainer.removeChild(logContainer.firstChild);
-        }
-
-        if (autoScroll) {
-            logContainer.scrollTop = logContainer.scrollHeight;
-        }
-    }
-
-    function renderLog(event) {
-        if (!event) return;
-        var type = event.type || 'status';
-        // Server broadcasts fields at top level (not nested under .data),
-        // but some event formats use .data — check both.
-        var data = event.data || event;
-
-        switch (type) {
-            case 'action':
-                var actions = data.actions || event.actions || [];
-                var actionText = Array.isArray(actions) && actions.length
-                    ? actions.join(', ')
-                    : (data.action || '(unknown)');
-                addLog('action', '▶ ' + actionText);
-                turnCount++;
-                statTurns.textContent = turnCount;
+    function renderEvent(msg){
+        var type=msg.type||msg.event||'status';
+        var d=msg.data||msg;
+        switch(type){
+            case 'action': {
+                var acts=msg.actions||d.actions||[];
+                var txt=Array.isArray(acts)&&acts.length?acts.join(' · '):(d.action||'(idle)');
+                entry('act','ACT', txt);
+                turnCount++; actionCount+=Array.isArray(acts)?acts.length:1;
+                $('metaTurn').textContent=turnCount; $('ctrActions').textContent=actionCount;
                 break;
-            case 'reasoning':
-                addLog('thinking', '💭 ' + (data.text || event.text || ''));
-                break;
-            case 'tool_call':
-                addLog('system', '⚙ ' + (data.tool || data.name || event.tool || '') + (data.args ? ' → ' + JSON.stringify(data.args) : ''));
-                break;
-            case 'tool_result':
-                addLog('system', '← ' + truncate(data.result || event.result || JSON.stringify(data), 200));
-                break;
-            case 'error':
-                addLog('error', '✕ ' + (data.message || data.error || event.error || JSON.stringify(data)));
-                break;
-            case 'key_moment':
-                addLog('key-moment', '★ ' + (data.description || event.description || JSON.stringify(data)));
-                break;
+            }
+            case 'reasoning': case 'thought':
+                entry('think','THINK', d.text||msg.text||''); break;
+            case 'decision':
+                entry('decide','DECIDE', d.text||msg.text||''); break;
+            case 'key_moment': case 'moment':
+                addMoment(d.description||msg.description||'', d.category||'milestone'); break;
+            case 'alert':
+                entry('alert','ALERT', d.message||d.text||msg.message||''); break;
             case 'battle':
-                addLog('action', '⚔ Battle vs ' + (data.opponent || event.opponent || '???') + ': ' + (data.result || event.result || ''));
-                break;
-            case 'state_update':
-                // silent - handled by renderStats
-                break;
-            case 'screenshot':
-                // silent - handled by renderGameScreen
-                break;
+                entry('alert','BATTLE', 'vs '+(d.opponent||'???')+(d.result?' — '+d.result:'')); break;
+            case 'state_update': case 'screenshot': break; /* silent */
             default:
-                addLog('status', (data.message || data.text || event.message || event.text || JSON.stringify(event)));
-                break;
+                if(d.message||d.text||msg.message) entry('sys','', d.message||d.text||msg.message);
         }
     }
 
-    function truncate(s, max) {
-        if (typeof s !== 'string') s = JSON.stringify(s);
-        return s.length > max ? s.substring(0, max) + '...' : s;
+    // ---- screenshot ----
+    function renderScreen(b64){
+        if(!b64) return;
+        if(!hasFrame){ hasFrame=true; $('screenOverlay').classList.add('hidden'); }
+        if(!gridMode) $('gameScreen').src='data:image/png;base64,'+b64;
     }
-
-    // --- Game Screen ---
-    function renderGameScreen(base64png) {
-        if (!base64png) return;
-        if (!hasReceivedFrame) {
-            hasReceivedFrame = true;
-            screenOverlay.classList.add('hidden');
-        }
-        gameScreen.src = 'data:image/png;base64,' + base64png;
-    }
-
-    // --- Stats ---
-    function renderStats(state) {
-        if (!state) return;
-        var player = state.player;
-        var mapInfo = state.map || {};
-        if (player) {
-            var pos = player.position || {};
-            statMap.textContent = mapInfo.map_name || 'Unknown';
-            statPosition.textContent = '(' + (pos.x != null ? pos.x : '--') + ', ' + (pos.y != null ? pos.y : '--') + ')';
-            statMoney.textContent = '$' + (player.money != null ? player.money.toLocaleString() : '---');
-            // play_time can be a string "H:MM:SS" or an object {hours, minutes, seconds}
-            var pt = player.play_time;
-            if (typeof pt === 'string') {
-                statPlayTime.textContent = pt;
-            } else {
-                statPlayTime.textContent = formatPlayTime(pt);
-            }
-            renderBadges(player.badge_count, player.badges);
-        }
-
-        // Dialog
-        var dialog = state.dialog;
-        if (dialog && dialog.active && dialog.text) {
-            dialogOverlay.classList.remove('hidden');
-            dialogText.textContent = dialog.text;
-        } else {
-            dialogOverlay.classList.add('hidden');
-        }
-
-        // Battle
-        if (state.battle && state.battle.in_battle) {
-            renderBattle(state.battle);
-        } else {
-            battleInfo.classList.add('hidden');
-        }
-
-        // Party
-        if (state.party) {
-            renderTeam(state.party);
-        }
-
-        // Frame count
-        if (state.metadata && state.metadata.frame_count) {
-            frameCount.textContent = 'Frame ' + state.metadata.frame_count;
+    function refreshGrid(){
+        if(gridMode){
+            $('gameScreen').src = baseURL+'/screenshot/grid?scale=4&_t='+Date.now();
+            if(!hasFrame){ hasFrame=true; }
+            $('screenOverlay').classList.add('hidden');
         }
     }
 
-    // --- Badges ---
-    function renderBadges(badgeCount, badgesList) {
-        var circles = badgesRow.children;
-        var earned = badgesList || [];
-        for (var i = 0; i < 8; i++) {
-            var el = circles[i];
-            if (!el) continue;
-            var has = false;
-            if (typeof badgeCount === 'number') {
-                has = i < badgeCount;
-            }
-            if (earned.indexOf(BADGE_NAMES[i]) !== -1) {
-                has = true;
-            }
-            el.textContent = has ? '●' : '○';
-            el.title = BADGE_NAMES[i] + (has ? ' ✓' : '');
-            if (has) {
-                el.classList.add('earned');
-            } else {
-                el.classList.remove('earned');
-            }
+    // ---- stats / readout ----
+    function renderStats(state){
+        if(!state) return;
+        var p=state.player||{}, map=state.map||{};
+        $('statMap').textContent = map.map_name||'—';
+        var pos=p.position||{};
+        $('statPosition').textContent='('+(pos.x!=null?pos.x:'—')+', '+(pos.y!=null?pos.y:'—')+')';
+        $('statMoney').textContent='₽'+(p.money!=null?Number(p.money).toLocaleString():'—');
+        var pt=p.play_time;
+        $('statPlayTime').textContent=(typeof pt==='string')?pt:'0:00:00';
+        if(state.collision&&state.collision.player_cell) $('statCell').textContent=state.collision.player_cell;
+        renderBadges(p.badge_count||0, p.badges||[]);
+        renderTeam(state.party||[]);
+
+        // dialog
+        var dlg=state.dialog;
+        if(dlg&&dlg.active&&dlg.text){ $('dialogOverlay').classList.remove('hidden'); $('dialogText').textContent=dlg.text; }
+        else $('dialogOverlay').classList.add('hidden');
+
+        // battle
+        var bt=state.battle;
+        if(bt&&bt.in_battle){
+            $('battleInfo').classList.remove('hidden');
+            var en=bt.enemy||{};
+            $('battleContent').textContent=(bt.type||'wild')+' · vs '+(en.species||'???')+' Lv.'+(en.level||'?');
+        } else $('battleInfo').classList.add('hidden');
+
+        updateTension(state);
+    }
+
+    function renderBadges(count, list){
+        var row=$('badgesRow'); row.innerHTML='';
+        for(var i=0;i<8;i++){
+            var has = (typeof count==='number'&&i<count) || (list&&list.indexOf(BADGE_NAMES[i])!==-1);
+            var b=document.createElement('div');
+            b.className='badge'+(has?' earned':''); b.title=BADGE_NAMES[i]+(has?' ✓':'');
+            b.textContent=BADGE_INIT[i];
+            row.appendChild(b);
         }
     }
 
-    // --- Team ---
-    function renderTeam(party) {
-        teamContainer.innerHTML = '';
-        for (var i = 0; i < 6; i++) {
-            if (i < party.length) {
-                teamContainer.appendChild(createTeamCard(party[i]));
-            } else {
-                teamContainer.appendChild(createEmptyCard());
-            }
+    function renderTeam(party){
+        var c=$('teamContainer'); c.innerHTML='';
+        for(var i=0;i<6;i++){
+            if(i<party.length) c.appendChild(pcard(party[i]));
+            else { var e=document.createElement('div'); e.className='pcard empty';
+                   var s=document.createElement('span'); s.className='pc-empty'; s.textContent='○';
+                   e.appendChild(s); c.appendChild(e); }
         }
     }
+    function pcard(m){
+        var card=document.createElement('div'); card.className='pcard';
+        var top=document.createElement('div'); top.className='pc-top';
+        var nm=document.createElement('span'); nm.className='pc-name'; nm.textContent=m.nickname||m.species||'???';
+        var lv=document.createElement('span'); lv.className='pc-lv'; lv.textContent='Lv'+(m.level||'?');
+        top.appendChild(nm); top.appendChild(lv); card.appendChild(top);
 
-    function createTeamCard(mon) {
-        var card = document.createElement('div');
-        card.className = 'team-card';
-
-        // Name
-        var name = document.createElement('div');
-        name.className = 'team-name';
-        name.textContent = mon.nickname || mon.species || '???';
-        card.appendChild(name);
-
-        // Level
-        var level = document.createElement('div');
-        level.className = 'team-level';
-        level.textContent = 'Lv.' + (mon.level || '?');
-        card.appendChild(level);
-
-        // Types
-        if (mon.types && mon.types.length) {
-            var types = document.createElement('div');
-            types.className = 'team-types';
-            for (var t = 0; t < mon.types.length; t++) {
-                var badge = document.createElement('span');
-                badge.className = 'type-badge';
-                badge.textContent = mon.types[t];
-                badge.style.backgroundColor = TYPE_COLORS[mon.types[t]] || '#888';
-                types.appendChild(badge);
-            }
-            card.appendChild(types);
+        if(m.types&&m.types.length){
+            var tw=document.createElement('div'); tw.className='pc-types';
+            m.types.forEach(function(t){ var c2=document.createElement('span'); c2.className='type-chip';
+                c2.textContent=t; c2.style.background=TYPE_COLORS[t]||'#777'; tw.appendChild(c2); });
+            card.appendChild(tw);
         }
+        var hp=m.hp!=null?m.hp:0, mx=m.max_hp||1, pct=Math.max(0,Math.round(hp/mx*100));
+        var hw=document.createElement('div'); hw.className='pc-hp';
+        var bar=document.createElement('div'); bar.className='hpbar';
+        var fill=document.createElement('div'); fill.className='hpfill'+(pct<=20?' low':pct<=50?' mid':'');
+        fill.style.width=pct+'%'; bar.appendChild(fill);
+        var txt=document.createElement('span'); txt.className='hp-text'; txt.textContent=hp+'/'+mx;
+        hw.appendChild(bar); hw.appendChild(txt); card.appendChild(hw);
 
-        // HP bar
-        var hp = mon.hp != null ? mon.hp : 0;
-        var maxHp = mon.max_hp || 1;
-        var pct = Math.round((hp / maxHp) * 100);
-
-        var hpContainer = document.createElement('div');
-        hpContainer.className = 'hp-bar-container';
-
-        var hpBar = document.createElement('div');
-        hpBar.className = 'hp-bar';
-
-        var hpFill = document.createElement('div');
-        hpFill.className = 'hp-bar-fill';
-        if (pct > 50) hpFill.classList.add('hp-high');
-        else if (pct > 20) hpFill.classList.add('hp-mid');
-        else hpFill.classList.add('hp-low');
-        hpFill.style.width = pct + '%';
-
-        hpBar.appendChild(hpFill);
-        hpContainer.appendChild(hpBar);
-
-        var hpText = document.createElement('span');
-        hpText.className = 'hp-text';
-        hpText.textContent = hp + '/' + maxHp;
-        hpContainer.appendChild(hpText);
-
-        card.appendChild(hpContainer);
-
-        // Status condition
-        if (mon.status) {
-            var statusEl = document.createElement('span');
-            statusEl.className = 'status-condition ' + mon.status.toLowerCase();
-            statusEl.textContent = mon.status.toUpperCase();
-            card.appendChild(statusEl);
+        if(m.status&&m.status!=='OK'){ var st=document.createElement('span'); st.className='pc-status'; st.textContent=m.status; card.appendChild(st); }
+        if(m.moves&&m.moves.length){
+            var mv=document.createElement('div'); mv.className='pc-moves';
+            mv.textContent=m.moves.map(function(x){return (x&&typeof x==='object')?(x.name||'?'):x;}).join(' · ');
+            card.appendChild(mv);
         }
-
-        // Moves
-        if (mon.moves && mon.moves.length) {
-            var moves = document.createElement('div');
-            moves.className = 'team-moves';
-            var moveNames = mon.moves.map(function (m) {
-                // Moves may be plain strings or {id, name, pp, pp_up} objects.
-                return (m && typeof m === 'object') ? (m.name || '?') : m;
-            });
-            moves.textContent = moveNames.join(' / ');
-            card.appendChild(moves);
-        }
-
         return card;
     }
 
-    function createEmptyCard() {
-        var card = document.createElement('div');
-        card.className = 'team-card empty-card';
-        var name = document.createElement('div');
-        name.className = 'team-name';
-        name.textContent = 'Empty';
-        card.appendChild(name);
-        var ball = document.createElement('div');
-        ball.className = 'empty-pokeball';
-        ball.textContent = '○';
-        card.appendChild(ball);
-        return card;
-    }
+    // ---- tension: stuck meter, blackouts, caught ----
+    function updateTension(state){
+        var p=state.player||{}, pos=p.position||{}, map=state.map||{};
+        var key=map.map_id+':'+pos.x+':'+pos.y;
+        if(key===lastPosKey) stuck=Math.min(STUCK_MAX, stuck+1);
+        else { stuck=0; lastPosKey=key; }
+        var sf=$('stuckFill'); var pctv=Math.round(stuck/STUCK_MAX*100);
+        sf.style.width=pctv+'%';
+        sf.className='gauge-fill stuck'+(stuck>=STUCK_MAX*0.75?' crit':stuck>=STUCK_MAX*0.4?' warn':'');
+        $('stuckVal').textContent=stuck;
+        if(stuck===STUCK_MAX) entry('alert','STUCK','No progress for '+STUCK_MAX+' turns — Hermes may be lost.');
 
-    // --- Battle ---
-    function renderBattle(battle) {
-        battleInfo.classList.remove('hidden');
-        battleContent.innerHTML = '';
-
-        var enemy = battle.enemy || {};
-        var playerMon = battle.player_pokemon || {};
-
-        var info = document.createElement('div');
-        info.innerHTML = '';
-
-        // Battle type
-        var typeLabel = document.createElement('span');
-        typeLabel.className = 'type-badge';
-        typeLabel.textContent = (battle.type || 'wild').toUpperCase();
-        typeLabel.style.backgroundColor = battle.type === 'trainer' ? '#C03028' : '#58a6ff';
-        info.appendChild(typeLabel);
-
-        // Enemy info
-        var enemyText = document.createElement('span');
-        enemyText.textContent = '  vs ' + (enemy.species || '???') + ' Lv.' + (enemy.level || '?');
-        info.appendChild(enemyText);
-
-        // Enemy HP
-        if (enemy.hp_percent != null) {
-            var enemyHpBar = document.createElement('div');
-            enemyHpBar.className = 'hp-bar';
-            enemyHpBar.style.width = '80px';
-            enemyHpBar.style.display = 'inline-block';
-            enemyHpBar.style.verticalAlign = 'middle';
-            enemyHpBar.style.marginLeft = '8px';
-
-            var enemyFill = document.createElement('div');
-            enemyFill.className = 'hp-bar-fill';
-            var ep = enemy.hp_percent;
-            if (ep > 50) enemyFill.classList.add('hp-high');
-            else if (ep > 20) enemyFill.classList.add('hp-mid');
-            else enemyFill.classList.add('hp-low');
-            enemyFill.style.width = ep + '%';
-            enemyHpBar.appendChild(enemyFill);
-            info.appendChild(enemyHpBar);
-        }
-
-        battleContent.appendChild(info);
-    }
-
-    // --- WebSocket ---
-    function connectWS() {
-        if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
-            return;
-        }
-
-        var url = getWSURL();
-        try {
-            ws = new WebSocket(url);
-        } catch (e) {
-            scheduleReconnect();
-            return;
-        }
-
-        ws.onopen = function () {
-            wsConnected = true;
-            wsReconnectDelay = WS_RECONNECT_BASE;
-            setStatus(true, '⚡ Connected (WS)');
-            addLog('status', 'WebSocket connected');
-            // Keep polling for screenshots since WS may not send them
-        };
-
-        ws.onmessage = function (evt) {
-            try {
-                var msg = JSON.parse(evt.data);
-                handleWSMessage(msg);
-            } catch (e) {
-                // ignore parse errors
+        // blackout detection: whole party fainted while previously alive.
+        // Guard against transient/partial reads: require valid max_hp data and
+        // a prior confirmed alive>0 reading before ever counting a blackout.
+        var party=state.party||[];
+        var validHp = party.length>0 && party.every(function(m){ return (m.max_hp||0)>0; });
+        if(validHp){
+            var alive=party.filter(function(m){ return (m.hp||0)>0; }).length;
+            if(prevPartyAlive!==null && prevPartyAlive>0 && alive===0){
+                blackouts++; $('ctrBlackouts').textContent=blackouts;
+                $('ctrBlackouts').parentNode.classList.add('alert');
+                entry('alert','BLACKOUT','Party wiped out — blackout #'+blackouts+'.');
+                addMoment('Blacked out (#'+blackouts+')','alert');
             }
-        };
-
-        ws.onclose = function () {
-            wsConnected = false;
-            setStatus(false, 'Disconnected');
-            scheduleReconnect();
-        };
-
-        ws.onerror = function () {
-            // onclose will fire after this
-        };
-    }
-
-    function scheduleReconnect() {
-        if (wsReconnectTimer) return;
-        wsReconnectTimer = setTimeout(function () {
-            wsReconnectTimer = null;
-            connectWS();
-        }, wsReconnectDelay);
-        wsReconnectDelay = Math.min(wsReconnectDelay * 2, WS_RECONNECT_MAX);
-    }
-
-    function handleWSMessage(msg) {
-        var type = msg.type || msg.event;
-
-        // Extract state from whichever field the server uses
-        var statePayload = msg.data || msg.state || msg.state_after || null;
-
-        if (type === 'action') {
-            // Action events: log the action and update state
-            renderLog(msg);
-            if (msg.state_after) {
-                var stateJSON = JSON.stringify(msg.state_after);
-                if (stateJSON !== lastStateJSON) {
-                    lastStateJSON = stateJSON;
-                    renderStats(msg.state_after);
-                }
-            }
-        } else if (type === 'state_update' && statePayload) {
-            var stateJSON = JSON.stringify(statePayload);
-            if (stateJSON !== lastStateJSON) {
-                lastStateJSON = stateJSON;
-                renderStats(statePayload);
-            }
-        } else if (type === 'screenshot' && msg.data && msg.data.image) {
-            renderGameScreen(msg.data.image);
-        } else {
-            renderLog(msg);
+            prevPartyAlive=alive;
         }
+
+        caught = party.length; // simple proxy; refined by key_moment catches
+        $('ctrCaught').textContent=Math.max(caught, Number($('ctrCaught').textContent)||0);
     }
 
-    // --- Polling ---
-    function pollState() {
-        fetch(getBaseURL() + '/state')
-            .then(function (r) {
-                if (!r.ok) throw new Error('HTTP ' + r.status);
-                return r.json();
-            })
-            .then(function (state) {
-                if (!wsConnected) {
-                    setStatus(true, '● Connected (polling)');
-                }
-                var stateJSON = JSON.stringify(state);
-                if (stateJSON !== lastStateJSON) {
-                    lastStateJSON = stateJSON;
-                    renderStats(state);
-                }
-            })
-            .catch(function (e) {
-                if (!wsConnected) {
-                    setStatus(false, 'Server unreachable');
-                }
-            });
+    // ---- milestones ----
+    function addMoment(desc, category){
+        if(!desc) return;
+        var sig=category+'|'+desc;
+        if(seenMoments[sig]) return;  // dedupe
+        seenMoments[sig]=true;
+        var tl=$('timeline');
+        var empty=tl.querySelector('.tl-empty'); if(empty) empty.remove();
+        var li=document.createElement('li'); li.className='tl-item';
+        var dot=document.createElement('span'); dot.className='tl-dot '+(category||'milestone');
+        var body=document.createElement('div'); body.className='tl-body';
+        body.appendChild(document.createTextNode(desc));
+        var turn=document.createElement('span'); turn.className='tl-turn'; turn.textContent=' · turn '+turnCount;
+        body.appendChild(turn);
+        li.appendChild(dot); li.appendChild(body);
+        tl.insertBefore(li, tl.firstChild);
+        var kind = category==='badge'?'moment':category==='alert'?'alert':'moment';
+        entry(kind, category==='alert'?'ALERT':'MILESTONE', desc);
+        if(category==='catch'){ caught=Math.max(caught,1)+0; }
+        if(category==='badge'){ flashBadges(); }
+    }
+    function flashBadges(){
+        var bs=$('badgesRow').querySelectorAll('.badge.earned');
+        if(bs.length){ var last=bs[bs.length-1]; last.classList.add('flash'); setTimeout(function(){last.classList.remove('flash');},600); }
     }
 
-    function pollScreenshot() {
-        fetch(getBaseURL() + '/screenshot/base64')
-            .then(function (r) {
-                if (!r.ok) throw new Error('HTTP ' + r.status);
-                return r.json();
-            })
-            .then(function (data) {
-                if (data && data.image) {
-                    renderGameScreen(data.image);
-                }
-            })
-            .catch(function () {
-                // silent fail
-            });
+    // ---- WebSocket ----
+    function connect(){
+        if(ws&&(ws.readyState===0||ws.readyState===1)) return;
+        try{ ws=new WebSocket(wsurl()); }catch(e){ reconnect(); return; }
+        ws.onopen=function(){ wsLive=true; wsDelay=WS_BASE; setStatus(true,'live (ws)'); entry('sys','','Connected to game server.'); };
+        ws.onmessage=function(ev){ try{ handle(JSON.parse(ev.data)); }catch(e){} };
+        ws.onclose=function(){ wsLive=false; setStatus(false,'reconnecting'); reconnect(); };
+        ws.onerror=function(){};
+    }
+    function reconnect(){ if(wsTimer) return; wsTimer=setTimeout(function(){ wsTimer=null; connect(); }, wsDelay); wsDelay=Math.min(wsDelay*2, WS_MAX); }
+    function handle(msg){
+        var type=msg.type||msg.event;
+        var payload=msg.data||msg.state||msg.state_after||null;
+        if(type==='action'){
+            renderEvent(msg);
+            if(msg.state_after){ var j=JSON.stringify(msg.state_after); if(j!==lastStateJSON){ lastStateJSON=j; renderStats(msg.state_after); } }
+            refreshGrid();
+        } else if(type==='state_update'&&payload){
+            var j2=JSON.stringify(payload); if(j2!==lastStateJSON){ lastStateJSON=j2; renderStats(payload); }
+            refreshGrid();
+        } else if(type==='screenshot'&&msg.data&&msg.data.image){
+            renderScreen(msg.data.image);
+        } else if(type==='connected'){
+            entry('sys','','Server online · v'+(msg.version||'?'));
+        } else renderEvent(msg);
     }
 
-    function startPolling() {
-        // Always poll for state and screenshots
-        pollState();
-        pollScreenshot();
-        pollTimer = setInterval(pollState, POLL_INTERVAL);
-        screenshotTimer = setInterval(pollScreenshot, POLL_INTERVAL);
+    // ---- polling fallback ----
+    function poll(){
+        fetch(baseURL+'/state').then(function(r){ if(!r.ok) throw 0; return r.json(); })
+        .then(function(s){ if(!wsLive) setStatus(true,'live (poll)');
+            var j=JSON.stringify(s); if(j!==lastStateJSON){ lastStateJSON=j; renderStats(s); } refreshGrid(); })
+        .catch(function(){ if(!wsLive) setStatus(false,'no signal'); });
+    }
+    function pollScreenshot(){
+        if(gridMode||wsLive) return; // ws pushes frames; grid handled separately
+        $('gameScreen').src=baseURL+'/screenshot?_t='+Date.now();
+        if(!hasFrame){ hasFrame=true; $('screenOverlay').classList.add('hidden'); }
     }
 
-    // --- Auto-scroll ---
-    logContainer.addEventListener('scroll', function () {
-        var threshold = 40;
-        var atBottom = (logContainer.scrollHeight - logContainer.scrollTop - logContainer.clientHeight) < threshold;
-        autoScroll = atBottom;
-    });
-
-    // --- Clear log ---
-    btnClearLog.addEventListener('click', function () {
-        logContainer.innerHTML = '';
-        addLog('status', 'Log cleared');
-    });
-
-    // --- Corner bracket decorations (bottom corners) ---
-    function addBottomCorners() {
-        var frame = document.querySelector('.game-screen-frame');
-        if (!frame) return;
-        var bl = document.createElement('div');
-        bl.className = 'corner-bl';
-        var br = document.createElement('div');
-        br.className = 'corner-br';
-        frame.appendChild(bl);
-        frame.appendChild(br);
+    // ---- toggles / init ----
+    function initToggles(){
+        $('togGame').addEventListener('click', function(){ gridMode=false; setTog(); poll(); });
+        $('togGrid').addEventListener('click', function(){ gridMode=true; setTog(); refreshGrid(); });
+        $('btnClearLog').addEventListener('click', function(){ $('logContainer').innerHTML=''; });
+        var box=$('logContainer');
+        box.addEventListener('scroll', function(){ autoScroll = box.scrollTop+box.clientHeight >= box.scrollHeight-30; });
+    }
+    function setTog(){
+        $('togGame').classList.toggle('active', !gridMode);
+        $('togGrid').classList.toggle('active', gridMode);
+        if(gridMode) refreshGrid();
     }
 
-    // --- Health check on startup ---
-    function checkHealth() {
-        fetch(getBaseURL() + '/health')
-            .then(function (r) { return r.json(); })
-            .then(function (data) {
-                if (data.status === 'ok') {
-                    addLog('status', 'Server is running');
-                    if (data.game) {
-                        addLog('status', 'Game: ' + data.game);
-                    }
-                }
-            })
-            .catch(function () {
-                addLog('error', 'Cannot reach server at ' + getBaseURL());
-            });
+    function init(){
+        // game name from server info
+        fetch(baseURL+'/').then(function(r){return r.json();}).then(function(d){
+            if(d.game) $('gameName').textContent=(d.game==='red'?'Red':d.game)+' / Field Log';
+        }).catch(function(){});
+        initToggles();
+        connect();
+        poll(); pollTimer=setInterval(poll, POLL_MS);
+        setInterval(pollScreenshot, 1500);
+        setInterval(refreshGrid, 2000);
+        setStatus(false,'connecting');
     }
-
-    // --- Init ---
-    function init() {
-        addBottomCorners();
-        setStatus(false, 'Connecting...');
-        addLog('status', 'Hermes Plays Pokémon Dashboard loaded');
-        addLog('status', 'Connecting to server...');
-
-        checkHealth();
-        connectWS();
-        startPolling();
-    }
-
-    // Wait for DOM
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', init);
-    } else {
-        init();
-    }
-
+    if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', init);
+    else init();
 })();
