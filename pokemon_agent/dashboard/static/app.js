@@ -205,7 +205,7 @@
         }
 
         // Battle
-        if (state.battle) {
+        if (state.battle && state.battle.in_battle) {
             renderBattle(state.battle);
         } else {
             battleInfo.classList.add('hidden');
@@ -328,7 +328,11 @@
         if (mon.moves && mon.moves.length) {
             var moves = document.createElement('div');
             moves.className = 'team-moves';
-            moves.textContent = mon.moves.join(' / ');
+            var moveNames = mon.moves.map(function (m) {
+                // Moves may be plain strings or {id, name, pp, pp_up} objects.
+                return (m && typeof m === 'object') ? (m.name || '?') : m;
+            });
+            moves.textContent = moveNames.join(' / ');
             card.appendChild(moves);
         }
 
