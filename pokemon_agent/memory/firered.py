@@ -49,6 +49,7 @@ OFF_MAP_GROUP       = 0x0004
 OFF_MAP_NUMBER      = 0x0005
 OFF_POS_X           = 0x0000     # local coords within map
 OFF_POS_Y           = 0x0002
+OFF_GAME_STAGE      = 0x0002     # GameState byte
 
 # Offsets from SaveBlock2
 OFF_PLAYER_NAME     = 0x0000     # 8 bytes
@@ -113,8 +114,11 @@ class FireRedMemoryReader(GameMemoryReader):
 
     def read_player(self) -> Dict[str, Any]:
         """Read player data (Phase 2)."""
+        sb1 = self._get_saveblock1()
+        game_stage = self.emu.read_u8(sb1 + OFF_GAME_STAGE)
+        
         raise NotImplementedError(
-            "FireRedMemoryReader.read_player() is not yet implemented. "
+            f"FireRedMemoryReader.read_player() is not yet implemented (Stage: {game_stage}). "
             "Planned for Phase 2. Address constants are defined; "
             "Gen 3 text decoding and save block dereferencing are required."
         )
