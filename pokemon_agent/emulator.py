@@ -147,8 +147,8 @@ class PyBoyEmulator(Emulator):
         if not os.path.isfile(rom_path):
             raise FileNotFoundError(f"ROM not found: {rom_path}")
 
-        self._pyboy = PyBoy(rom_path, window="SDL2", sound=False)
-        logger.info("PyBoy initialized with SDL2 window (sound disabled)")
+        self._pyboy = PyBoy(rom_path, window="null", sound=False)
+        logger.info("PyBoy initialized with null window (sound disabled)")
         self.rom_path = rom_path
         self.frame_count = 0
 
