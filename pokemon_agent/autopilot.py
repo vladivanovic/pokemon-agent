@@ -166,6 +166,13 @@ class HermesDriver:
             print(f"[driver] state read failed: {e}", file=sys.stderr)
             time.sleep(2)
             return
+
+        # Check for emulator readiness
+        if state.get("status") in ["loading", "offline"]:
+            print(f"[driver] Emulator {state.get('status')}...")
+            time.sleep(2)
+            return
+
         ascii_map = (state.get("collision") or {}).get("ascii")
         if not ascii_map:
             ascii_map = ("(in battle — no overworld map this turn)"
