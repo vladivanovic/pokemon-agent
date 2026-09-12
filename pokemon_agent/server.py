@@ -314,17 +314,31 @@ def _emulator_worker():
     """Background thread running the emulator loop."""
     global _emulator, _reader
     
-    # Initialize PyBoy/PyGBA here (the same thread that will tick it)
-    rom = Path(_config.rom_path).expanduser().resolve()
-    from pokemon_agent.emulator import create_emulator
-    _emulator = create_emulator(str(rom))
-
-    if _config.game_type == "red":
-        from pokemon_agent.memory.red import PokemonRedReader
-        _reader = PokemonRedReader(_emulator)
-    else:
-        from pokemon_agent.memory.firered import FireRedMemoryReader
-        _reader = FireRedMemoryReader(_emulator)
+    # Wait for a "load_state" or "start" signal before initializing
+    logger.info("Emulator worker waiting for start/load command...")
+    while True:
+        try:
+            cmd, args = _emu_queue.get()
+            if cmd == "load_state" or cmd == "start":
+                # Initialize now
+                rom = Path(_config.rom_path).expanduser().resolve()
+                from pokemon_agent.emulator import create_emulator
+                _emulator = create_emulator(str(rom))
+                if _config.game_type == "red":
+                    from pokemon_agent.memory.red import PokemonRedReader
+                    _reader = PokemonRedReader(_emulator)
+                else:
+                    from pokemon_agent.memory.firered import FireRedMemoryReader
+                    _reader = FireRedMemoryReader(_emulator)
+                
+                if cmd == "load_state":
+                    _emulator.load_state(*args)
+                
+                _emulator.tick(60) # Initial tick
+                break
+        except Exception as e:
+            logger.error(f"Emulator worker init error: {e}")
+            return
 
     while True:
         try:
@@ -577,26 +591,13 @@ async def set_control(req: ControlRequest):
     while the state is "running". This endpoint is the wiring behind the
     dashboard's control buttons; it does not itself drive the emulator.
     """
-    global _control_state, _emulator, _reader
+    global _control_state, _emulator
     
-    # If starting, ensure emulator is initialized if it hasn't been yet
+    # If starting, signal the emulator worker to initialize if not already
     if req.state == "running" and _emulator is None:
-        logger.info("Initializing emulator on start signal.")
+        logger.info("Signaling emulator worker to start.")
         _start_emulator_thread()
-        try:
-            from pokemon_agent.emulator import create_emulator
-            _emulator = await _run_sync(create_emulator, _config.rom_path)
-            if _config.game_type == "red":
-                from pokemon_agent.memory.red import PokemonRedReader
-                _reader = PokemonRedReader(_emulator)
-            else:
-                from pokemon_agent.memory.firered import FireRedMemoryReader
-                _reader = FireRedMemoryReader(_emulator)
-            # tick a few frames so the title screen renders
-            await _run_sync(_emulator.tick, 60)
-        except Exception as e:
-            logger.error(f"Emulator initialization failed: {e}")
-            raise HTTPException(status_code=500, detail=f"Emulator init failed: {e}")
+        _emu_queue.put(("start", []))
 
     valid = {"running", "paused", "stopped"}
     if req.state not in valid:
@@ -674,21 +675,30 @@ async def load_game(sid: str):
     """Load an existing game session: restore its latest save-state and make
     it active (its Hermes session id is restored too, so the autopilot resumes
     the SAME brain). If the session has no save yet, just activate it."""
-    _ensure_emulator()
+    
+    # We signal the emulator worker to initialize and load the state
+    global _emulator
+    if _emulator is None:
+        logger.info("Signaling emulator worker to load state.")
+        _start_emulator_thread()
+        latest = _session_mgr.latest_save_path(sid)
+        if latest is not None:
+            _emu_queue.put(("load_state", [str(latest)]))
+        else:
+            _emu_queue.put(("start", []))
+
     if _session_mgr is None:
         raise HTTPException(status_code=503, detail="Session manager not ready")
     gs = _session_mgr.load(sid)
     if gs is None:
         raise HTTPException(status_code=404, detail=f"Game session not found: {sid}")
-    latest = _session_mgr.latest_save_path(sid)
-    if latest is not None:
-        try:
-            await _run_sync(_emulator.load_state, str(latest))
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to load save: {e}")
+    
     await _activate(gs)
-    state_after = await _run_sync(_get_state_dict)
-    await broadcast({"type": "state_update", "reason": "load_game", "state": state_after})
+    
+    # Trigger an async check to update the client with state once init happens
+    # (Simplified: emulator is now managed by the background worker)
+    await broadcast({"type": "state_update", "reason": "load_game", "state": {"status": "loading"}})
+    
     return {"success": True, "game": gs.to_dict(),
             "restored_save": latest.stem if latest else None}
 
