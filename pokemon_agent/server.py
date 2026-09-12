@@ -365,8 +365,9 @@ async def _startup():
         return
 
     # Start the emulator in a dedicated thread
-    _emu_thread = threading.Thread(target=_emulator_worker, daemon=True)
-    _emu_thread.start()
+    # (Moved to deferred start until a game is selected/loaded)
+    # _emu_thread = threading.Thread(target=_emulator_worker, daemon=True)
+    # _emu_thread.start()
 
     # Create data directories
     data_dir = Path(_config.data_dir).expanduser().resolve()
@@ -577,10 +578,17 @@ def _game_summary() -> dict:
 
 async def _activate(gs) -> None:
     """Make `gs` the active session: sync objectives, broadcast, persist."""
-    global _active_session, _objectives
+    global _active_session, _objectives, _emu_thread
     _active_session = gs
     _objectives = gs.objectives or _objectives
     _session_mgr.save(gs)
+
+    # Lazy-start emulator thread if not already running
+    if _emu_thread is None:
+        _emu_thread = threading.Thread(target=_emulator_worker, daemon=True)
+        _emu_thread.start()
+        logger.info("Emulator worker thread started (lazy-init)")
+
     await broadcast({"type": "objectives", "objectives": _objectives})
     await broadcast({"type": "game", **_game_summary()})
 
