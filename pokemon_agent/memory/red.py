@@ -78,6 +78,7 @@ ADDR_EVENT_FLAGS   = 0xD747   # large bitfield (wEventFlags)
 ADDR_OAK_PARCEL    = 0xD74E   # bit 1 = has parcel
 ADDR_POKEDEX_FLAG  = 0xD74B   # bit 5 = has pokedex
 ADDR_TOWN_MAP_FLAG = 0xD5F3   # bit 0 = has town map
+ADDR_GAME_STAGE    = 0xD059   # wGameStage: 0=title, 1=overworld
 
 
 # ===================================================================
@@ -644,6 +645,7 @@ class RedBlueMemoryReader(GameMemoryReader):
 
     def read_player(self) -> Dict[str, Any]:
         """Read player info: name, money, badges, position, facing, play time."""
+        game_stage = self.emu.read_u8(ADDR_GAME_STAGE)
         name = self._decode_text(ADDR_PLAYER_NAME, 11)
         rival = self._decode_text(ADDR_RIVAL_NAME, 11)
         money = self.read_bcd(ADDR_MONEY, 3)
@@ -663,6 +665,7 @@ class RedBlueMemoryReader(GameMemoryReader):
         return {
             "name": name,
             "rival_name": rival,
+            "game_stage": game_stage,
             "money": money,
             "badges": badge_list,
             "badge_count": len(badge_list),

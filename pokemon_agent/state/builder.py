@@ -56,15 +56,10 @@ def build_game_state(
     for key, fn in sections.items():
         try:
             state[key] = fn()
-        except NotImplementedError as exc:
             state[key] = None
             state[f"{key}_error"] = str(exc)
-        except Exception as exc:  # noqa: BLE001
             state[key] = None
             state[f"{key}_error"] = (
-                f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
-            )
-
     return state
 
 
@@ -95,9 +90,15 @@ def build_state_summary(state: Dict[str, Any]) -> str:
     # -- metadata --
     meta = state.get("metadata", {})
     lines.append(f"Game      : {meta.get('game', '?')}")
-    lines.append(f"Timestamp : {meta.get('timestamp', '?')}")
+    lines.append(f"Context   : {state.get('context', 'unknown')}")
     if meta.get("frame_count") is not None:
         lines.append(f"Frame     : {meta['frame_count']}")
+
+    # Stop here if on title screen
+    if state.get("context") == "title_screen":
+        lines.append("\nGame is at the title screen.")
+        lines.append(_hr)
+        return "\n".join(lines)
 
     # -- map --
     map_info = state.get("map")
@@ -193,3 +194,4 @@ def build_state_summary(state: Dict[str, Any]) -> str:
 
     lines.append(_hr)
     return "\n".join(lines)
+    

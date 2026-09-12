@@ -138,6 +138,7 @@ def main():
                         help="LLM model (default: $POKEMON_LLM_MODEL or anthropic/claude-sonnet-4.5)")
     play_p.add_argument("--turn-delay", type=float, default=1.5,
                         help="Seconds between turns (default: 1.5)")
+    play_p.add_argument("--debug", action="store_true", help="Enable debug logging")
 
     args = parser.parse_args()
 
