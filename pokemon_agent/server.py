@@ -10,7 +10,9 @@ import base64
 import io
 import json
 import logging
+import queue
 import re
+import threading
 import time
 from functools import partial
 from pathlib import Path
@@ -94,6 +96,8 @@ _emulator = None          # Emulator instance
 _reader = None            # GameMemoryReader subclass instance
 _start_time: float = 0.0
 _loop: Optional[asyncio.AbstractEventLoop] = None
+_emu_queue = queue.Queue() # Thread-safe command queue
+_emu_thread: Optional[threading.Thread] = None
 
 # Dynamic objectives shown on the dashboard (default = Kanto opening goals).
 _objectives: list = [
@@ -306,6 +310,42 @@ async def _execute_action(action_str: str) -> None:
 # Server lifecycle
 # ---------------------------------------------------------------------------
 
+def _emulator_worker():
+    """Background thread running the emulator loop."""
+    global _emulator, _reader
+    
+    # Initialize PyBoy/PyGBA here (the same thread that will tick it)
+    rom = Path(_config.rom_path).expanduser().resolve()
+    from pokemon_agent.emulator import create_emulator
+    _emulator = create_emulator(str(rom))
+
+    if _config.game_type == "red":
+        from pokemon_agent.memory.red import PokemonRedReader
+        _reader = PokemonRedReader(_emulator)
+    else:
+        from pokemon_agent.memory.firered import FireRedMemoryReader
+        _reader = FireRedMemoryReader(_emulator)
+
+    while True:
+        try:
+            # Check for commands
+            try:
+                cmd, args = _emu_queue.get(timeout=0.01)
+                if cmd == "press":
+                    _emulator.press(*args)
+                elif cmd == "tick":
+                    _emulator.tick(*args)
+                elif cmd == "load_state":
+                    _emulator.load_state(*args)
+                elif cmd == "save_state":
+                    _emulator.save_state(*args)
+            except queue.Empty:
+                _emulator.tick(1)
+        except Exception as e:
+            logger.error(f"Emulator worker error: {e}")
+            time.sleep(1)
+
+
 def configure(config: GameConfig):
     """Set server configuration (call before app startup)."""
     global _config
@@ -314,7 +354,7 @@ def configure(config: GameConfig):
 
 @app.on_event("startup")
 async def _startup():
-    global _emulator, _reader, _start_time, _config, _loop
+    global _emulator, _reader, _start_time, _config, _loop, _emu_thread
     _loop = asyncio.get_running_loop()
     _start_time = time.time()
 
@@ -324,35 +364,9 @@ async def _startup():
         logger.warning("Call server.configure(GameConfig(...)) before startup.")
         return
 
-    rom = Path(_config.rom_path).expanduser().resolve()
-    if not rom.exists():
-        logger.error(f"ROM not found: {rom}")
-        return
-
-    # Auto-detect game type
-    game_type = _config.game_type
-    if game_type == "auto":
-        game_type = _detect_game_type(str(rom))
-
-    logger.info(f"Loading ROM: {rom}")
-    logger.info(f"Detected game type: {game_type}")
-
-    # Create emulator
-    from pokemon_agent.emulator import create_emulator
-    logger.info(f"Initializing emulator for {rom}")
-    _emulator = create_emulator(str(rom))
-    logger.info(f"Emulator initialized: {type(_emulator).__name__}")
-    logger.debug(f"Emulator info: {_emulator.get_info()}")
-
-    # Create memory reader
-    if game_type == "red":
-        from pokemon_agent.memory.red import PokemonRedReader
-        _reader = PokemonRedReader(_emulator)
-    elif game_type == "firered":
-        from pokemon_agent.memory.firered import FireRedMemoryReader
-        _reader = FireRedMemoryReader(_emulator)
-    else:
-        raise ValueError(f"Unknown game type: {game_type}")
+    # Start the emulator in a dedicated thread
+    _emu_thread = threading.Thread(target=_emulator_worker, daemon=True)
+    _emu_thread.start()
 
     # Create data directories
     data_dir = Path(_config.data_dir).expanduser().resolve()
@@ -383,7 +397,7 @@ async def _startup():
         state_path = saves_dir / f"{_config.load_state}.state"
         if state_path.exists():
             try:
-                _emulator.load_state(str(state_path))
+                _emu_queue.put(("load_state", [str(state_path)]))
                 logger.info(f"Loaded save state: {_config.load_state}")
             except Exception as e:
                 logger.warning(f"Failed to load state '{_config.load_state}': {e}")
