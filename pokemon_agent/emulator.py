@@ -147,8 +147,10 @@ class PyBoyEmulator(Emulator):
         if not os.path.isfile(rom_path):
             raise FileNotFoundError(f"ROM not found: {rom_path}")
 
+        # Set SDL audio driver to dummy to avoid sound card issues on headless/embedded
+        os.environ["SDL_AUDIODRIVER"] = "dummy"
         self._pyboy = PyBoy(rom_path, window="null", sound=False)
-        logger.info("PyBoy initialized with null window (sound disabled)")
+        logger.info("PyBoy initialized with null window (sound disabled, audio dummy driver)")
         self.rom_path = rom_path
         self.frame_count = 0
 
