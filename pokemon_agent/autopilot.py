@@ -24,6 +24,7 @@ Config (env, optional):
 
 from __future__ import annotations
 
+import logging
 import json
 import os
 import re
@@ -33,6 +34,10 @@ import time
 from typing import Any, Dict, Optional
 
 import requests
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+logger = logging.getLogger("pokemon-agent.autopilot")
 
 # What Hermes is told once at the start of the session, then nudged each turn.
 TURN_NUDGE = """You are playing Pokémon Red live on the Hermes Plays Pokémon dashboard.
@@ -163,9 +168,11 @@ class HermesDriver:
         try:
             state = self._get("/state").json()
         except Exception as e:
-            print(f"[driver] state read failed: {e}", file=sys.stderr)
+            logger.error(f"State read failed: {e}")
             time.sleep(2)
             return
+
+        logger.debug(f"State: {state}")
         ascii_map = (state.get("collision") or {}).get("ascii")
         if not ascii_map:
             ascii_map = ("(in battle — no overworld map this turn)"
@@ -179,7 +186,9 @@ class HermesDriver:
             with open(img_path, "wb") as f:
                 f.write(shot)
             have_img = True
-        except Exception:
+            logger.debug(f"Screenshot taken, saved to {img_path}")
+        except Exception as e:
+            logger.warning(f"Screenshot failed: {e}")
             have_img = False
 
         prompt = TURN_NUDGE.format(
@@ -202,16 +211,19 @@ class HermesDriver:
             cmd += ["--image", img_path]
         cmd += ["-q", prompt]
 
+        logger.info(f"Triggering Hermes: {' '.join(cmd)}")
+
         try:
             out = subprocess.run(cmd, capture_output=True, text=True,
                                  timeout=self.turn_timeout)
             stdout = out.stdout or ""
+            logger.debug(f"Hermes output: {stdout}")
         except subprocess.TimeoutExpired:
-            print("[driver] hermes turn timed out", file=sys.stderr)
+            logger.error("Hermes turn timed out")
             self.event(type="alert", text="Turn timed out — retrying.")
             return
         except Exception as e:
-            print(f"[driver] hermes invocation failed: {e}", file=sys.stderr)
+            logger.error(f"Hermes invocation failed: {e}")
             self.event(type="alert", text=f"Driver error: {e}")
             time.sleep(3)
             return
