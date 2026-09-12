@@ -418,7 +418,7 @@ def _shutdown():
     global _emulator
     if _emulator:
         logger.info("Shutting down emulator...")
-        _emulator.stop()
+        _emulator.close()
         _emulator = None
     logger.info("Server shutdown complete.")
 
