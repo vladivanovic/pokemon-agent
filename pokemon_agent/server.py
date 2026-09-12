@@ -398,6 +398,9 @@ async def _startup():
         state_path = saves_dir / f"{_config.load_state}.state"
         if state_path.exists():
             try:
+                # We need the emulator thread to be running to load the state.
+                # If we are autoloading, we must start it now.
+                _start_emulator_thread()
                 _emu_queue.put(("load_state", [str(state_path)]))
                 logger.info(f"Loaded save state: {_config.load_state}")
             except Exception as e:
@@ -407,6 +410,26 @@ async def _startup():
 
     logger.info(f"Ready — listening on port {_config.port}")
     logger.info("Endpoints: /, /state, /screenshot, /action, /save, /load, /saves, /minimap, /health, /ws")
+
+
+@app.on_event("shutdown")
+def _shutdown():
+    """Cleanup emulator on server shutdown."""
+    global _emulator
+    if _emulator:
+        logger.info("Shutting down emulator...")
+        _emulator.stop()
+        _emulator = None
+    logger.info("Server shutdown complete.")
+
+
+def _start_emulator_thread():
+    """Helper to start the emulator thread if not already running."""
+    global _emu_thread
+    if _emu_thread is None:
+        _emu_thread = threading.Thread(target=_emulator_worker, daemon=True)
+        _emu_thread.start()
+        logger.info("Emulator worker thread started.")
 
 
 # ---------------------------------------------------------------------------
@@ -554,7 +577,27 @@ async def set_control(req: ControlRequest):
     while the state is "running". This endpoint is the wiring behind the
     dashboard's control buttons; it does not itself drive the emulator.
     """
-    global _control_state
+    global _control_state, _emulator, _reader
+    
+    # If starting, ensure emulator is initialized if it hasn't been yet
+    if req.state == "running" and _emulator is None:
+        logger.info("Initializing emulator on start signal.")
+        _start_emulator_thread()
+        try:
+            from pokemon_agent.emulator import create_emulator
+            _emulator = await _run_sync(create_emulator, _config.rom_path)
+            if _config.game_type == "red":
+                from pokemon_agent.memory.red import PokemonRedReader
+                _reader = PokemonRedReader(_emulator)
+            else:
+                from pokemon_agent.memory.firered import FireRedMemoryReader
+                _reader = FireRedMemoryReader(_emulator)
+            # tick a few frames so the title screen renders
+            await _run_sync(_emulator.tick, 60)
+        except Exception as e:
+            logger.error(f"Emulator initialization failed: {e}")
+            raise HTTPException(status_code=500, detail=f"Emulator init failed: {e}")
+
     valid = {"running", "paused", "stopped"}
     if req.state not in valid:
         raise HTTPException(status_code=400, detail=f"state must be one of {sorted(valid)}")
@@ -616,27 +659,12 @@ async def new_game(req: NewGameRequest):
     new GameSession (new Hermes brain — hermes_session_id starts null and is
     bound on the autopilot's first turn).
     """
-    _ensure_emulator()
     if _session_mgr is None or _config is None:
         raise HTTPException(status_code=503, detail="Server not ready")
-    # Fresh boot: rebuild the emulator from the ROM (clears all game state).
-    try:
-        from pokemon_agent.emulator import create_emulator
-        global _emulator, _reader
-        _emulator = await _run_sync(create_emulator, _config.rom_path)
-        if _config.game_type == "red":
-            from pokemon_agent.memory.red import PokemonRedReader
-            _reader = PokemonRedReader(_emulator)
-        else:
-            from pokemon_agent.memory.firered import FireRedMemoryReader
-            _reader = FireRedMemoryReader(_emulator)
-        # tick a few frames so the title screen renders
-        await _run_sync(_emulator.tick, 60)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"New-game reset failed: {e}")
 
     gs = _session_mgr.create(name=req.name, game=_config.game_type)
     await _activate(gs)
+    
     await broadcast({"type": "control", "state": _control_state})
     return {"success": True, "game": gs.to_dict()}
 
