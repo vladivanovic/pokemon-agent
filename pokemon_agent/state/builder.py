@@ -56,10 +56,10 @@ def build_game_state(
     for key, fn in sections.items():
         try:
             state[key] = fn()
+        except Exception as exc:
             state[key] = None
             state[f"{key}_error"] = str(exc)
-            state[key] = None
-            state[f"{key}_error"] = (
+
     return state
 
 
