@@ -6,10 +6,14 @@ screen capture, memory access, and save states across emulator backends.
 
 from __future__ import annotations
 
+import logging
 import os
+import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Dict, List, Optional
+
+logger = logging.getLogger("pokemon-agent.emulator")
 
 try:
     from PIL import Image
@@ -144,6 +148,7 @@ class PyBoyEmulator(Emulator):
             raise FileNotFoundError(f"ROM not found: {rom_path}")
 
         self._pyboy = PyBoy(rom_path, window="null")
+        logger.info("PyBoy initialized in headless mode ('null' window)")
         self.rom_path = rom_path
         self.frame_count = 0
 
@@ -184,10 +189,14 @@ class PyBoyEmulator(Emulator):
 
     def tick(self, frames: int = 1) -> None:
         """Advance emulation by *frames* frames."""
+        start = time.perf_counter()
         pb = self._pyboy
         for _ in range(frames):
             pb.tick()  # type: ignore[union-attr]
             self.frame_count += 1
+        elapsed = time.perf_counter() - start
+        if elapsed > 0.1:
+            logger.debug(f"Tick {frames} frames took {elapsed:.3f}s")
 
     # -- video --------------------------------------------------------------
 

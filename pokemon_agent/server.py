@@ -15,7 +15,12 @@ from functools import partial
 from pathlib import Path
 from typing import Optional, Set
 
+import logging
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+logger = logging.getLogger("pokemon-agent.server")
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
@@ -315,13 +320,13 @@ async def _startup():
 
     if _config is None:
         # Config can be injected via environment or set beforehand
-        print("[server] WARNING: No GameConfig set — emulator will NOT start.")
-        print("[server] Call server.configure(GameConfig(...)) before startup.")
+        logger.warning("No GameConfig set — emulator will NOT start.")
+        logger.warning("Call server.configure(GameConfig(...)) before startup.")
         return
 
     rom = Path(_config.rom_path).expanduser().resolve()
     if not rom.exists():
-        print(f"[server] ERROR: ROM not found: {rom}")
+        logger.error(f"ROM not found: {rom}")
         return
 
     # Auto-detect game type
@@ -329,12 +334,15 @@ async def _startup():
     if game_type == "auto":
         game_type = _detect_game_type(str(rom))
 
-    print(f"[server] Loading ROM: {rom}")
-    print(f"[server] Detected game type: {game_type}")
+    logger.info(f"Loading ROM: {rom}")
+    logger.info(f"Detected game type: {game_type}")
 
     # Create emulator
     from pokemon_agent.emulator import create_emulator
+    logger.info(f"Initializing emulator for {rom}")
     _emulator = create_emulator(str(rom))
+    logger.info(f"Emulator initialized: {type(_emulator).__name__}")
+    logger.debug(f"Emulator info: {_emulator.get_info()}")
 
     # Create memory reader
     if game_type == "red":
@@ -362,12 +370,12 @@ async def _startup():
         dash_dir = Path(dashboard_mod.__file__).parent / "static"
         if dash_dir.is_dir():
             app.mount("/dashboard", StaticFiles(directory=str(dash_dir), html=True), name="dashboard")
-            print(f"[server] Dashboard mounted at /dashboard")
+            logger.info("Dashboard mounted at /dashboard")
         else:
-            print("[server] Dashboard module found but no static/ directory")
+            logger.warning("Dashboard module found but no static/ directory")
     except ImportError:
-        print("[server] Dashboard not installed — /dashboard unavailable")
-        print("[server]   Install with: pip install pokemon-agent[dashboard]")
+        logger.warning("Dashboard not installed — /dashboard unavailable")
+        logger.warning("Install with: pip install pokemon-agent[dashboard]")
 
     # Auto-load a save state if specified
     if _config.load_state:
@@ -376,24 +384,14 @@ async def _startup():
         if state_path.exists():
             try:
                 _emulator.load_state(str(state_path))
-                print(f"[server] Loaded save state: {_config.load_state}")
+                logger.info(f"Loaded save state: {_config.load_state}")
             except Exception as e:
-                print(f"[server] WARNING: Failed to load state '{_config.load_state}': {e}")
+                logger.warning(f"Failed to load state '{_config.load_state}': {e}")
         else:
-            print(f"[server] WARNING: Save state not found: {state_path}")
+            logger.warning(f"Save state not found: {state_path}")
 
-    print(f"[server] Ready — listening on port {_config.port}")
-    print(f"[server] Endpoints:")
-    print(f"[server]   GET  /          — server info")
-    print(f"[server]   GET  /state     — game state")
-    print(f"[server]   GET  /screenshot — current frame (PNG)")
-    print(f"[server]   POST /action    — execute actions")
-    print(f"[server]   POST /save      — save state")
-    print(f"[server]   POST /load      — load state")
-    print(f"[server]   GET  /saves     — list saves")
-    print(f"[server]   GET  /minimap   — ASCII minimap")
-    print(f"[server]   GET  /health    — health check")
-    print(f"[server]   WS   /ws        — live events")
+    logger.info(f"Ready — listening on port {_config.port}")
+    logger.info("Endpoints: /, /state, /screenshot, /action, /save, /load, /saves, /minimap, /health, /ws")
 
 
 # ---------------------------------------------------------------------------
