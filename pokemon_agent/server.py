@@ -963,6 +963,3 @@ def _register_dashboard_fallback():
         )
 
 _register_dashboard_fallback()
-        )
-
-_register_dashboard_fallback()
