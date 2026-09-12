@@ -149,10 +149,17 @@ class HermesDriver:
     def bind_hermes(self):
         if self.game_id and self.session_id:
             try:
-                requests.post(f"{self.server}/games/{self.game_id}/hermes",
+                requests.post(self.server + f"/games/{self.game_id}/hermes",
                               json={"hermes_session_id": self.session_id}, timeout=15)
             except Exception:
                 pass
+
+    def check_health(self) -> bool:
+        """Check if server and emulator are ready."""
+        try:
+            return self._get("/health").json().get("status") == "ok"
+        except Exception:
+            return False
 
     def step(self) -> None:
         if not self.check_health():
