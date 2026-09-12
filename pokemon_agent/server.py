@@ -9,21 +9,21 @@ import asyncio
 import base64
 import io
 import json
+import logging
 import re
 import time
 from functools import partial
 from pathlib import Path
 from typing import Optional, Set
 
-import logging
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("pokemon-agent.server")
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel
 
 __version__ = "0.1.0"
 
