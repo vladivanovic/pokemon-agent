@@ -199,6 +199,11 @@ async def broadcast(event: dict):
 
 def _get_state_dict() -> dict:
     """Build full game state from the memory reader."""
+    if _emulator is None:
+        return {"status": "offline", "message": "Emulator not initialized"}
+    if _reader is None:
+        return {"status": "loading", "message": "Memory reader not initialized"}
+        
     from pokemon_agent.state.builder import build_game_state
     state = build_game_state(_reader)
     # Attach the on-screen walkability grid for Red/Blue (overworld tilesets).
@@ -472,12 +477,8 @@ async def health():
 @app.get("/state")
 async def get_state():
     """Full game state JSON."""
-    _ensure_emulator()
-    try:
-        state = await _run_sync(_get_state_dict)
-        return JSONResponse(content=state)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error reading state: {e}")
+    state = await _run_sync(_get_state_dict)
+    return JSONResponse(content=state)
 
 
 @app.get("/screenshot/grid")
@@ -959,6 +960,9 @@ def _register_dashboard_fallback():
         raise HTTPException(
             status_code=404,
             detail="Dashboard not installed. Install with: pip install pokemon-agent[dashboard]",
+        )
+
+_register_dashboard_fallback()
         )
 
 _register_dashboard_fallback()
