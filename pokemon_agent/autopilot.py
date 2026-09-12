@@ -1,393 +1,270 @@
-"""Unified emulator wrapper supporting PyBoy (GB/GBC) and PyGBA (GBA).
+"""Standalone driver that lets **Hermes Agent** play Pokemon through a session.
 
-Provides a common interface for ROM loading, button input, frame advance,
-screen capture, memory access, and save states across emulator backends.
+This is NOT a raw-LLM loop. The brain is a real Hermes Agent session — with
+the `pokemon-player` skill, vision, memory, and the terminal tool — driven one
+turn at a time. The driver is intentionally thin:
+
+  loop while /control == "running":
+      hermes chat --resume <session> --yolo -s pokemon-player \\
+        --image <grid screenshot> -q "<turn nudge + compact state + ascii map>"
+
+Hermes itself does the work each turn: it reads the state/map we hand it (and
+can curl the server for more), looks at the grid screenshot with its own
+vision, decides, then calls the game server's HTTP API with its terminal tool
+to POST /action and POST /event (narration) and POST /objectives. Because we
+pass --resume with a single persistent session id, Hermes keeps memory and
+context across the whole playthrough — it is "running through a session."
+
+The loop is gated by the server's /control state (Start/Pause/Stop buttons).
+
+Config (env, optional):
+  POKEMON_HERMES_MODEL     model override passed to `hermes chat -m`
+  POKEMON_HERMES_PROVIDER  provider override passed to `hermes chat --provider`
 """
 
 from __future__ import annotations
 
-import logging
+import json
 import os
+import re
+import subprocess
+import sys
 import time
-from abc import ABC, abstractmethod
-from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, Optional
 
-logger = logging.getLogger("pokemon-agent.emulator")
+import requests
 
-try:
-    from PIL import Image
-except ImportError:
-    Image = None  # type: ignore[assignment,misc]
+# What Hermes is told once at the start of the session, then nudged each turn.
+TURN_NUDGE = """You are playing Pokémon Red live on the Hermes Plays Pokémon dashboard.
 
+The game server is at {server}. Take ONE short turn now, then stop and reply.
 
-# ---------------------------------------------------------------------------
-# Abstract base
-# ---------------------------------------------------------------------------
+This turn:
+1. Look at the attached grid screenshot (A1..J9 cells, you are the player at
+   E5; the labelled grid + green/red walkability tint is drawn on it).
+2. Use the game state and the ASCII walkability map below to decide a move.
+   `.` = walkable, `#` = blocked, `@` = you (E5). Count cells from E5:
+   up=row-1, down=row+1, left=col-1, right=col+1. NEVER route through `#`.
+3. Narrate to the stream, then act, using the terminal tool with curl:
+   - POST {server}/event  body {{"type":"reasoning","text":"..."}}  (what you see)
+   - POST {server}/event  body {{"type":"decision","text":"..."}}   (your plan)
+   - POST {server}/action body {{"actions":["walk_down","walk_down"]}} (2-4 moves)
+   - On a real beat (new town/badge/item/catch): POST {server}/event
+     body {{"type":"key_moment","description":"...","category":"milestone|badge|catch"}}
+   - If your goals change: POST {server}/objectives body
+     {{"objectives":[{{"tier":"primary","text":"...","done":false}}, ...]}}
+   All POSTs need  -H 'Content-Type: application/json'.
+4. Keep it to 2-4 game actions this turn — you'll get another turn next.
 
-class Emulator(ABC):
-    """Abstract emulator interface.
+Reserve vision (the screenshot) for identifying WHAT things are (doors, signs,
+NPCs, the Mart's blue roof). Use the ASCII map for WHERE you can walk.
 
-    Subclasses wrap a concrete emulator library (PyBoy, PyGBA, etc.) and
-    expose a uniform API for the agent layer.
-    """
+CURRENT STATE:
+{state}
 
-    BUTTONS: List[str] = ["a", "b", "start", "select", "up", "down", "left", "right"]
+WALKABILITY MAP (you are @ at E5):
+{ascii_map}
 
-    def __init__(self) -> None:
-        self.frame_count: int = 0
-        self.rom_path: Optional[str] = None
+Take your turn now."""
 
-    # -- lifecycle ----------------------------------------------------------
+FIRST_TURN_PREFIX = """This is the start of your Pokémon Red run. First, set your objectives by
+POSTing to {server}/objectives (primary/secondary/tertiary tiers), then take
+your first turn as described below.
 
-    @abstractmethod
-    def load(self, rom_path: str) -> None:
-        """Load a ROM file and initialise the emulator."""
-
-    @abstractmethod
-    def close(self) -> None:
-        """Shut down the emulator and release resources."""
-
-    # -- input --------------------------------------------------------------
-
-    @abstractmethod
-    def press(self, button: str, frames: int = 1) -> None:
-        """Press *button* and hold it for *frames* frames.
-
-        Parameters
-        ----------
-        button : str
-            One of ``BUTTONS``.
-        frames : int
-            How many frames to hold the button before releasing.
-        """
-
-    @abstractmethod
-    def release_all(self) -> None:
-        """Release every button."""
-
-    # -- timing -------------------------------------------------------------
-
-    @abstractmethod
-    def tick(self, frames: int = 1) -> None:
-        """Advance the emulation by *frames* frames."""
-
-    # -- video --------------------------------------------------------------
-
-    @abstractmethod
-    def get_screen(self) -> "Image.Image":
-        """Return the current screen as a PIL Image."""
-
-    # -- memory -------------------------------------------------------------
-
-    @abstractmethod
-    def read_u8(self, addr: int) -> int:
-        """Read an unsigned 8-bit value from *addr*."""
-
-    @abstractmethod
-    def read_u16(self, addr: int) -> int:
-        """Read an unsigned 16-bit little-endian value from *addr*."""
-
-    @abstractmethod
-    def read_u32(self, addr: int) -> int:
-        """Read an unsigned 32-bit little-endian value from *addr*."""
-
-    @abstractmethod
-    def read_range(self, addr: int, size: int) -> bytes:
-        """Read *size* bytes starting at *addr*."""
-
-    # -- save / load --------------------------------------------------------
-
-    @abstractmethod
-    def save_state(self, path: str) -> None:
-        """Persist an emulator save-state to *path*."""
-
-    @abstractmethod
-    def load_state(self, path: str) -> None:
-        """Restore an emulator save-state from *path*."""
-
-    # -- info ---------------------------------------------------------------
-
-    def get_info(self) -> Dict:
-        """Return runtime metadata about the emulator."""
-        return {
-            "backend": self.__class__.__name__,
-            "rom_path": self.rom_path,
-            "frame_count": self.frame_count,
-        }
+"""
 
 
-# ---------------------------------------------------------------------------
-# PyBoy backend (Game Boy / Game Boy Color)
-# ---------------------------------------------------------------------------
+def _compact_state(state: Dict[str, Any]) -> Dict[str, Any]:
+    p = state.get("player", {}) or {}
+    party = []
+    for m in state.get("party", []) or []:
+        party.append({
+            "nickname": m.get("nickname"), "species": m.get("species"),
+            "level": m.get("level"), "hp": m.get("hp"), "max_hp": m.get("max_hp"),
+            "status": m.get("status"), "types": m.get("types"),
+            "moves": [mv.get("name") if isinstance(mv, dict) else mv for mv in m.get("moves", [])],
+        })
+    battle = state.get("battle") or {}
+    enemy = battle.get("enemy") or {}
+    return {
+        "map": (state.get("map") or {}).get("map_name"),
+        "position": p.get("position"), "facing": p.get("facing"),
+        "cell": (state.get("collision") or {}).get("player_cell", "E5"),
+        "money": p.get("money"), "badges": p.get("badges"),
+        "party": party,
+        "dialog_active": (state.get("dialog") or {}).get("active"),
+        "in_battle": battle.get("in_battle"),
+        "enemy": ({"species": enemy.get("species"), "level": enemy.get("level"),
+                   "hp": enemy.get("hp"), "max_hp": enemy.get("max_hp")}
+                  if battle.get("in_battle") else None),
+    }
 
-class PyBoyEmulator(Emulator):
-    """Wraps the *PyBoy* library for .gb / .gbc ROMs.
 
-    Runs headless (``window='null'``) so no display server is required.
-    """
+class HermesDriver:
+    def __init__(self, server: str, model: Optional[str], provider: Optional[str],
+                 turn_delay: float = 1.5, save_every: int = 20,
+                 turn_timeout: int = 240):
+        self.server = server.rstrip("/")
+        self.model = model
+        self.provider = provider
+        self.turn_delay = turn_delay
+        self.save_every = save_every
+        self.turn_timeout = turn_timeout
+        self.game_id: Optional[str] = None        # active game session id
+        self.session_id: Optional[str] = None     # bound Hermes session id
+        self.turn = 0
 
-    def __init__(self) -> None:
-        super().__init__()
-        self._pyboy: Optional[object] = None
+    # --- server helpers ---
+    def _get(self, path: str):
+        return requests.get(self.server + path, timeout=15)
 
-    # -- lifecycle ----------------------------------------------------------
-
-    def load(self, rom_path: str) -> None:
-        """Load a Game Boy ROM via PyBoy."""
+    def control_state(self) -> str:
         try:
-            from pyboy import PyBoy  # type: ignore[import-untyped]
-        except ImportError as exc:
-            raise ImportError(
-                "PyBoy is required for .gb/.gbc ROMs.  "
-                "Install it with:  pip install pyboy"
-            ) from exc
+            return self._get("/control").json().get("state", "stopped")
+        except Exception:
+            return "stopped"
 
-        rom_path = str(Path(rom_path).expanduser().resolve())
-        if not os.path.isfile(rom_path):
-            raise FileNotFoundError(f"ROM not found: {rom_path}")
+    def sync_active_game(self) -> None:
+        """Read the active game session and adopt its id + Hermes brain id.
 
-
-
-        # Set SDL audio driver to dummy to avoid sound card issues on headless/embedded
-        os.environ["SDL_AUDIODRIVER"] = "dummy"
-        self._pyboy = PyBoy(rom_path, window="SDL2", sound=False)
-        logger.info("PyBoy initialized with SDL2 window (sound disabled, audio dummy driver)")
-        self.rom_path = rom_path
-        self.frame_count = 0
-
-    def close(self) -> None:
-        """Stop PyBoy."""
-        if self._pyboy is not None:
-            self._pyboy.stop(save=False)  # type: ignore[union-attr]
-            self._pyboy = None
-
-    # -- input --------------------------------------------------------------
-
-    def press(self, button: str, frames: int = 1) -> None:
-        """Press a button and hold it for *frames* frames, then release.
-
-        Uses button_press/button_release (not button()) to ensure the
-        button stays held for the full duration. PyBoy's button() auto-
-        releases after ``delay`` ticks which can cause issues with Gen 1
-        walk registration that needs multi-frame holds.
+        This is how 'load game' on the dashboard takes effect: the driver
+        resumes the SAME Hermes session that game was played with, and scopes
+        its work to that game.
         """
-        button = button.lower()
-        if button not in self.BUTTONS:
-            raise ValueError(f"Unknown button '{button}'. Valid: {self.BUTTONS}")
-        pb = self._pyboy
-        pb.button_press(button)  # type: ignore[union-attr]
-        self.tick(frames)
-        pb.button_release(button)  # type: ignore[union-attr]
+        try:
+            cur = self._get("/games/current").json().get("active")
+        except Exception:
+            cur = None
+        if not cur:
+            self.game_id = None
+            return
+        if cur.get("id") != self.game_id:
+            # switched to a different game (new or loaded) — adopt its brain
+            self.game_id = cur.get("id")
+            self.session_id = cur.get("hermes_session_id")  # may be None for a new game
+            print(f"[driver] active game: {self.game_id} (hermes={self.session_id})")
 
-    def release_all(self) -> None:
-        """Release all buttons."""
-        pb = self._pyboy
-        for btn in self.BUTTONS:
+    def event(self, **kw):
+        try:
+            requests.post(self.server + "/event", json=kw, timeout=15)
+        except Exception:
+            pass
+
+    def bind_hermes(self):
+        if self.game_id and self.session_id:
             try:
-                pb.button_release(btn)  # type: ignore[union-attr]
+                requests.post(f"{self.server}/games/{self.game_id}/hermes",
+                              json={"hermes_session_id": self.session_id}, timeout=15)
             except Exception:
                 pass
 
-    # -- timing -------------------------------------------------------------
-
-    def tick(self, frames: int = 1) -> None:
-        """Advance emulation by *frames* frames."""
-        start = time.perf_counter()
-        pb = self._pyboy
-        for _ in range(frames):
-            pb.tick()  # type: ignore[union-attr]
-            self.frame_count += 1
-        elapsed = time.perf_counter() - start
-        if elapsed > 0.1:
-            logger.debug(f"Tick {frames} frames took {elapsed:.3f}s")
-
-    # -- video --------------------------------------------------------------
-
-    def get_screen(self) -> "Image.Image":
-        """Return current screen as a PIL Image (160×144)."""
-        return self._pyboy.screen.image  # type: ignore[union-attr]
-
-    # -- memory -------------------------------------------------------------
-
-    def read_u8(self, addr: int) -> int:
-        return self._pyboy.memory[addr] & 0xFF  # type: ignore[index]
-
-    def read_u16(self, addr: int) -> int:
-        lo = self._pyboy.memory[addr] & 0xFF  # type: ignore[index]
-        hi = self._pyboy.memory[addr + 1] & 0xFF  # type: ignore[index]
-        return (hi << 8) | lo
-
-    def read_u32(self, addr: int) -> int:
-        b = bytes(self._pyboy.memory[addr : addr + 4])  # type: ignore[index]
-        return int.from_bytes(b, "little")
-
-    def read_range(self, addr: int, size: int) -> bytes:
-        return bytes(self._pyboy.memory[addr : addr + size])  # type: ignore[index]
-
-    # -- save / load --------------------------------------------------------
-
-    def save_state(self, path: str) -> None:
-        """Save emulator state to a file."""
-        path = str(Path(path).expanduser().resolve())
-        with open(path, "wb") as f:
-            self._pyboy.save_state(f)  # type: ignore[union-attr]
-
-    def load_state(self, path: str) -> None:
-        """Load emulator state from a file."""
-        path = str(Path(path).expanduser().resolve())
-        with open(path, "rb") as f:
-            self._pyboy.load_state(f)  # type: ignore[union-attr]
-
-    # -- info ---------------------------------------------------------------
-
-    def get_info(self) -> Dict:
-        info = super().get_info()
-        info["platform"] = "GB/GBC"
-        return info
-
-
-# ---------------------------------------------------------------------------
-# PyGBA backend (Game Boy Advance)
-# ---------------------------------------------------------------------------
-
-class PyGBAEmulator(Emulator):
-    """Wraps the *PyGBA / mgba-py* library for .gba ROMs.
-
-    This is a Phase-2 backend.  The interface mirrors :class:`PyBoyEmulator`
-    so agent code is backend-agnostic.
-    """
-
-    _BUTTON_MAP = {
-        "a": "press_a",
-        "b": "press_b",
-        "start": "press_start",
-        "select": "press_select",
-        "up": "press_up",
-        "down": "press_down",
-        "left": "press_left",
-        "right": "press_right",
-    }
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._gba: Optional[object] = None
-
-    # -- lifecycle ----------------------------------------------------------
-
-    def load(self, rom_path: str) -> None:
-        """Load a GBA ROM via PyGBA / mgba."""
+    # --- one turn = one Hermes invocation ---
+    def step(self) -> None:
         try:
-            from pygba import PyGBA  # type: ignore[import-untyped]
-        except ImportError as exc:
-            raise ImportError(
-                "PyGBA (mgba-py) is required for .gba ROMs.  "
-                "Install it with:  pip install pygba"
-            ) from exc
+            state = self._get("/state").json()
+        except Exception as e:
+            print(f"[driver] state read failed: {e}", file=sys.stderr)
+            time.sleep(2)
+            return
+        ascii_map = (state.get("collision") or {}).get("ascii")
+        if not ascii_map:
+            ascii_map = ("(in battle — no overworld map this turn)"
+                         if (state.get("battle") or {}).get("in_battle")
+                         else "(no map available)")
 
-        rom_path = str(Path(rom_path).expanduser().resolve())
-        if not os.path.isfile(rom_path):
-            raise FileNotFoundError(f"ROM not found: {rom_path}")
+        # Grab the grid screenshot to a temp file for --image.
+        img_path = "/tmp/pokemon_turn_grid.png"
+        try:
+            shot = self._get("/screenshot/grid?scale=3").content
+            with open(img_path, "wb") as f:
+                f.write(shot)
+            have_img = True
+        except Exception:
+            have_img = False
 
-        self._gba = PyGBA.load(rom_path)  # type: ignore[attr-defined]
-        self.rom_path = rom_path
-        self.frame_count = 0
-
-    def close(self) -> None:
-        """Release PyGBA resources."""
-        self._gba = None
-
-    # -- input --------------------------------------------------------------
-
-    def press(self, button: str, frames: int = 1) -> None:
-        button = button.lower()
-        method = self._BUTTON_MAP.get(button)
-        if method is None:
-            raise ValueError(f"Unknown button '{button}'. Valid: {self.BUTTONS}")
-        getattr(self._gba, method)()  # type: ignore[union-attr]
-        self.tick(frames)
-
-    def release_all(self) -> None:
-        # PyGBA buttons auto-release after wait(); no-op here.
-        pass
-
-    # -- timing -------------------------------------------------------------
-
-    def tick(self, frames: int = 1) -> None:
-        self._gba.wait(frames)  # type: ignore[union-attr]
-        self.frame_count += frames
-
-    # -- video --------------------------------------------------------------
-
-    def get_screen(self) -> "Image.Image":
-        return self._gba.screen.to_pil()  # type: ignore[union-attr]
-
-    # -- memory -------------------------------------------------------------
-
-    def read_u8(self, addr: int) -> int:
-        return self._gba.read_u8(addr)  # type: ignore[union-attr]
-
-    def read_u16(self, addr: int) -> int:
-        return self._gba.read_u16(addr)  # type: ignore[union-attr]
-
-    def read_u32(self, addr: int) -> int:
-        return self._gba.read_u32(addr)  # type: ignore[union-attr]
-
-    def read_range(self, addr: int, size: int) -> bytes:
-        return bytes(self._gba.read_u8(addr + i) for i in range(size))  # type: ignore[union-attr]
-
-    # -- save / load --------------------------------------------------------
-
-    def save_state(self, path: str) -> None:
-        self._gba.save_state(path)  # type: ignore[union-attr]
-
-    def load_state(self, path: str) -> None:
-        self._gba.load_state(path)  # type: ignore[union-attr]
-
-    # -- info ---------------------------------------------------------------
-
-    def get_info(self) -> Dict:
-        info = super().get_info()
-        info["platform"] = "GBA"
-        return info
-
-
-# ---------------------------------------------------------------------------
-# Factory
-# ---------------------------------------------------------------------------
-
-_EXT_MAP = {
-    ".gb": PyBoyEmulator,
-    ".gbc": PyBoyEmulator,
-    ".gba": PyGBAEmulator,
-}
-
-
-def create_emulator(rom_path: str) -> Emulator:
-    """Create the appropriate emulator for *rom_path* based on file extension.
-
-    Parameters
-    ----------
-    rom_path : str
-        Path to a Game Boy (.gb/.gbc) or Game Boy Advance (.gba) ROM.
-
-    Returns
-    -------
-    Emulator
-        A loaded, ready-to-use emulator instance.
-
-    Raises
-    ------
-    ValueError
-        If the file extension is not recognised.
-    """
-    ext = Path(rom_path).suffix.lower()
-    cls = _EXT_MAP.get(ext)
-    if cls is None:
-        raise ValueError(
-            f"Unsupported ROM extension '{ext}'. "
-            f"Supported: {', '.join(_EXT_MAP)}"
+        prompt = TURN_NUDGE.format(
+            server=self.server,
+            state=json.dumps(_compact_state(state), indent=2),
+            ascii_map=ascii_map,
         )
-    emu = cls()
-    emu.load(rom_path)
-    return emu
+        if self.session_id is None:
+            prompt = FIRST_TURN_PREFIX.format(server=self.server) + prompt
+
+        cmd = ["hermes", "chat", "-Q", "--yolo", "--pass-session-id",
+               "-s", "pokemon-player"]
+        if self.session_id:
+            cmd += ["--resume", self.session_id]
+        if self.model:
+            cmd += ["-m", self.model]
+        if self.provider:
+            cmd += ["--provider", self.provider]
+        if have_img:
+            cmd += ["--image", img_path]
+        cmd += ["-q", prompt]
+
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True,
+                                 timeout=self.turn_timeout)
+            stdout = out.stdout or ""
+        except subprocess.TimeoutExpired:
+            print("[driver] hermes turn timed out", file=sys.stderr)
+            self.event(type="alert", text="Turn timed out — retrying.")
+            return
+        except Exception as e:
+            print(f"[driver] hermes invocation failed: {e}", file=sys.stderr)
+            self.event(type="alert", text=f"Driver error: {e}")
+            time.sleep(3)
+            return
+
+        # Capture the session id from the first run so later turns resume it.
+        if self.session_id is None:
+            m = re.search(r"hermes --resume (\S+)", stdout) or \
+                re.search(r"Session:\s*(\S+)", stdout) or \
+                re.search(r"session_id:\s*(\S+)", stdout)
+            if m:
+                self.session_id = m.group(1)
+                print(f"[driver] Hermes session: {self.session_id}")
+                self.bind_hermes()   # persist brain id into the game manifest
+                self.event(type="key_moment",
+                           description="Hermes session started",
+                           category="milestone")
+
+        self.turn += 1
+
+    def run(self):
+        model_note = self.model or "config default"
+        print(f"[driver] Hermes-driven autopilot. server={self.server} model={model_note}")
+        print("[driver] waiting for control=running + an active game…")
+        self.event(type="alert", text="Hermes online — start or load a game, then press START.")
+        idle_logged = False
+        no_game_logged = False
+        while True:
+            st = self.control_state()
+            if st == "stopped":
+                if not idle_logged:
+                    print("[driver] stopped — idling.")
+                    idle_logged = True
+                time.sleep(2)
+                continue
+            if st == "paused":
+                time.sleep(1.5)
+                continue
+            idle_logged = False
+            self.sync_active_game()
+            if not self.game_id:
+                if not no_game_logged:
+                    print("[driver] running but no active game — start/load one on the dashboard.")
+                    self.event(type="alert", text="No active game — click New Game or load one.")
+                    no_game_logged = True
+                time.sleep(2)
+                continue
+            no_game_logged = False
+            self.step()
+            time.sleep(self.turn_delay)
+
+
+def run_autopilot(server: str = "http://localhost:8765", model: Optional[str] = None,
+                  turn_delay: float = 1.5):
+    model = model or os.environ.get("POKEMON_HERMES_MODEL")
+    provider = os.environ.get("POKEMON_HERMES_PROVIDER")
+    HermesDriver(server, model, provider, turn_delay=turn_delay).run()
