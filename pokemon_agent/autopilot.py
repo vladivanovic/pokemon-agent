@@ -24,6 +24,7 @@ Config (env, optional):
 
 from __future__ import annotations
 
+import logging
 import json
 import os
 import re
@@ -34,17 +35,18 @@ from typing import Any, Dict, Optional
 
 import requests
 
+# Set up logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+logger = logging.getLogger("pokemon-agent.autopilot")
+
 # What Hermes is told once at the start of the session, then nudged each turn.
 TURN_NUDGE = """You are playing Pokémon Red live on the Hermes Plays Pokémon dashboard.
 
 The game server is at {server}. Take ONE short turn now, then stop and reply.
 
 This turn:
-1. Look at the attached grid screenshot (A1..J9 cells, you are the player at
-   E5; the labelled grid + green/red walkability tint is drawn on it).
-2. Use the game state and the ASCII walkability map below to decide a move.
-   `.` = walkable, `#` = blocked, `@` = you (E5). Count cells from E5:
-   up=row-1, down=row+1, left=col-1, right=col+1. NEVER route through `#`.
+1. Look at the attached screenshot (it is the current game view).
+2. Use the game state to decide a move.
 3. Narrate to the stream, then act, using the terminal tool with curl:
    - POST {server}/event  body {{"type":"reasoning","text":"..."}}  (what you see)
    - POST {server}/event  body {{"type":"decision","text":"..."}}   (your plan)
@@ -56,14 +58,8 @@ This turn:
    All POSTs need  -H 'Content-Type: application/json'.
 4. Keep it to 2-4 game actions this turn — you'll get another turn next.
 
-Reserve vision (the screenshot) for identifying WHAT things are (doors, signs,
-NPCs, the Mart's blue roof). Use the ASCII map for WHERE you can walk.
-
 CURRENT STATE:
 {state}
-
-WALKABILITY MAP (you are @ at E5):
-{ascii_map}
 
 Take your turn now."""
 
@@ -153,46 +149,48 @@ class HermesDriver:
     def bind_hermes(self):
         if self.game_id and self.session_id:
             try:
-                requests.post(f"{self.server}/games/{self.game_id}/hermes",
+                requests.post(self.server + f"/games/{self.game_id}/hermes",
                               json={"hermes_session_id": self.session_id}, timeout=15)
             except Exception:
                 pass
 
-    # --- one turn = one Hermes invocation ---
+    def check_health(self) -> bool:
+        """Check if server and emulator are ready."""
+        try:
+            return self._get("/health").json().get("status") == "ok"
+        except Exception:
+            return False
+
     def step(self) -> None:
+        if not self.check_health():
+            logger.error("Server down or emulator not ready, pausing driver.")
+            time.sleep(5)
+            return
+
         try:
             state = self._get("/state").json()
         except Exception as e:
-            print(f"[driver] state read failed: {e}", file=sys.stderr)
+            logger.error(f"State read failed: {e}")
             time.sleep(2)
             return
 
-        # Check for emulator readiness
-        if state.get("status") in ["loading", "offline"]:
-            print(f"[driver] Emulator {state.get('status')}...")
-            time.sleep(2)
-            return
-
-        ascii_map = (state.get("collision") or {}).get("ascii")
-        if not ascii_map:
-            ascii_map = ("(in battle — no overworld map this turn)"
-                         if (state.get("battle") or {}).get("in_battle")
-                         else "(no map available)")
-
-        # Grab the grid screenshot to a temp file for --image.
-        img_path = "/tmp/pokemon_turn_grid.png"
+        logger.debug(f"State: {state}")
+        
+        # Grab the full screenshot for vision model analysis.
+        img_path = "/tmp/pokemon_full_screen.png"
         try:
-            shot = self._get("/screenshot/grid?scale=3").content
+            shot = self._get("/screenshot").content
             with open(img_path, "wb") as f:
                 f.write(shot)
             have_img = True
-        except Exception:
+            logger.debug(f"Screenshot taken, saved to {img_path}")
+        except Exception as e:
+            logger.warning(f"Screenshot failed: {e}")
             have_img = False
 
         prompt = TURN_NUDGE.format(
             server=self.server,
             state=json.dumps(_compact_state(state), indent=2),
-            ascii_map=ascii_map,
         )
         if self.session_id is None:
             prompt = FIRST_TURN_PREFIX.format(server=self.server) + prompt
@@ -209,16 +207,19 @@ class HermesDriver:
             cmd += ["--image", img_path]
         cmd += ["-q", prompt]
 
+        logger.info(f"Triggering Hermes: {' '.join(cmd)}")
+
         try:
             out = subprocess.run(cmd, capture_output=True, text=True,
                                  timeout=self.turn_timeout)
             stdout = out.stdout or ""
+            logger.debug(f"Hermes output: {stdout}")
         except subprocess.TimeoutExpired:
-            print("[driver] hermes turn timed out", file=sys.stderr)
+            logger.error("Hermes turn timed out")
             self.event(type="alert", text="Turn timed out — retrying.")
             return
         except Exception as e:
-            print(f"[driver] hermes invocation failed: {e}", file=sys.stderr)
+            logger.error(f"Hermes invocation failed: {e}")
             self.event(type="alert", text=f"Driver error: {e}")
             time.sleep(3)
             return
@@ -230,8 +231,8 @@ class HermesDriver:
                 re.search(r"session_id:\s*(\S+)", stdout)
             if m:
                 self.session_id = m.group(1)
-                print(f"[driver] Hermes session: {self.session_id}")
-                self.bind_hermes()   # persist brain id into the game manifest
+                logger.info(f"Hermes session: {self.session_id}")
+                self.bind_hermes()
                 self.event(type="key_moment",
                            description="Hermes session started",
                            category="milestone")
@@ -271,7 +272,11 @@ class HermesDriver:
 
 
 def run_autopilot(server: str = "http://localhost:8765", model: Optional[str] = None,
-                  turn_delay: float = 1.5):
+                  turn_delay: float = 1.5, debug: bool = False):
+    if debug:
+        logging.getLogger("pokemon-agent").setLevel(logging.DEBUG)
+        logger.info("Debug logging enabled")
+    
     model = model or os.environ.get("POKEMON_HERMES_MODEL")
     provider = os.environ.get("POKEMON_HERMES_PROVIDER")
     HermesDriver(server, model, provider, turn_delay=turn_delay).run()
