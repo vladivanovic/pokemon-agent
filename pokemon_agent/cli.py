@@ -103,7 +103,8 @@ def cmd_play(args):
     from pokemon_agent.autopilot import run_autopilot
     server = f"http://{args.host}:{args.port}"
     run_autopilot(server=server, model=args.model,
-                  turn_delay=args.turn_delay, debug=args.debug)
+                  turn_delay=args.turn_delay, turn_timeout=args.turn_timeout,
+                  debug=args.debug)
 
 
 def cmd_play_api(args):
@@ -161,6 +162,8 @@ def main():
                         help="LLM model (default: $POKEMON_LLM_MODEL or anthropic/claude-sonnet-4.5)")
     play_p.add_argument("--turn-delay", type=float, default=1.5,
                         help="Seconds between turns (default: 1.5)")
+    play_p.add_argument("--turn-timeout", type=int, default=240,
+                        help="Seconds per Hermes turn (default: 240)")
     play_p.add_argument("--debug", action="store_true", help="Enable debug logging")
 
     # --- play-api (Hermes AIAgent direct) ---
