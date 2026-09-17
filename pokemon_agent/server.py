@@ -677,9 +677,13 @@ async def screenshot_grid(scale: int = 4):
         from pokemon_agent.collision import build_collision_grid
 
 def _grid_png(emu, scale: int) -> bytes:
+    """Render the current frame with the A1..J9 grid overlay.
+    Runs on the emulator owner thread. The worker ticks with rendering off,
+    so refresh the framebuffer before capture.
+    """
     from pokemon_agent.collision import build_collision_grid
     from pokemon_agent.overlay import render_grid_overlay_bytes
-    emu.tick(1, render_last=True)      # worker ticks unrendered; refresh first
+    emu.tick(1, render_last=True)
     walkable = None
     try:
         player = _reader.read_player() or {}
@@ -689,18 +693,13 @@ def _grid_png(emu, scale: int) -> bytes:
             walkable = col["walkable"]
     except Exception:
         logger.debug("collision unavailable for overlay", exc_info=True)
-    return render_grid_overlay_bytes(emu.get_screen(), scale=scale, walkable=walkable)
+    return render_grid_overlay_bytes(emu.get_screen(), scale=scale,
+                                     walkable=walkable)
 
 
 @app.get("/screenshot/grid")
 async def screenshot_grid(scale: int = 4):
-    """Current frame with a labelled A1..J9 movement grid drawn on top.
-
-    The grid divides the 160x144 screen into the game's 10x9 walkable
-    block layout. The player is always in cell E5 (marked). This gives a
-    vision model discrete, nameable coordinates to plan movement with.
-    """
-    _ensure_emulator()
+    """Current frame with a labelled A1..J9 movement grid drawn on top."""
     if not 1 <= scale <= 8:
         raise HTTPException(status_code=400, detail="scale must be 1..8")
     try:
