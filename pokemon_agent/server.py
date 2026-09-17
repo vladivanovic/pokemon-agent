@@ -663,19 +663,6 @@ async def get_state():
     return JSONResponse(content=state)
 
 
-@app.get("/screenshot/grid")
-async def screenshot_grid(scale: int = 4):
-    """Current frame with a labelled A1..J9 movement grid drawn on top.
-
-    The grid divides the 160x144 screen into the game's 10x9 walkable
-    block layout. The player is always in cell E5 (marked). This gives a
-    vision model discrete, nameable coordinates to plan movement with.
-    """
-    _ensure_emulator()
-    try:
-        from pokemon_agent.overlay import render_grid_overlay_bytes
-        from pokemon_agent.collision import build_collision_grid
-
 def _grid_png(emu, scale: int) -> bytes:
     """Render the current frame with the A1..J9 grid overlay.
     Runs on the emulator owner thread. The worker ticks with rendering off,
