@@ -1,34 +1,25 @@
-"""Game sessions — the unit that binds a playthrough together.
-
-A *game session* is a named run that bundles:
-  - a Hermes Agent session id (the brain's memory/continuity across turns)
-  - a folder of emulator save-states (the game's progress)
-  - objectives, a milestone timeline, and run stats
-  - metadata (game, created/updated timestamps)
-
-This is what lets you "start a new game", "load a previous game and its saved
-states", and have the autopilot resume the *same Hermes brain* it played with
-before. Everything lives on disk under:
-
-    <data_dir>/games/<session_id>/
-        manifest.json          # GameSession.to_dict()
-        saves/<name>.state      # emulator save-states for THIS run
-
-The legacy flat <data_dir>/saves/ directory still works for ad-hoc saves, but
-new play goes through a GameSession so saves and brain-memory stay scoped to a
-single run.
-"""
-
-from __future__ import annotations
-
+import copy
 import json
+import logging
+import os
+import re
 import shutil
-import time
+import tempfile
+import threading
 import uuid
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger("pokemon-agent.sessions")
+
+_SID_RE = re.compile(r"^[0-9]{8}_[0-9]{6}_[0-9a-f]{6}$")
+SCHEMA_VERSION = 1
+
+
+class InvalidSessionId(ValueError):
+    """Session id failed validation — never touch the filesystem with it."""
 
 
 DEFAULT_OBJECTIVES = [
@@ -48,21 +39,27 @@ class GameSession:
     name: str
     game: str = "red"
     hermes_session_id: Optional[str] = None
-    objectives: List[Dict[str, Any]] = field(default_factory=lambda: list(DEFAULT_OBJECTIVES))
+    objectives: List[Dict[str, Any]] = field(
+        default_factory=lambda: copy.deepcopy(DEFAULT_OBJECTIVES))
     milestones: List[Dict[str, Any]] = field(default_factory=list)
     stats: Dict[str, Any] = field(default_factory=lambda: {
         "turns": 0, "actions": 0, "blackouts": 0, "saves": 0,
     })
     created_at: str = field(default_factory=_now_iso)
     updated_at: str = field(default_factory=_now_iso)
+    schema_version: int = SCHEMA_VERSION
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "GameSession":
-        known = {f for f in cls.__dataclass_fields__}  # type: ignore[attr-defined]
-        return cls(**{k: v for k, v in d.items() if k in known})
+        known = set(cls.__dataclass_fields__)
+        kw = {k: v for k, v in d.items() if k in known}
+        if "id" not in kw:
+            raise ValueError("manifest missing 'id'")
+        kw.setdefault("name", kw["id"])
+        return cls(**kw)
 
 
 class GameSessionManager:
@@ -71,39 +68,65 @@ class GameSessionManager:
     def __init__(self, data_dir: str):
         self.root = Path(data_dir).expanduser().resolve() / "games"
         self.root.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()
 
     # --- paths ---
     def _dir(self, sid: str) -> Path:
-        return self.root / sid
+        if not isinstance(sid, str) or not _SID_RE.match(sid):
+            raise InvalidSessionId(f"invalid session id: {sid!r}")
+        d = (self.root / sid).resolve()
+        if d != self.root / sid or not d.is_relative_to(self.root):
+            raise InvalidSessionId(f"session id escapes root: {sid!r}")
+        return d
 
     def _manifest(self, sid: str) -> Path:
         return self._dir(sid) / "manifest.json"
 
-    def saves_dir(self, sid: str) -> Path:
+    def saves_dir(self, sid: str, create: bool = True) -> Path:
         d = self._dir(sid) / "saves"
-        d.mkdir(parents=True, exist_ok=True)
+        if create:
+            d.mkdir(parents=True, exist_ok=True)
         return d
 
     # --- persistence ---
     def save(self, gs: GameSession) -> GameSession:
         gs.updated_at = _now_iso()
-        self._dir(gs.id).mkdir(parents=True, exist_ok=True)
-        tmp = self._manifest(gs.id).with_suffix(".tmp")
-        tmp.write_text(json.dumps(gs.to_dict(), indent=2))
-        tmp.replace(self._manifest(gs.id))
+        gs.schema_version = SCHEMA_VERSION
+        d = self._dir(gs.id)
+        d.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps(gs.to_dict(), indent=2)
+        with self._lock:
+            fd, tmp = tempfile.mkstemp(dir=str(d), prefix=".manifest-", suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w") as f:
+                    f.write(payload)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp, self._manifest(gs.id))
+            except BaseException:
+                Path(tmp).unlink(missing_ok=True)
+                raise
         return gs
 
     def load(self, sid: str) -> Optional[GameSession]:
-        mf = self._manifest(sid)
+        try:
+            mf = self._manifest(sid)
+        except InvalidSessionId:
+            logger.warning("rejected session id: %r", sid)
+            return None
         if not mf.exists():
             return None
         try:
             return GameSession.from_dict(json.loads(mf.read_text()))
-        except Exception:
+        except Exception as exc:
+            logger.error("corrupt manifest %s: %s: %s", mf, type(exc).__name__, exc)
             return None
 
     def exists(self, sid: str) -> bool:
-        return self._manifest(sid).exists()
+        try:
+            return self._manifest(sid).exists()
+        except InvalidSessionId:
+            return False
 
     def create(self, name: Optional[str] = None, game: str = "red") -> GameSession:
         sid = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6]
@@ -127,7 +150,7 @@ class GameSessionManager:
             gs = self.load(d.name)
             if not gs:
                 continue
-            saves = list(self.saves_dir(gs.id).glob("*.state"))
+            saves = list(self.saves_dir(gs.id, create=False).glob("*.state"))
             latest = self.latest_save_path(gs.id)
             out.append({
                 "id": gs.id, "name": gs.name, "game": gs.game,
@@ -144,7 +167,9 @@ class GameSessionManager:
 
     # --- per-session save-state listing ---
     def list_saves(self, sid: str) -> List[Dict[str, Any]]:
-        d = self.saves_dir(sid)
+        d = self.saves_dir(sid, create=False)
+        if not d.exists():
+            return []
         out = []
         for f in sorted(d.glob("*.state")):
             st = f.stat()
@@ -154,7 +179,7 @@ class GameSessionManager:
 
     def latest_save_path(self, sid: str) -> Optional[Path]:
         """Newest save-state by mtime, or None."""
-        saves = list(self.saves_dir(sid).glob("*.state"))
+        saves = list(self.saves_dir(sid, create=False).glob("*.state"))
         if not saves:
             return None
         return max(saves, key=lambda f: f.stat().st_mtime)
@@ -165,7 +190,7 @@ class GameSessionManager:
 
     def prune_saves(self, sid: str, keep: int = 20) -> int:
         """Delete all but the *keep* newest saves. Returns count removed."""
-        saves = sorted(self.saves_dir(sid).glob("*.state"),
+        saves = sorted(self.saves_dir(sid, create=False).glob("*.state"),
                        key=lambda f: f.stat().st_mtime, reverse=True)
         removed = 0
         for f in saves[keep:]:
@@ -187,7 +212,4 @@ class GameSessionManager:
 
 
 def _latest_badges(gs: GameSession) -> int:
-    for m in gs.milestones:
-        if m.get("category") == "badge":
-            return 1  # rough; real count comes from live state
-    return 0
+    return sum(1 for m in gs.milestones if m.get("category") == "badge")

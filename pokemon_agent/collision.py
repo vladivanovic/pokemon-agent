@@ -17,10 +17,26 @@ the left; ``True`` means walkable.
 
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 ADDR_TILEMAP = 0xC3A0       # wTileMap, 20x18 bytes
 ADDR_TILESET = 0xD367       # wCurMapTileset
+ADDR_TILE_IN_FRONT = 0xCFC6   # wTileInFrontOfPlayer
+ADDR_WALK_COUNTER  = 0xCFC5   # wWalkCounter; nonzero = mid-step, camera moving
+ADDR_SPRITE_DATA1 = 0xC100   # wSpriteStateData1, 16 slots x 16 bytes
+ADDR_NUM_WARPS  = 0xD3AE   # wNumberOfWarps
+ADDR_WARP_ENTRY = 0xD3AF   # wWarpEntries: y, x, dest_warp, dest_map
+SPRITE_SLOT_SIZE  = 16
+SPRITE_SLOTS      = 16
+S_PICTURE_ID      = 0x00     # 0 = slot disabled
+S_YPIXELS         = 0x04     # screen Y, biased
+S_XPIXELS         = 0x06     # screen X, biased
+WARP_ENTRY_SIZE = 4
+MAX_WARPS       = 32
+BLOCK_PX           = 16       # world block size in GB pixels
+GRID_ROW_OFFSET    = 1        # tilemap row offset; see read_block_tile_ids
+PLAYER_PX_X        = PLAYER_COL * BLOCK_PX                      # 64
+PLAYER_PX_Y        = PLAYER_ROW * BLOCK_PX + GRID_ROW_OFFSET * 8  # 72
 TILEMAP_W, TILEMAP_H = 20, 18
 
 BLOCK_COLS = 10             # on-screen walkable blocks across
@@ -60,6 +76,61 @@ TILESET_WALKABLE: Dict[int, frozenset] = {
 COL_LABELS = "ABCDEFGHIJ"
 
 
+_FACING_DELTA = {"up": (0, -1), "down": (0, 1), "left": (-1, 0), "right": (1, 0)}
+
+
+def read_sprite_cells(emu) -> List[Dict]:
+    """Screen-relative block cells occupied by NPCs.
+
+    Slot 0 is the player, so positions are computed as deltas from it and
+    converted to block offsets from E5. This avoids depending on the
+    absolute pixel bias of the sprite fields.
+    """
+    raw = emu.read_range(ADDR_SPRITE_DATA1, SPRITE_SLOT_SIZE * SPRITE_SLOTS)
+    if not raw[S_PICTURE_ID]:
+        return []
+    py, px = raw[S_YPIXELS], raw[S_XPIXELS]
+
+    out: List[Dict] = []
+    for slot in range(1, SPRITE_SLOTS):
+        base = slot * SPRITE_SLOT_SIZE
+        if not raw[base + S_PICTURE_ID]:
+            continue
+        dy = ((raw[base + S_YPIXELS] - py + 128) % 256) - 128
+        dx = ((raw[base + S_XPIXELS] - px + 128) % 256) - 128
+        if abs(dy) > 128 or abs(dx) > 128:
+            continue
+        r = PLAYER_ROW + int(round(dy / BLOCK_PX))
+        c = PLAYER_COL + int(round(dx / BLOCK_PX))
+        if 0 <= r < BLOCK_ROWS and 0 <= c < BLOCK_COLS:
+            out.append({"slot": slot, "row": r, "col": c,
+                        "cell": cell_label(c, r)})
+    return out
+
+
+def read_warp_cells(emu, player_x: int, player_y: int) -> List[Dict]:
+    """Doors/stairs/exits as screen-relative cells.
+
+    Warp entries are in map coordinates, and one overworld block is one
+    map tile, so the conversion is a plain delta from the player's tile.
+    """
+    n = emu.read_u8(ADDR_NUM_WARPS)
+    if not 0 < n <= MAX_WARPS:
+        return []
+    raw = emu.read_range(ADDR_WARP_ENTRY, WARP_ENTRY_SIZE * n)
+    out: List[Dict] = []
+    for i in range(n):
+        wy, wx, dest_warp, dest_map = raw[i * 4:i * 4 + 4]
+        r = PLAYER_ROW + (wy - player_y)
+        c = PLAYER_COL + (wx - player_x)
+        if 0 <= r < BLOCK_ROWS and 0 <= c < BLOCK_COLS:
+            out.append({"row": r, "col": c, "cell": cell_label(c, r),
+                        "dest_map": dest_map, "dest_map_name": None,
+                        "dest_warp": dest_warp})
+    return out
+
+
+
 def cell_label(col: int, row: int) -> str:
     return f"{COL_LABELS[col]}{row + 1}"
 
@@ -78,13 +149,13 @@ def read_block_tile_ids(emu) -> List[List[int]]:
     for br in range(BLOCK_ROWS):
         row: List[int] = []
         for bc in range(BLOCK_COLS):
-            tcol, trow = bc * 2, br * 2 + 1
+            tcol, trow = bc * 2, br * 2 + GRID_ROW_OFFSET
             row.append(tm[trow * TILEMAP_W + tcol])
         grid.append(row)
     return grid
 
 
-def build_collision_grid(emu) -> Dict:
+def build_collision_grid(emu, facing: Optional[str] = None, player_pos: Optional[Dict] = None) -> Dict:
     """Build a walkability grid for the current on-screen blocks.
 
     Returns a dict with:
@@ -95,24 +166,43 @@ def build_collision_grid(emu) -> Dict:
     The player's own cell is always reported walkable.
     """
     tileset = emu.read_u8(ADDR_TILESET)
-    walk_set = TILESET_WALKABLE.get(tileset, frozenset())
+    walk_set = TILESET_WALKABLE.get(tileset)
+    known = walk_set is not None
     tile_ids = read_block_tile_ids(emu)
+    walk_set = walk_set or frozenset()
 
-    walkable: List[List[bool]] = []
-    for br in range(BLOCK_ROWS):
-        row: List[bool] = []
-        for bc in range(BLOCK_COLS):
-            tid = tile_ids[br][bc]
-            row.append(tid in walk_set)
-        walkable.append(row)
-    # The player block is always passable (you're standing on it).
+    walkable = [[tile_ids[r][c] in walk_set for c in range(BLOCK_COLS)]
+                for r in range(BLOCK_ROWS)]
+    player_tile_walkable = walkable[PLAYER_ROW][PLAYER_COL]
     walkable[PLAYER_ROW][PLAYER_COL] = True
 
+    sprites = read_sprite_cells(emu)
+    warps = (read_warp_cells(emu, player_pos["x"], player_pos["y"])
+             if player_pos else [])
+    occupied = {(s["row"], s["col"]) for s in sprites}
+
+    # Terrain walkability stays separate from transient sprite blocking so
+    # callers can tell "wall" from "someone is standing there".
+    passable = [[walkable[r][c] and (r, c) not in occupied
+                 for c in range(BLOCK_COLS)] for r in range(BLOCK_ROWS)]
+    passable[PLAYER_ROW][PLAYER_COL] = True
+
+    settled = emu.read_u8(ADDR_WALK_COUNTER) == 0
     return {
+        "valid": known and settled,
         "tileset": tileset,
+        "tileset_known": known,
+        "camera_settled": settled,
         "walkable": walkable,
+        "passable": passable,
+        "sprites": sprites,
+        "warps": warps,
         "tile_ids": tile_ids,
         "player_cell": cell_label(PLAYER_COL, PLAYER_ROW),
+        "player_tile_walkable": player_tile_walkable,
+        "offset_verified": verify_offset(emu, facing, tile_ids) if facing else None,
+        "geometry": {"block_px": BLOCK_PX, "player_px": [PLAYER_PX_X, PLAYER_PX_Y],
+                     "cols": BLOCK_COLS, "rows": BLOCK_ROWS},
     }
 
 
@@ -123,7 +213,17 @@ def render_ascii_map(collision: Dict, legend: bool = True) -> str:
         @ = player (E5)   . = walkable   # = blocked
     Column headers A..J, row numbers 1..9.
     """
+    if not collision.get("valid", True):
+        reasons = []
+        if not collision.get("tileset_known", True):
+            reasons.append(f"unknown tileset {collision.get('tileset')}")
+        if not collision.get("camera_settled", True):
+            reasons.append("camera mid-scroll")
+        return "(map unavailable: " + ", ".join(reasons or ["invalid"]) + ")"
+
     walkable = collision["walkable"]
+    npc = {(s["row"], s["col"]) for s in collision.get("sprites", [])}
+    warp = {(w["row"], w["col"]) for w in collision.get("warps", [])}
     lines: List[str] = []
     header = "   " + " ".join(COL_LABELS)
     lines.append(header)
@@ -132,11 +232,18 @@ def render_ascii_map(collision: Dict, legend: bool = True) -> str:
         for c in range(BLOCK_COLS):
             if r == PLAYER_ROW and c == PLAYER_COL:
                 cells.append("@")
+            elif (r, c) in npc:
+                cells.append("N")
+            elif (r, c) in warp:
+                cells.append("D")
             else:
                 cells.append("." if walkable[r][c] else "#")
         lines.append(f"{r + 1:>2} " + " ".join(cells))
     if legend:
         lines.append("")
-        lines.append("@ you (E5)   . walkable   # blocked")
-        lines.append("up=row-1 down=row+1 left=col-1 right=col+1")
+        lines.append("@ you (E5)  . walkable  # blocked  N person  D door/exit")
+        lines.append("walk_up=row-1  walk_down=row+1  walk_left=col-1  walk_right=col+1")
+        if collision.get("warps"):
+            lines.append("exits: " + ", ".join(
+                f"{w['cell']}->map{w['dest_map']}" for w in collision["warps"]))
     return "\n".join(lines)

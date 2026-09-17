@@ -206,7 +206,7 @@ class HermesDriver:
             # Grab the full screenshot for vision model analysis.
             img_path = str(Path(tempfile.gettempdir()) / "pokemon_turn.png")
             try:
-                shot = self._get("/screenshot").content
+                shot = self._get("/screenshot/grid?scale=4").content
                 if not shot.startswith(b"\x89PNG"):
                     raise ValueError(f"not a PNG ({shot[:40]!r})")
                 with open(img_path, "wb") as f:

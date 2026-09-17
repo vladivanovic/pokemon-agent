@@ -46,6 +46,12 @@ def cmd_serve(args):
 
     game_type = _detect_game_type(str(rom))
 
+    if args.load_state:
+        sp = data_dir / "saves" / f"{args.load_state}.state"
+        if not sp.exists():
+            print(f"ERROR: save state not found: {sp}", file=sys.stderr)
+            sys.exit(1)
+
     print(BANNER.format(version=__version__))
     print(f"  ROM:       {rom}")
     print(f"  Game type: {game_type}")
@@ -62,10 +68,11 @@ def cmd_serve(args):
         port=args.port,
         data_dir=str(data_dir),
         load_state=getattr(args, 'load_state', None),
+        no_dashboard=args.no_dashboard,
     ))
 
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="info")
+    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
 
 
 def cmd_info(args):
@@ -95,7 +102,8 @@ def cmd_play(args):
     """Run the standalone autopilot loop (LLM plays the game)."""
     from pokemon_agent.autopilot import run_autopilot
     server = f"http://{args.host}:{args.port}"
-    run_autopilot(server=server, model=args.model, turn_delay=args.turn_delay)
+    run_autopilot(server=server, model=args.model,
+                  turn_delay=args.turn_delay, debug=args.debug)
 
 
 def cmd_play_api(args):
@@ -125,6 +133,8 @@ def main():
     # --- serve ---
     serve_p = sub.add_parser("serve", help="Start the game server")
     serve_p.add_argument("--rom", required=True, help="Path to Pokemon ROM file")
+    serve_p.add_argument("--host", default="127.0.0.1",
+                         help="Bind address (default: 127.0.0.1; use 0.0.0.0 to expose on LAN)")
     serve_p.add_argument("--port", type=int, default=8765, help="Server port (default: 8765)")
     serve_p.add_argument(
         "--data-dir", default="~/.pokemon-agent",
