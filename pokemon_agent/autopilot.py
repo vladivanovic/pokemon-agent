@@ -30,7 +30,9 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import requests
@@ -93,6 +95,11 @@ def _compact_state(state: Dict[str, Any]) -> Dict[str, Any]:
         "enemy": ({"species": enemy.get("species"), "level": enemy.get("level"),
                    "hp": enemy.get("hp"), "max_hp": enemy.get("max_hp")}
                   if battle.get("in_battle") else None),
+        "context": (state.get("context") or {}).get("phase"),
+        "status": state.get("status"),
+        "errors": state.get("errors") or None,
+        "active_mon": state.get("active_mon"),
+        "map_ascii": (state.get("collision") or {}).get("ascii"),
     }
 
 
@@ -112,7 +119,9 @@ class HermesDriver:
 
     # --- server helpers ---
     def _get(self, path: str):
-        return requests.get(self.server + path, timeout=15)
+        r = requests.get(self.server + path, timeout=15)
+        r.raise_for_status()
+        return r
 
     def control_state(self) -> str:
         try:
@@ -154,6 +163,16 @@ class HermesDriver:
             except Exception:
                 pass
 
+    def save_game(self) -> None:
+        """Autosave into the active session's dir."""
+        try:
+            r = requests.post(self.server + "/save",
+                              json={"name": f"turn_{self.turn:06d}"}, timeout=30)
+            r.raise_for_status()
+            logger.info("autosaved at turn %d", self.turn)
+        except Exception as exc:
+            logger.warning("autosave failed: %s", exc)
+
     def check_health(self) -> bool:
         """Check if server and emulator are ready."""
         try:
@@ -162,82 +181,102 @@ class HermesDriver:
             return False
 
     def step(self) -> None:
-        if not self.check_health():
-            logger.error("Server down or emulator not ready, pausing driver.")
-            time.sleep(5)
-            return
+            if not self.check_health():
+                logger.error("Server down or emulator not ready, pausing driver.")
+                time.sleep(5)
+                return
 
-        try:
-            state = self._get("/state").json()
-        except Exception as e:
-            logger.error(f"State read failed: {e}")
-            time.sleep(2)
-            return
+            try:
+                state = self._get("/state").json()
+            except Exception as e:
+                logger.error(f"State read failed: {e}")
+                time.sleep(2)
+                return
 
-        logger.debug(f"State: {state}")
-        
-        # Grab the full screenshot for vision model analysis.
-        img_path = "/tmp/pokemon_full_screen.png"
-        try:
-            shot = self._get("/screenshot").content
-            with open(img_path, "wb") as f:
-                f.write(shot)
-            have_img = True
-            logger.debug(f"Screenshot taken, saved to {img_path}")
-        except Exception as e:
-            logger.warning(f"Screenshot failed: {e}")
-            have_img = False
+            # Readiness: not_ready or not in_game
+            if state.get("status") == "not_ready" or not (
+                    state.get("context") or {}).get("in_game"):
+                logger.info("Not in game (%s), waiting...",
+                            (state.get("context") or {}).get("phase"))
+                time.sleep(2)
+                return
 
-        prompt = TURN_NUDGE.format(
-            server=self.server,
-            state=json.dumps(_compact_state(state), indent=2),
-        )
-        if self.session_id is None:
-            prompt = FIRST_TURN_PREFIX.format(server=self.server) + prompt
+            logger.debug(f"State: {state}")
 
-        cmd = ["hermes", "chat", "-Q", "--yolo", "--pass-session-id",
-               "-s", "pokemon-player"]
-        if self.session_id:
-            cmd += ["--resume", self.session_id]
-        if self.model:
-            cmd += ["-m", self.model]
-        if self.provider:
-            cmd += ["--provider", self.provider]
-        if have_img:
-            cmd += ["--image", img_path]
-        cmd += ["-q", prompt]
+            # Grab the full screenshot for vision model analysis.
+            img_path = str(Path(tempfile.gettempdir()) / "pokemon_turn.png")
+            try:
+                shot = self._get("/screenshot").content
+                if not shot.startswith(b"\x89PNG"):
+                    raise ValueError(f"not a PNG ({shot[:40]!r})")
+                with open(img_path, "wb") as f:
+                    f.write(shot)
+                have_img = True
+                logger.debug(f"Screenshot taken, saved to {img_path}")
+            except Exception as e:
+                logger.warning(f"Screenshot failed: {e}")
+                have_img = False
 
-        logger.info(f"Triggering Hermes: {' '.join(cmd)}")
+            prompt = TURN_NUDGE.format(
+                server=self.server,
+                state=json.dumps(_compact_state(state), indent=2),
+            )
+            if self.session_id is None:
+                prompt = FIRST_TURN_PREFIX.format(server=self.server) + prompt
 
-        try:
-            out = subprocess.run(cmd, capture_output=True, text=True,
-                                 timeout=self.turn_timeout)
-            stdout = out.stdout or ""
-            logger.debug(f"Hermes output: {stdout}")
-        except subprocess.TimeoutExpired:
-            logger.error("Hermes turn timed out")
-            self.event(type="alert", text="Turn timed out — retrying.")
-            return
-        except Exception as e:
-            logger.error(f"Hermes invocation failed: {e}")
-            self.event(type="alert", text=f"Driver error: {e}")
-            time.sleep(3)
-            return
+            cmd = ["hermes", "chat", "-Q", "--yolo", "--pass-session-id",
+                   "-s", "pokemon-player",
+                   "-t", "file,terminal,web,vision"]
+            if self.session_id:
+                cmd += ["--resume", self.session_id]
+            if self.model:
+                cmd += ["-m", self.model]
+            if self.provider:
+                cmd += ["--provider", self.provider]
+            if have_img:
+                cmd += ["--image", img_path]
+            cmd += ["-q", prompt]
 
-        # Capture the session id from the first run so later turns resume it.
-        if self.session_id is None:
-            m = re.search(r"hermes --resume (\S+)", stdout) or \
-                re.search(r"Session:\s*(\S+)", stdout) or \
-                re.search(r"session_id:\s*(\S+)", stdout)
-            if m:
-                self.session_id = m.group(1)
-                logger.info(f"Hermes session: {self.session_id}")
-                self.bind_hermes()
-                self.event(type="key_moment",
-                           description="Hermes session started",
-                           category="milestone")
+            logger.info(f"Triggering Hermes: {' '.join(cmd)}")
 
-        self.turn += 1
+            try:
+                out = subprocess.run(cmd, capture_output=True, text=True,
+                                     timeout=self.turn_timeout)
+                stdout = out.stdout or ""
+                stderr = out.stderr or ""
+                logger.debug(f"Hermes stdout: {stdout}")
+                logger.debug(f"Hermes stderr: {stderr}")
+            except subprocess.TimeoutExpired:
+                logger.error("Hermes turn timed out")
+                self.event(type="alert", text="Turn timed out — retrying.")
+                return
+            except Exception as e:
+                logger.error(f"Hermes invocation failed: {e}")
+                self.event(type="alert", text=f"Driver error: {e}")
+                time.sleep(3)
+                return
+
+            # Capture the session id from the first run so later turns resume it.
+            if self.session_id is None:
+                # Session ID is printed to stderr in format: "session_id: <id>"
+                combined = stdout + "\n" + stderr
+                m = re.search(r"session_id:\s*(\S+)", combined) or \
+                    re.search(r"hermes --resume (\S+)", combined) or \
+                    re.search(r"Session:\s*(\S+)", combined)
+                if m:
+                    self.session_id = m.group(1)
+                    logger.info(f"Hermes session: {self.session_id}")
+                    self.bind_hermes()
+                    self.event(type="key_moment",
+                               description="Hermes session started",
+                               category="milestone")
+                else:
+                    logger.warning("Failed to extract session_id from Hermes output")
+                    logger.debug(f"Combined output searched: {combined[:500]}")
+
+            self.turn += 1
+            if self.save_every and self.turn % self.save_every == 0:
+                self.save_game()
 
     def run(self):
         model_note = self.model or "config default"

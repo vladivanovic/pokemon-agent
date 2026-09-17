@@ -127,13 +127,14 @@ class GameSessionManager:
             gs = self.load(d.name)
             if not gs:
                 continue
-            saves = sorted(self.saves_dir(gs.id).glob("*.state"))
+            saves = list(self.saves_dir(gs.id).glob("*.state"))
+            latest = self.latest_save_path(gs.id)
             out.append({
                 "id": gs.id, "name": gs.name, "game": gs.game,
                 "hermes_session_id": gs.hermes_session_id,
                 "badges": _latest_badges(gs),
                 "save_count": len(saves),
-                "latest_save": saves[-1].stem if saves else None,
+                "latest_save": latest.stem if latest else None,
                 "turns": gs.stats.get("turns", 0),
                 "milestones": len(gs.milestones),
                 "created_at": gs.created_at, "updated_at": gs.updated_at,
@@ -152,8 +153,28 @@ class GameSessionManager:
         return out
 
     def latest_save_path(self, sid: str) -> Optional[Path]:
-        saves = sorted(self.saves_dir(sid).glob("*.state"), key=lambda f: f.stat().st_mtime)
-        return saves[-1] if saves else None
+        """Newest save-state by mtime, or None."""
+        saves = list(self.saves_dir(sid).glob("*.state"))
+        if not saves:
+            return None
+        return max(saves, key=lambda f: f.stat().st_mtime)
+
+    def next_save_name(self, sid: str, turn: int = 0) -> str:
+        """Zero-padded so lexical and chronological order agree."""
+        return f"turn_{turn:06d}"
+
+    def prune_saves(self, sid: str, keep: int = 20) -> int:
+        """Delete all but the *keep* newest saves. Returns count removed."""
+        saves = sorted(self.saves_dir(sid).glob("*.state"),
+                       key=lambda f: f.stat().st_mtime, reverse=True)
+        removed = 0
+        for f in saves[keep:]:
+            try:
+                f.unlink()
+                removed += 1
+            except OSError:
+                pass
+        return removed
 
     # --- milestone helper ---
     def add_milestone(self, gs: GameSession, description: str, category: str = "milestone"):

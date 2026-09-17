@@ -10,10 +10,13 @@ Gen 1 text uses a custom character encoding (0x50 = terminator,
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional
 
 from pokemon_agent.emulator import Emulator
 from pokemon_agent.memory.reader import GameMemoryReader
+
+logger = logging.getLogger("pokemon_agent.memory.red")
 
 
 # ===================================================================
@@ -22,6 +25,7 @@ from pokemon_agent.memory.reader import GameMemoryReader
 
 # -- Player --
 ADDR_PLAYER_NAME   = 0xD158   # 11 bytes
+ADDR_PLAYER_NAME_0 = 0xD158   # first byte; 0x50 terminator => name unset
 ADDR_RIVAL_NAME    = 0xD34A   # 11 bytes
 ADDR_MONEY         = 0xD347   # 3 bytes BCD
 ADDR_BADGES        = 0xD356   # 1 byte bitmask
@@ -53,14 +57,23 @@ ADDR_PC_COUNT      = 0xD53A
 ADDR_PC_ITEMS      = 0xD53B
 
 # -- Battle --
-ADDR_BATTLE_TYPE   = 0xD057   # 0=none, 1=wild, 2=trainer
-ADDR_ENEMY_COUNT   = 0xD89C
-ADDR_ENEMY_SPECIES = 0xD89D
-ADDR_ENEMY_DATA    = 0xD8A4   # 44 bytes per mon
+ADDR_IS_IN_BATTLE  = 0xD057   # wIsInBattle: 0=none, 1=wild, 2=trainer, 0xFF=safari/lost
+ADDR_BATTLE_TYPE   = 0xD05A   # wBattleType: 0=normal, 1=old man, 2=safari
+ADDR_ENEMY_MON     = 0xCFE5   # wEnemyMon — the ACTIVE enemy (battle_struct)
+ADDR_BATTLE_MON    = 0xD014   # wBattleMon — the ACTIVE player mon (battle_struct)
+ADDR_ENEMY_PARTY   = 0xD8A4   # wEnemyMons — trainer's party array (44B each)
+
+# battle_struct offsets — NOT the same as the 44-byte party struct.
+BATTLE_MON_SIZE    = 29
+B_SPECIES, B_HP, B_BOXLVL, B_STATUS = 0, 1, 3, 4
+B_TYPE1, B_TYPE2, B_CATCH, B_MOVES = 5, 6, 7, 8
+B_DVS, B_LEVEL, B_MAXHP = 12, 14, 15
+B_ATK, B_DEF, B_SPD, B_SPC, B_PP = 17, 19, 21, 23, 25
 
 # -- Dialog --
 ADDR_TEXT_BOX_ID   = 0xD125   # wTextBoxID
 ADDR_JOY_IGNORE    = 0xD730   # bit 5 = joypad disabled (in dialogue)
+ADDR_D730          = 0xD730   # wd730 general engine flags (NOT hJoyIgnore)
 ADDR_TEXT_PROGRESS  = 0xC4F2  # approximate; nonzero when text printing
 
 # -- Pokedex --
@@ -78,7 +91,6 @@ ADDR_EVENT_FLAGS   = 0xD747   # large bitfield (wEventFlags)
 ADDR_OAK_PARCEL    = 0xD74E   # bit 1 = has parcel
 ADDR_POKEDEX_FLAG  = 0xD74B   # bit 5 = has pokedex
 ADDR_TOWN_MAP_FLAG = 0xD5F3   # bit 0 = has town map
-ADDR_GAME_STAGE    = 0xD059   # wGameStage: 0=title, 1=overworld
 
 
 # ===================================================================
@@ -314,10 +326,10 @@ MOVE_NAMES: Dict[int, str] = {
 
 TYPE_NAMES: Dict[int, str] = {
     0: "Normal", 1: "Fighting", 2: "Flying", 3: "Poison",
-    4: "Ground", 5: "Rock", 6: "Bug", 7: "Ghost",
-    # 8 unused
+    4: "Ground", 5: "Rock", 6: "Bird",  # BIRD is unused in retail
+    7: "Bug", 8: "Ghost",
     20: "Fire", 21: "Water", 22: "Grass", 23: "Electric",
-    24: "Ice", 25: "Psychic", 26: "Dragon",
+    24: "Psychic", 25: "Ice", 26: "Dragon",
 }
 
 ITEM_NAMES: Dict[int, str] = {
@@ -645,7 +657,6 @@ class RedBlueMemoryReader(GameMemoryReader):
 
     def read_player(self) -> Dict[str, Any]:
         """Read player info: name, money, badges, position, facing, play time."""
-        game_stage = self.emu.read_u8(ADDR_GAME_STAGE)
         name = self._decode_text(ADDR_PLAYER_NAME, 11)
         rival = self._decode_text(ADDR_RIVAL_NAME, 11)
         money = self.read_bcd(ADDR_MONEY, 3)
@@ -658,14 +669,13 @@ class RedBlueMemoryReader(GameMemoryReader):
         facing_byte = self.emu.read_u8(ADDR_FACING)
         facing = FACING_NAMES.get(facing_byte, f"unknown(0x{facing_byte:02X})")
 
-        hours = self.emu.read_u16(ADDR_PLAYTIME_H)
+        hours = self.read_u16_be(ADDR_PLAYTIME_H)
         minutes = self.emu.read_u8(ADDR_PLAYTIME_M)
         seconds = self.emu.read_u8(ADDR_PLAYTIME_S)
 
         return {
             "name": name,
             "rival_name": rival,
-            "game_stage": game_stage,
             "money": money,
             "badges": badge_list,
             "badge_count": len(badge_list),
@@ -673,6 +683,27 @@ class RedBlueMemoryReader(GameMemoryReader):
             "facing": facing,
             "play_time": f"{hours}:{minutes:02d}:{seconds:02d}",
         }
+
+    def read_context(self) -> Dict[str, Any]:
+        """Coarse game phase, so consumers can reject garbage pre-game RAM.
+
+        Before the player names their character, wPlayerName is unset and
+        party/map RAM is uninitialised. Without this, every downstream
+        consumer treats boot-time noise as real state.
+        """
+        first = self.emu.read_u8(ADDR_PLAYER_NAME_0)
+        party = self.emu.read_u8(ADDR_PARTY_COUNT)
+        map_id = self.emu.read_u8(ADDR_MAP_ID)
+        named = first not in (0x00, 0x50, 0xFF)
+        sane = party <= 6 and map_id in MAP_NAMES
+        if not named:
+            phase = "title_screen"
+        elif not sane:
+            phase = "transition"
+        else:
+            phase = "in_game"
+        return {"phase": phase, "in_game": phase == "in_game",
+                "name_set": named, "ram_sane": sane}
 
     def read_party(self) -> List[Dict[str, Any]]:
         """Read the player's party (up to 6 Pokemon)."""
@@ -702,60 +733,90 @@ class RedBlueMemoryReader(GameMemoryReader):
             })
         return items
 
-    def read_battle(self) -> Dict[str, Any]:
-        """Read battle state (whether in battle & enemy info)."""
-        battle_type = self.emu.read_u8(ADDR_BATTLE_TYPE)
-        type_name = {0: "none", 1: "wild", 2: "trainer"}.get(battle_type, f"unknown({battle_type})")
-        result: Dict[str, Any] = {
-            "in_battle": battle_type != 0,
-            "type": type_name,
+    def _read_battle_mon(self, base: int) -> Dict[str, Any]:
+        """Parse a 29-byte battle_struct (wBattleMon / wEnemyMon)."""
+        d = self.emu.read_range(base, BATTLE_MON_SIZE)
+        sid = d[B_SPECIES]
+        moves = []
+        for i in range(4):
+            mid = d[B_MOVES + i]
+            if mid:
+                moves.append({"id": mid,
+                              "name": MOVE_NAMES.get(mid, f"???({mid})"),
+                              "pp": d[B_PP + i] & 0x3F})
+        return {
+            "species_id": sid,
+            "dex_number": INTERNAL_TO_DEX.get(sid, 0),
+            "species": species_name_from_index(sid),
+            "level": d[B_LEVEL],
+            "hp": (d[B_HP] << 8) | d[B_HP + 1],
+            "max_hp": (d[B_MAXHP] << 8) | d[B_MAXHP + 1],
+            "status": self._decode_status(d[B_STATUS]),
+            "types": _dedupe_types([
+                TYPE_NAMES.get(d[B_TYPE1], f"???({d[B_TYPE1]})"),
+                TYPE_NAMES.get(d[B_TYPE2], f"???({d[B_TYPE2]})"),
+            ]),
+            "moves": moves,
         }
-        if battle_type != 0:
-            # read first enemy mon (simplified)
-            enemy_species = self.emu.read_u8(ADDR_ENEMY_SPECIES)
-            enemy_data = self.emu.read_range(ADDR_ENEMY_DATA, PARTY_MON_SIZE)
-            enemy_level = enemy_data[33] if len(enemy_data) > 33 else enemy_data[3]
-            enemy_hp = (enemy_data[1] << 8) | enemy_data[2]
-            enemy_max_hp = ((enemy_data[34] << 8) | enemy_data[35]) if len(enemy_data) > 35 else 0
-            enemy_status = self._decode_status(enemy_data[4])
 
-            moves = []
-            for j in range(4):
-                mid = enemy_data[8 + j]
-                if mid != 0:
-                    moves.append(MOVE_NAMES.get(mid, f"???({mid})"))
-
-            result["enemy"] = {
-                "species_id": enemy_species,
-                "dex_number": INTERNAL_TO_DEX.get(enemy_species, 0),
-                "species": species_name_from_index(enemy_species),
-                "level": enemy_level,
-                "hp": enemy_hp,
-                "max_hp": enemy_max_hp,
-                "status": enemy_status,
-                "moves": moves,
-            }
+    def read_battle(self) -> Dict[str, Any]:
+        """Read live battle state from the battle structs, not party RAM."""
+        flag = self.emu.read_u8(ADDR_IS_IN_BATTLE)
+        kind = {0: "none", 1: "wild", 2: "trainer",
+                0xFF: "safari_or_lost"}.get(flag, f"unknown({flag})")
+        result: Dict[str, Any] = {
+            "in_battle": flag not in (0, 0xFF),
+            "battle_flag": flag,
+            "type": kind,
+            "sub_type": {0: "normal", 1: "old_man", 2: "safari"}.get(
+                self.emu.read_u8(ADDR_BATTLE_TYPE), "unknown"),
+        }
+        if result["in_battle"]:
+            result["enemy"] = self._read_battle_mon(ADDR_ENEMY_MON)
+            result["active"] = self._read_battle_mon(ADDR_BATTLE_MON)
         return result
 
-    def read_dialog(self) -> Dict[str, Any]:
-        """Read dialogue / text box state.
+    def _validate_enemy_struct(self, data: bytes) -> None:
+        """Runtime self-check: ensure enemy struct offsets match pokered wram.asm.
+        
+        Logs warnings if offsets don't match expected layout.
+        """
+        if len(data) < 44:
+            return  # Can't validate incomplete struct
+        
+        # Verify a few known invariants:
+        # - HP (offset 1-2) should be <= max_hp (offset 34-35)
+        hp = (data[1] << 8) | data[2]
+        max_hp = (data[34] << 8) | data[35]
+        if hp > max_hp and max_hp > 0:
+            logger.warning(f"Enemy HP ({hp}) > max_hp ({max_hp}) - struct offset mismatch?")
+        
+        # Level (offset 33) should be 1-100
+        lvl = data[33]
+        if lvl < 1 or lvl > 100:
+            logger.warning(f"Enemy level {lvl} out of range - struct offset mismatch?")
+        
+        # Species ID (offset 0) should be 1-151 or 255 (empty)
+        spc = data[0]
+        if spc not in range(1, 152) and spc != 0:
+            logger.warning(f"Enemy species ID {spc} unusual - struct offset mismatch?")
 
-        Uses wJoyIgnore as the primary indicator — bit 5 is set by the
-        game engine when joypad input is disabled (during text scroll,
-        NPC dialog, etc.).  wTextBoxID is unreliable because it can
-        retain stale non-zero values after dialog ends (e.g. after
-        Oak's intro sequence).
+    def read_dialog(self) -> Dict[str, Any]:
+        """Input-lock and text-box state.
+
+        wd730 bit 5 is set during scripted sprite movement as well as text,
+        so it means "input locked", not "dialog open". Reported separately
+        so callers can tell a cutscene walk from a text box.
         """
         text_box = self.emu.read_u8(ADDR_TEXT_BOX_ID)
-        joy_ignore = self.emu.read_u8(ADDR_JOY_IGNORE)
-        # Only use wJoyIgnore for the "active" flag — it's the game
-        # engine's actual input-lock signal. wTextBoxID is kept for
-        # informational purposes but not used for the active check.
-        in_dialog = bool(joy_ignore & 0x20)
+        d730 = self.emu.read_u8(ADDR_D730)
+        input_locked = bool(d730 & 0x20)
         return {
-            "active": in_dialog,
+            "active": input_locked,        # kept for back-compat
+            "input_locked": input_locked,
+            "text_active": bool(text_box) and input_locked,
             "text_box_id": text_box,
-            "joy_ignore": joy_ignore,
+            "d730": d730,
         }
 
     def read_map_info(self) -> Dict[str, Any]:

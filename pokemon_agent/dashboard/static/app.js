@@ -19,7 +19,34 @@
         Ground:'#b89a4e', Flying:'#8779c4', Psychic:'#c25478', Bug:'#869520',
         Rock:'#8a7a38', Ghost:'#5a4878', Dragon:'#5838c4', Dark:'#4a3c34', Steel:'#8a8aa0'
     };
-    var POLL_MS = 2500, WS_BASE = 1000, WS_MAX = 20000;
+    var POLL_MS = 3000, WS_BASE = 1000, WS_MAX = 20000;
+    var FRAME_STALE_MS = 2000;        // no frame this long -> fall back to polling
+    var lastFrameAt = 0, lastFrameNo = -1, emuState = 'unknown';
+
+    var EMU_LABEL = { idle:'idle — press START', booting:'booting…',
+                      ready:'live', error:'emulator error' };
+
+    function renderEmuState(msg){
+        var prev = emuState;
+        emuState = msg.emulator_state || 'unknown';
+        if(typeof msg.frame === 'number') lastFrameNo = msg.frame;
+        setStatus(emuState === 'ready', EMU_LABEL[emuState] || emuState);
+
+        var ov = $('screenOverlay');
+        if(emuState !== 'ready'){
+            hasFrame = false; lastFrameAt = 0;
+            ov.querySelector('span').textContent =
+                (emuState === 'error') ? ('error: ' + (msg.error || 'unknown'))
+                                       : (EMU_LABEL[emuState] || emuState);
+            ov.classList.remove('hidden');
+        }
+        if(emuState !== prev){
+            entry(emuState === 'error' ? 'alert' : 'sys',
+                  emuState === 'error' ? 'ERROR' : '',
+                  'Emulator: ' + emuState + (msg.error ? ' — ' + msg.error : ''));
+        }
+        if(msg.armed && emuState === 'idle') entry('sys','','Save state armed — press START.');
+    }
 
     // --- state ---
     var ws=null, wsLive=false, wsDelay=WS_BASE, wsTimer=null, pollTimer=null;
@@ -70,8 +97,6 @@
                 var acts=msg.actions||d.actions||[];
                 var txt=Array.isArray(acts)&&acts.length?acts.join(' · '):(d.action||'(idle)');
                 entry('act','ACT', txt);
-                turnCount++; actionCount+=Array.isArray(acts)?acts.length:1;
-                $('metaTurn').textContent=turnCount; $('ctrActions').textContent=actionCount;
                 break;
             }
             case 'reasoning': case 'thought':
@@ -90,18 +115,30 @@
         }
     }
 
+    function stateKey(s){
+        if(!s) return '';
+        var c = s.collision ? {cell:s.collision.player_cell,
+                               walkable:s.collision.walkable} : null;
+        return JSON.stringify({p:s.player, party:s.party, battle:s.battle,
+                               dialog:s.dialog, map:s.map, bag:s.bag,
+                               flags:s.flags, col:c, st:s.status});
+    }
+
     // ---- screenshot ----
-    function renderScreen(b64){
+    function renderScreen(b64, frameNo){
         if(!b64) return;
-        if(!hasFrame){ hasFrame=true; $('screenOverlay').classList.add('hidden'); }
-        if(!gridMode) $('gameScreen').src='data:image/png;base64,'+b64;
+        lastFrameAt = Date.now();
+        if(typeof frameNo === 'number') lastFrameNo = frameNo;
+        hasFrame = true;
+        $('screenOverlay').classList.add('hidden');
+        if(!gridMode) $('gameScreen').src = 'data:image/png;base64,' + b64;
+        if(lastFrameNo >= 0) $('frameCount').textContent = 'f' + lastFrameNo;
     }
     function refreshGrid(){
-        if(gridMode){
-            $('gameScreen').src = baseURL+'/screenshot/grid?scale=4&_t='+Date.now();
-            if(!hasFrame){ hasFrame=true; }
-            $('screenOverlay').classList.add('hidden');
-        }
+        if(!gridMode || emuState !== 'ready') return;
+        $('gameScreen').src = baseURL+'/screenshot/grid?scale=4&_t='+Date.now();
+        if(!hasFrame){ hasFrame=true; }
+        $('screenOverlay').classList.add('hidden');
     }
 
     // ---- stats / readout ----
@@ -116,13 +153,19 @@
         $('statPlayTime').textContent=(typeof pt==='string')?pt:'0:00:00';
         if(state.collision&&state.collision.player_cell) $('statCell').textContent=state.collision.player_cell;
         renderBadges(p.badge_count||0, p.badges||[]);
-        renderTeam(state.party||[]);
-
+    
+        // Prefer active_mon (wBattleMon) when in battle, otherwise party[0]
+        var party = state.party || [];
+        if(state.active_mon && party.length){
+            party = [state.active_mon].concat(party.slice(1));
+        }
+        renderTeam(party);
+    
         // dialog
         var dlg=state.dialog;
-        if(dlg&&dlg.active&&dlg.text){ $('dialogOverlay').classList.remove('hidden'); $('dialogText').textContent=dlg.text; }
+        if(dlg && dlg.text_active){ $('dialogOverlay').classList.remove('hidden'); $('dialogText').textContent='text box active'; }
         else $('dialogOverlay').classList.add('hidden');
-
+    
         // battle
         var bt=state.battle;
         if(bt&&bt.in_battle){
@@ -130,7 +173,7 @@
             var en=bt.enemy||{};
             $('battleContent').textContent=(bt.type||'wild')+' · vs '+(en.species||'???')+' Lv.'+(en.level||'?');
         } else $('battleInfo').classList.add('hidden');
-
+    
         updateTension(state);
     }
 
@@ -261,6 +304,7 @@
 
     // ---- telemetry: blackouts, caught ----
     function updateTension(state){
+        if(emuState !== 'ready') return;
         // blackout detection: whole party fainted while previously alive.
         // Guard against transient/partial reads: require valid max_hp data and
         // a prior confirmed alive>0 reading before ever counting a blackout.
@@ -330,15 +374,15 @@
         if(type==='objectives'){ renderObjectives(msg.objectives||[]); return; }
         if(type==='control'){ renderControl(msg.state||'stopped'); return; }
         if(type==='game'){ renderGame(msg.active||null); return; }
+        if(type==='emulator'){ renderEmuState(msg); return; }
+
         if(type==='action'){
             renderEvent(msg);
-            if(msg.state_after){ var j=JSON.stringify(msg.state_after); if(j!==lastStateJSON){ lastStateJSON=j; renderStats(msg.state_after); } }
-            refreshGrid();
+            if(msg.state_after){ var j=stateKey(msg.state_after); if(j!==lastStateJSON){ lastStateJSON=j; renderStats(msg.state_after); } }
         } else if(type==='state_update'&&payload){
-            var j2=JSON.stringify(payload); if(j2!==lastStateJSON){ lastStateJSON=j2; renderStats(payload); }
-            refreshGrid();
-        } else if(type==='screenshot'&&msg.data&&msg.data.image){
-            renderScreen(msg.data.image);
+            var j2=stateKey(payload); if(j2!==lastStateJSON){ lastStateJSON=j2; renderStats(payload); }
+        } else if(type==='screenshot' && msg.data && msg.data.image){
+                    renderScreen(msg.data.image, msg.frame);
         } else if(type==='connected'){
             entry('sys','','Server online · v'+(msg.version||'?'));
         } else renderEvent(msg);
@@ -347,19 +391,37 @@
     // ---- polling fallback ----
     function poll(){
         fetch(baseURL+'/state').then(function(r){ if(!r.ok) throw 0; return r.json(); })
-        .then(function(s){ if(!wsLive) setStatus(true,'live (poll)');
-            var j=JSON.stringify(s); if(j!==lastStateJSON){ lastStateJSON=j; renderStats(s); } refreshGrid(); })
+        .then(function(s){
+            if(s && (s.status === 'offline' || s.status === 'loading')) return;
+            var j = stateKey(s);
+            if(j !== lastStateJSON){ lastStateJSON = j; renderStats(s); }
+        })
         .catch(function(){ if(!wsLive) setStatus(false,'no signal'); });
     }
+    function framesFresh(){
+        return (Date.now() - lastFrameAt) < FRAME_STALE_MS;
+    }
+
     function pollScreenshot(){
-        if(gridMode||wsLive) return; // ws pushes frames; grid handled separately
-        $('gameScreen').src=baseURL+'/screenshot?_t='+Date.now();
-        if(!hasFrame){ hasFrame=true; $('screenOverlay').classList.add('hidden'); }
+        if(gridMode) return;
+        if(emuState !== 'ready') return;          // nothing to show yet
+        if(framesFresh()) return;                 // WS is delivering; don't duplicate
+        var img = new Image();
+        img.onload = function(){
+            $('gameScreen').src = img.src;
+            lastFrameAt = Date.now();
+            hasFrame = true;
+            $('screenOverlay').classList.add('hidden');
+        };
+        img.onerror = function(){ setStatus(false, 'frame error'); };
+        img.src = baseURL + '/screenshot?_t=' + Date.now();
     }
 
     // ---- toggles / init ----
     function initToggles(){
-        $('togGame').addEventListener('click', function(){ gridMode=false; setTog(); poll(); });
+        $('togGame').addEventListener('click', function(){
+            gridMode = false; setTog(); lastFrameAt = 0; pollScreenshot();
+        });
         $('togGrid').addEventListener('click', function(){ gridMode=true; setTog(); refreshGrid(); });
         $('btnClearLog').addEventListener('click', function(){ $('logContainer').innerHTML=''; });
         $('btnStart').addEventListener('click', function(){ setControl('running'); });
@@ -387,9 +449,12 @@
         fetch(baseURL+'/games/current').then(function(r){return r.json();}).then(function(d){ renderGame((d&&d.active)||null); }).catch(function(){});
         initToggles();
         connect();
-        poll(); pollTimer=setInterval(poll, POLL_MS);
-        setInterval(pollScreenshot, 1500);
-        setInterval(refreshGrid, 2000);
+        poll(); pollTimer = setInterval(poll, POLL_MS);
+        setInterval(pollScreenshot, 1000);
+        setInterval(function(){ if(gridMode) refreshGrid(); }, 3000);
+        document.addEventListener('visibilitychange', function(){
+            if(!document.hidden){ poll(); pollScreenshot(); }
+        });
         setStatus(false,'connecting');
     }
     if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', init);
