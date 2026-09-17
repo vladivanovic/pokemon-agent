@@ -10,10 +10,12 @@ text block suitable for injection into an LLM prompt.
 from __future__ import annotations
 
 import datetime
-import traceback
+import logging
 from typing import Any, Dict, Optional
 
 from pokemon_agent.memory.reader import GameMemoryReader
+
+logger = logging.getLogger("pokemon-agent.state")
 
 
 def build_game_state(
@@ -33,33 +35,53 @@ def build_game_state(
     -------
     dict
         A JSON-serialisable game-state dictionary.  Sections that fail
-        to read are ``None`` with an ``"_error"`` key.
+        to read are ``None`` with an ``"errors"`` key.
     """
+    errors: Dict[str, str] = {}
+
+    def _safe(name: str, fn, default=None):
+        try:
+            return fn()
+        except Exception as exc:
+            errors[name] = f"{type(exc).__name__}: {exc}"
+            logger.debug("read %s failed", name, exc_info=True)
+            return default
+
     state: Dict[str, Any] = {
         "metadata": {
-            "game": reader.game_name,
+            "game": _safe("game_name", lambda: reader.game_name, "unknown"),
             "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "frame_count": frame_count,
         },
     }
 
-    sections = {
-        "player": reader.read_player,
-        "party": reader.read_party,
-        "bag": reader.read_bag,
-        "battle": reader.read_battle,
-        "dialog": reader.read_dialog,
-        "map": reader.read_map_info,
-        "flags": reader.read_flags,
-    }
+    state["context"] = _safe("context", reader.read_context,
+                             {"phase": "unknown", "in_game": False})
 
-    for key, fn in sections.items():
-        try:
-            state[key] = fn()
-        except Exception as exc:
+    for key, attr in (
+        ("player", "read_player"), ("party", "read_party"),
+        ("bag", "read_bag"), ("battle", "read_battle"),
+        ("dialog", "read_dialog"), ("map", "read_map_info"),
+        ("flags", "read_flags"),
+    ):
+        fn = getattr(reader, attr, None)
+        if fn is None:
+            errors[key] = f"AttributeError: reader has no {attr}"
             state[key] = None
-            state[f"{key}_error"] = str(exc)
+            continue
+        state[key] = _safe(key, fn)
 
+    # Mid-battle, wBattleMon is authoritative for the active player mon;
+    # wPartyMon only syncs after the fight. Surface the preferred source.
+    battle = state.get("battle") or {}
+    if battle.get("in_battle") and battle.get("active"):
+        state["active_mon"] = battle["active"]
+    elif state.get("party"):
+        state["active_mon"] = state["party"][0]
+    else:
+        state["active_mon"] = None
+    state["errors"] = errors
+    state["status"] = "degraded" if errors else "ok"
     return state
 
 
@@ -89,21 +111,30 @@ def build_state_summary(state: Dict[str, Any]) -> str:
 
     # -- metadata --
     meta = state.get("metadata", {})
+    ctx = state.get("context") or {}
     lines.append(f"Game      : {meta.get('game', '?')}")
-    lines.append(f"Context   : {state.get('context', 'unknown')}")
+    lines.append(f"Status    : {state.get('status', '?')}")
+    lines.append(f"Context   : {ctx.get('phase', 'unknown')}")
     if meta.get("frame_count") is not None:
         lines.append(f"Frame     : {meta['frame_count']}")
 
-    # Stop here if on title screen
-    if state.get("context") == "title_screen":
-        lines.append("\nGame is at the title screen.")
+    if state.get("errors"):
+        for k, v in state["errors"].items():
+            lines.append(f"  ! {k}: {v}")
+
+    if not ctx.get("in_game", False):
+        lines.append(f"\nNot in game ({ctx.get('phase', 'unknown')}) — "
+                     f"gameplay fields are unreliable.")
         lines.append(_hr)
         return "\n".join(lines)
 
     # -- map --
     map_info = state.get("map")
-    if map_info:
-        lines.append(f"Location  : {map_info.get('map_name', '?')} (id={map_info.get('map_id')})")
+    if map_info is not None:
+        if map_info:
+            lines.append(f"Location  : {map_info.get('map_name', '?')} (id={map_info.get('map_id')})")
+        else:
+            lines.append("Location  : (unknown map)")
 
     # -- player --
     player = state.get("player")
@@ -112,7 +143,8 @@ def build_state_summary(state: Dict[str, Any]) -> str:
         lines.append("--- PLAYER ---")
         lines.append(f"Name    : {player.get('name', '?')}")
         lines.append(f"Rival   : {player.get('rival_name', '?')}")
-        lines.append(f"Money   : ${player.get('money', 0):,}")
+        money = player.get("money")
+        lines.append(f"Money   : ${money:,}" if isinstance(money, int) else "Money   : ?")
         badges = player.get("badges", [])
         lines.append(f"Badges  : {len(badges)} — {', '.join(badges) if badges else 'none'}")
         pos = player.get("position", {})
@@ -123,9 +155,11 @@ def build_state_summary(state: Dict[str, Any]) -> str:
 
     # -- party --
     party = state.get("party")
-    if party:
+    if party is not None:
         lines.append("")
         lines.append("--- PARTY ---")
+        if not party:
+            lines.append("  (empty)")
         for i, mon in enumerate(party, 1):
             moves_str = ", ".join(
                 m["name"] if isinstance(m, dict) else str(m) for m in mon.get("moves", [])
@@ -155,7 +189,9 @@ def build_state_summary(state: Dict[str, Any]) -> str:
             )
             enemy_moves = enemy.get("moves", [])
             if enemy_moves:
-                lines.append(f"Enemy moves: {', '.join(str(m) for m in enemy_moves)}")
+                names = [m.get("name", "?") if isinstance(m, dict) else str(m)
+                         for m in enemy_moves]
+                lines.append(f"Enemy moves: {', '.join(names)}")
     elif battle and not battle.get("in_battle"):
         lines.append("\nNot in battle.")
     elif state.get("battle_error"):
@@ -172,9 +208,11 @@ def build_state_summary(state: Dict[str, Any]) -> str:
 
     # -- bag --
     bag = state.get("bag")
-    if bag:
+    if bag is not None:
         lines.append("")
         lines.append("--- BAG ---")
+        if not bag:
+            lines.append("  (empty)")
         for entry in bag:
             lines.append(f"  {entry.get('item', '?')} x{entry.get('quantity', '?')}")
     elif state.get("bag_error"):
@@ -182,7 +220,7 @@ def build_state_summary(state: Dict[str, Any]) -> str:
 
     # -- flags --
     flags = state.get("flags")
-    if flags:
+    if flags is not None:
         lines.append("")
         lines.append("--- FLAGS ---")
         lines.append(f"Has Pokedex   : {flags.get('has_pokedex', '?')}")
@@ -194,4 +232,3 @@ def build_state_summary(state: Dict[str, Any]) -> str:
 
     lines.append(_hr)
     return "\n".join(lines)
-    

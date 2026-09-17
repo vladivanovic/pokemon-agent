@@ -78,6 +78,15 @@ class GameMemoryReader(ABC):
                 bits.append(bool(b & (1 << i)))
         return bits
 
+    def read_u16_be(self, addr: int) -> int:
+        """Read a big-endian u16. Gen 1 stores multi-byte values BE."""
+        raw = self.emu.read_range(addr, 2)
+        return (raw[0] << 8) | raw[1]
+
+    def read_u24_be(self, addr: int) -> int:
+        raw = self.emu.read_range(addr, 3)
+        return (raw[0] << 16) | (raw[1] << 8) | raw[2]
+
     # -- abstract interface -------------------------------------------------
 
     @property
@@ -112,3 +121,7 @@ class GameMemoryReader(ABC):
     @abstractmethod
     def read_flags(self) -> Dict[str, Any]:
         """Return key story/event flags."""
+
+    @abstractmethod
+    def read_context(self) -> Dict[str, Any]:
+        """Return coarse game phase (title_screen / transition / in_game)."""

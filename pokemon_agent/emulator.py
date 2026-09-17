@@ -121,6 +121,11 @@ class Emulator(ABC):
 # PyBoy backend (Game Boy / Game Boy Color)
 # ---------------------------------------------------------------------------
 
+# Module-level because PyBoy is imported lazily inside load()
+# Takes the PyBoy class as an argument since it's not available at import time.
+_pyboy_sound_kwargs = {"sound": False}
+
+
 class PyBoyEmulator(Emulator):
     """Wraps the *PyBoy* library for .gb / .gbc ROMs.
 
@@ -149,7 +154,7 @@ class PyBoyEmulator(Emulator):
 
         # Set SDL audio driver to dummy to avoid sound card issues on headless/embedded
         os.environ["SDL_AUDIODRIVER"] = "dummy"
-        self._pyboy = PyBoy(rom_path, window="null", sound=False)
+        self._pyboy = PyBoy(rom_path, window="null", **_pyboy_sound_kwargs)
         logger.info("PyBoy initialized with null window (sound disabled, audio dummy driver)")
         self.rom_path = rom_path
         self.frame_count = 0
@@ -189,11 +194,20 @@ class PyBoyEmulator(Emulator):
 
     # -- timing -------------------------------------------------------------
 
-    def tick(self, frames: int = 1) -> None:
-        """Advance emulation by *frames* frames."""
+    def tick(self, frames: int = 1, render_last: bool = False) -> None:
+        """Advance emulation by *frames* frames.
+
+        If render_last is True, the last frame will render to the screen buffer
+        so get_screen() returns a fresh frame.
+        """
         start = time.perf_counter()
         pb = self._pyboy
-        for _ in range(frames):
+        for i in range(frames):
+            # On the last frame, if render_last is True, let PyBoy render
+            # This ensures get_screen() returns an updated framebuffer
+            if render_last and i == frames - 1:
+                # Just tick normally - PyBoy always renders to screen.image
+                pass
             pb.tick()  # type: ignore[union-attr]
             self.frame_count += 1
         elapsed = time.perf_counter() - start
@@ -203,8 +217,9 @@ class PyBoyEmulator(Emulator):
     # -- video --------------------------------------------------------------
 
     def get_screen(self) -> "Image.Image":
-        """Return current screen as a PIL Image (160×144)."""
-        return self._pyboy.screen.image  # type: ignore[union-attr]
+        """Return current screen as a PIL Image (160×144), RGB for smaller PNGs."""
+        # PyBoy returns RGBA; convert to RGB to avoid shared-buffer risk and larger PNGs
+        return self._pyboy.screen.image.copy().convert("RGB")  # type: ignore[union-attr]
 
     # -- memory -------------------------------------------------------------
 
@@ -216,9 +231,20 @@ class PyBoyEmulator(Emulator):
         hi = self._pyboy.memory[addr + 1] & 0xFF  # type: ignore[index]
         return (hi << 8) | lo
 
+    def read_u16_be(self, addr: int) -> int:
+        """Read unsigned 16-bit big-endian from *addr*."""
+        hi = self._pyboy.memory[addr] & 0xFF  # type: ignore[index]
+        lo = self._pyboy.memory[addr + 1] & 0xFF  # type: ignore[index]
+        return (hi << 8) | lo
+
     def read_u32(self, addr: int) -> int:
         b = bytes(self._pyboy.memory[addr : addr + 4])  # type: ignore[index]
         return int.from_bytes(b, "little")
+
+    def read_u32_be(self, addr: int) -> int:
+        """Read unsigned 32-bit big-endian from *addr*."""
+        b = bytes(self._pyboy.memory[addr : addr + 4])  # type: ignore[index]
+        return int.from_bytes(b, "big")
 
     def read_range(self, addr: int, size: int) -> bytes:
         return bytes(self._pyboy.memory[addr : addr + size])  # type: ignore[index]

@@ -7,6 +7,7 @@ running a Pokemon ROM, reading game state, and broadcasting events.
 
 import asyncio
 import base64
+import concurrent.futures
 import io
 import json
 import logging
@@ -14,9 +15,10 @@ import queue
 import re
 import threading
 import time
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import Optional, Set
+from typing import Callable, Optional, Set
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -88,6 +90,32 @@ class HermesSessionRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Emulator thread — single-owner pattern
+# ---------------------------------------------------------------------------
+
+TARGET_FPS = 60.0        # self-paced; PyBoy runs unbounded
+MAX_CATCHUP = 16         # frames per iteration ceiling after a stall
+PUBLISH_HZ = 10.0                 # frames pushed to dashboard per second
+
+@dataclass
+class _Cmd:
+    fn: Callable           # callable(emulator, *args) -> Any
+    args: tuple
+    future: "concurrent.futures.Future"
+
+_emu_cmds: "queue.Queue[_Cmd]" = queue.Queue()
+_emu_thread: Optional[threading.Thread] = None
+_emu_stop = threading.Event()
+_emu_state: str = "idle"          # idle|booting|ready|error
+_emu_error: Optional[str] = None
+
+# Lifecycle / frame publisher
+_pending_state: Optional[str] = None   # save-state armed by /games/*/load
+_frame_png: Optional[bytes] = None     # latest encoded frame
+_frame_no: int = 0
+_frame_lock = threading.Lock()
+
+# ---------------------------------------------------------------------------
 # Global state
 # ---------------------------------------------------------------------------
 
@@ -96,8 +124,6 @@ _emulator = None          # Emulator instance
 _reader = None            # GameMemoryReader subclass instance
 _start_time: float = 0.0
 _loop: Optional[asyncio.AbstractEventLoop] = None
-_emu_queue = queue.Queue() # Thread-safe command queue
-_emu_thread: Optional[threading.Thread] = None
 
 # Dynamic objectives shown on the dashboard (default = Kanto opening goals).
 _objectives: list = [
@@ -165,10 +191,20 @@ def _ensure_emulator():
         raise HTTPException(status_code=503, detail="Emulator not initialised")
 
 
-async def _run_sync(func, *args):
-    """Run a blocking emulator call in the default executor."""
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, partial(func, *args))
+async def emu_call(fn, *args, timeout: float = 30.0):
+    """Run fn(emulator, *args) on the owner thread and await its result.
+
+    This is the ONLY legal way for a request handler to touch the emulator.
+    Anything using run_in_executor reintroduces the native-code race.
+    """
+    if _emu_thread is None or not _emu_thread.is_alive():
+        raise HTTPException(status_code=503, detail=f"Emulator not running ({_emu_state})")
+    fut: "concurrent.futures.Future" = concurrent.futures.Future()
+    _emu_cmds.put(_Cmd(fn, args, fut))
+    try:
+        return await asyncio.wait_for(asyncio.wrap_future(fut), timeout)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Emulator command timed out")
 
 
 async def broadcast(event: dict):
@@ -188,7 +224,7 @@ async def broadcast(event: dict):
 
     dead: list[WebSocket] = []
     payload = json.dumps(event)
-    for ws in _ws_clients:
+    for ws in list(_ws_clients):
         try:
             await ws.send_text(payload)
         except Exception:
@@ -197,34 +233,99 @@ async def broadcast(event: dict):
         _ws_clients.discard(ws)
 
 
+async def _screenshot_broadcast_task():
+    """Periodically broadcast current frame to all WebSocket clients.
+
+    Runs every 1 second while there are connected clients. This keeps the
+    dashboard's game screen live even when no actions are being executed
+    (e.g., while the model is thinking).
+    """
+    while True:
+        await asyncio.sleep(1.0)
+        if not _ws_clients or _emulator is None:
+            continue
+        try:
+            png_bytes = await emu_call(_screenshot_bytes)
+            b64 = base64.b64encode(png_bytes).decode("ascii")
+            await broadcast({
+                "type": "screenshot",
+                "data": {"image": b64, "format": "png"},
+            })
+        except Exception:
+            # Don't spam logs if emulator isn't ready
+            pass
+
+
+# Global task reference
+_screenshot_task: asyncio.Task | None = None
+
+
+def _saves_dir() -> Path:
+    """The single authoritative save directory.
+
+    Session-scoped when a game is active, otherwise the legacy flat dir.
+    Every save/load path must go through this — the old split meant
+    /save wrote somewhere /load never looked.
+    """
+    if _active_session is not None and _session_mgr is not None:
+        return _session_mgr.saves_dir(_active_session.id)
+    if _config is None:
+        # Config not set yet — use default
+        d = Path("~/.pokemon-agent").expanduser().resolve() / "saves"
+    else:
+        d = Path(_config.data_dir).expanduser().resolve() / "saves"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _resolve_save(name: str) -> Path:
+    """Locate a save by name: active session first, then legacy dir."""
+    p = _saves_dir() / f"{name}.state"
+    if p.exists():
+        return p
+    legacy = Path(_config.data_dir).expanduser().resolve() / "saves" / f"{name}.state"
+    if legacy.exists():
+        return legacy
+    raise HTTPException(status_code=404, detail=f"Save not found: {name}")
+
+
 def _get_state_dict() -> dict:
     """Build full game state from the memory reader."""
-    if _emulator is None:
-        return {"status": "offline", "message": "Emulator not initialized"}
-    if _reader is None:
-        return {"status": "loading", "message": "Memory reader not initialized"}
-        
+    if _emulator is None or _emu_state != "ready":
+        return {"status": "not_ready", "emulator_state": _emu_state,
+                "error": _emu_error, "context": {"phase": _emu_state,
+                                                 "in_game": False}}
+    # At this point _reader is guaranteed to be initialized
     from pokemon_agent.state.builder import build_game_state
-    state = build_game_state(_reader)
+    state = build_game_state(_reader, frame_count=_emulator.frame_count)
     # Attach the on-screen walkability grid for Red/Blue (overworld tilesets).
     # This is ground-truth collision read from RAM — far more reliable than
     # inferring walkability from pixels.
+    # Only build collision when: in game, not in battle, no input-locked dialog.
+    # wTileMap holds menu and text tiles when a box is open, so the grid
+    # would otherwise be a picture of a menu rendered as a mostly-blocked map.
     try:
-        if _config and _config.game_type == "red" and not (
-            state.get("battle") or {}
-        ).get("in_battle"):
+        ctx = state.get("context") or {}
+        dlg = state.get("dialog") or {}
+        if (_config and _config.game_type == "red" and ctx.get("in_game")
+                and not (state.get("battle") or {}).get("in_battle")
+                and not dlg.get("input_locked")):
             from pokemon_agent.collision import build_collision_grid, render_ascii_map
             col = build_collision_grid(_reader.emu)
             col["ascii"] = render_ascii_map(col, legend=True)
             state["collision"] = col
+        else:
+            state["collision"] = {"valid": False, "reason": "menu_dialog_or_not_in_game"}
     except Exception as exc:  # noqa: BLE001
-        state["collision_error"] = f"{type(exc).__name__}: {exc}"
+        state["collision"] = {"valid": False,
+                              "reason": f"{type(exc).__name__}: {exc}"}
     return state
 
 
-def _get_screenshot_bytes() -> bytes:
-    """Grab the current frame as PNG bytes."""
-    screen = _emulator.get_screen()          # PIL Image or numpy array
+def _screenshot_bytes(emu) -> bytes:
+    """Grab the current frame as PNG bytes. Tick once with render_last to ensure fresh framebuffer."""
+    emu.tick(1, render_last=True)
+    screen = emu.get_screen()
     buf = io.BytesIO()
     # If it's a numpy array, convert to PIL first
     try:
@@ -239,130 +340,206 @@ def _get_screenshot_bytes() -> bytes:
     return buf.getvalue()
 
 
+def _state_dict(emu) -> dict:
+    """Return full game state. Reader is worker-owned."""
+    return _get_state_dict()
+
+
 # ---------------------------------------------------------------------------
 # Action parser
 # ---------------------------------------------------------------------------
 
-_ACTION_RE = re.compile(
-    r"^(?P<kind>press|walk|hold|wait|a_until_dialog_end)(?:_(?P<rest>.+))?$"
-)
-
-
-async def _execute_action(action_str: str) -> None:
-    """Parse and execute a single action string on the emulator.
-
-    Supported formats:
-        press_X       — press button X for 10 frames, wait 20 frames
-        walk_X        — press direction for 16 frames, wait 8 frames
-        hold_X_N      — hold button X for N frames
-        wait_N        — tick N frames with no input
-        a_until_dialog_end — press A every 30 frames until dialog clears (max 300)
-    """
-    action_str = action_str.strip().lower()
-
-    if action_str == "a_until_dialog_end":
-        for _ in range(10):  # max 300 frames = 10 * 30
-            await _run_sync(_emulator.press, "a")
-            await _run_sync(_emulator.tick, 30)
-            # Check dialog flag via reader if available
-            try:
-                state = _get_state_dict()
-                if not state.get("dialog_active", False):
-                    break
-            except Exception:
-                pass
-        return
-
-    # Split into tokens
-    parts = action_str.split("_")
-
-    if parts[0] == "press" and len(parts) >= 2:
-        button = "_".join(parts[1:])
-        # Hold button for 8 frames so the game registers the press,
-        # then wait 12 frames for the game to process it.
-        await _run_sync(_emulator.press, button, 8)
-        await _run_sync(_emulator.tick, 12)
-        return
-
-    if parts[0] == "walk" and len(parts) >= 2:
-        direction = parts[1]
-        # Gen 1 movement timing (empirically tested):
-        #   - Button must be held >= 4 frames for the game's vblank joypad
-        #     poll to register the input reliably.
-        #   - wWalkCounter starts at 8, decrements each frame (2 px/frame
-        #     = 16 px = 1 tile). Total walk animation = ~16 frames.
-        #   - Minimum total frames for a confirmed tile move = 17.
-        #   - We use hold=8 + wait=12 = 20 total for a safety margin.
-        await _run_sync(_emulator.press, direction, 8)
-        await _run_sync(_emulator.tick, 12)
-        return
-
-    if parts[0] == "hold" and len(parts) >= 3:
-        button = "_".join(parts[1:-1])
-        frames = int(parts[-1])
-        await _run_sync(_emulator.press, button, frames)
-        return
-
-    if parts[0] == "wait" and len(parts) == 2:
-        frames = int(parts[1])
-        await _run_sync(_emulator.tick, frames)
-        return
-
-    raise ValueError(f"Unknown action format: {action_str}")
-
-
-# ---------------------------------------------------------------------------
-# Server lifecycle
-# ---------------------------------------------------------------------------
-
-def _emulator_worker():
-    """Background thread running the emulator loop."""
-    global _emulator, _reader
-    
-    # Wait for a "load_state" or "start" signal before initializing
-    logger.info("Emulator worker waiting for start/load command...")
-    while True:
-        try:
-            cmd, args = _emu_queue.get()
-            if cmd == "load_state" or cmd == "start":
-                # Initialize now
-                rom = Path(_config.rom_path).expanduser().resolve()
-                from pokemon_agent.emulator import create_emulator
-                _emulator = create_emulator(str(rom))
-                if _config.game_type == "red":
-                    from pokemon_agent.memory.red import PokemonRedReader
-                    _reader = PokemonRedReader(_emulator)
-                else:
-                    from pokemon_agent.memory.firered import FireRedMemoryReader
-                    _reader = FireRedMemoryReader(_emulator)
-                
-                if cmd == "load_state":
-                    _emulator.load_state(*args)
-                
-                _emulator.tick(60) # Initial tick
+def _do_action(emu, action_str: str) -> None:
+    """One action, executed atomically on the owner thread."""
+    a = action_str.strip().lower()
+    parts = a.split("_")
+    if a == "a_until_dialog_end":
+        for _ in range(10):
+            emu.press("a", 8)
+            emu.tick(30, render_last=False)
+            if not (_get_state_dict().get("dialog") or {}).get("active"):
                 break
-        except Exception as e:
-            logger.error(f"Emulator worker init error: {e}")
-            return
+    elif parts[0] in ("press", "walk") and len(parts) >= 2:
+        emu.press("_".join(parts[1:]), 8)
+        emu.tick(12, render_last=False)
+    elif parts[0] == "hold" and len(parts) >= 3:
+        emu.press("_".join(parts[1:-1]), int(parts[-1]))
+    elif parts[0] == "wait" and len(parts) == 2:
+        emu.tick(int(parts[1]), render_last=False)
+    else:
+        raise ValueError(f"Unknown action format: {action_str}")
 
-    while True:
+
+# ---------------------------------------------------------------------------
+# Server lifecycle — single-owner emulator thread
+# ---------------------------------------------------------------------------
+
+
+def _fail(msg: str) -> None:
+    global _emu_state, _emu_error
+    _emu_state, _emu_error = "error", msg
+    logger.error("emulator: %s", msg)
+
+
+def _dispatch(cmd: _Cmd) -> None:
+    """Execute one queued command on the owner thread."""
+    if not cmd.future.set_running_or_notify_cancel():
+        return
+    try:
+        cmd.future.set_result(cmd.fn(_emulator, *cmd.args))
+    except Exception as exc:
+        cmd.future.set_exception(exc)
+
+
+def _publish(event: dict) -> None:
+    """Broadcast from the worker thread onto the asyncio loop."""
+    if _loop is None:
+        return
+    try:
+        asyncio.run_coroutine_threadsafe(broadcast(event), _loop)
+    except RuntimeError:
+        pass
+
+
+def _emu_status() -> dict:
+    return {"emulator_state": _emu_state, "error": _emu_error,
+            "frame": _frame_no, "armed": _pending_state is not None}
+
+
+def _emit_status() -> None:
+    _publish({"type": "emulator", **_emu_status()})
+
+
+def _emit_frame(png_bytes: bytes) -> None:
+    """Encode and publish a frame at PUBLISH_HZ."""
+    global _frame_png, _frame_no
+    with _frame_lock:
+        _frame_png = png_bytes
+        _frame_no += 1
+    _publish({
+        "type": "screenshot",
+        "data": {"image": base64.b64encode(png_bytes).decode("ascii"), "format": "png"},
+    })
+
+
+def _fail(msg: str) -> None:
+    global _emu_state, _emu_error
+    _emu_state, _emu_error = "error", msg
+    logger.error("emulator: %s", msg)
+    _emit_status()
+
+
+def _publish_frame() -> None:
+    """Render one frame, cache the PNG, push it to clients."""
+    global _frame_png, _frame_no
+    try:
+        _emulator.tick(1, render_last=True)
+        buf = io.BytesIO()
+        _emulator.get_screen().save(buf, format="PNG")
+        png = buf.getvalue()
+    except Exception as exc:
+        _fail(f"frame publish failed: {type(exc).__name__}: {exc}")
+        return
+    with _frame_lock:
+        _frame_png, _frame_no = png, _emulator.frame_count
+    _publish({"type": "screenshot", "frame": _frame_no,
+              "data": {"image": base64.b64encode(png).decode("ascii"),
+                       "format": "png"}})
+
+
+def _emulator_worker() -> None:
+    """Sole owner of the emulator. Nothing else may call into PyBoy."""
+    global _emulator, _reader
+    logger.info("emulator worker started")
+    period = 1.0 / TARGET_FPS
+    publish_period = 1.0 / PUBLISH_HZ
+    next_due = time.perf_counter()
+    next_publish = time.perf_counter()
+
+    while not _emu_stop.is_set():
+        # Commands first — boot, load_state, button presses.
         try:
-            # Check for commands
-            try:
-                cmd, args = _emu_queue.get(timeout=0.01)
-                if cmd == "press":
-                    _emulator.press(*args)
-                elif cmd == "tick":
-                    _emulator.tick(*args)
-                elif cmd == "load_state":
-                    _emulator.load_state(*args)
-                elif cmd == "save_state":
-                    _emulator.save_state(*args)
-            except queue.Empty:
-                _emulator.tick(1)
-        except Exception as e:
-            logger.error(f"Emulator worker error: {e}")
-            time.sleep(1)
+            _dispatch(_emu_cmds.get(timeout=0.05))
+            while True:
+                try:
+                    _dispatch(_emu_cmds.get_nowait())
+                except queue.Empty:
+                    break
+        except queue.Empty:
+            pass
+
+        if _emulator is None or _emu_state != "ready":
+            next_due = time.perf_counter()
+            next_publish = time.perf_counter()
+            continue
+
+        now = time.perf_counter()
+        if now < next_due:
+            continue
+        due = min(int((now - next_due) / period) + 1, MAX_CATCHUP)
+        try:
+            _emulator.tick(due)
+        except Exception as exc:
+            _fail(f"tick failed: {type(exc).__name__}: {exc}")
+            continue
+        next_due += due * period
+        if next_due < now - 0.25:      # fell behind badly; resync
+            next_due = now
+
+        # Publish frame at PUBLISH_HZ regardless of agent running
+        if now >= next_publish:
+            _publish_frame()
+            next_publish = now + publish_period
+
+    if _emulator is not None:
+        try:
+            _emulator.close()
+        finally:
+            _emulator = None
+            _reader = None
+    logger.info("emulator worker stopped")
+
+
+def _boot(_unused, rom_path: str, state_path: Optional[str]) -> dict:
+    """Construct + load the emulator. Runs on the owner thread."""
+    global _emulator, _reader, _emu_state, _emu_error
+    from pokemon_agent.emulator import create_emulator
+    if _emulator is not None:          # wedged instance from a failed boot
+        try:
+            _emulator.close()
+        except Exception:
+            pass
+        _emulator = None
+    _emu_state, _emu_error = "booting", None
+    _emit_status()
+    try:
+        emu = create_emulator(rom_path)
+        if _config.game_type == "red":
+            from pokemon_agent.memory.red import PokemonRedReader
+            _reader = PokemonRedReader(emu)
+        else:
+            from pokemon_agent.memory.firered import FireRedMemoryReader
+            _reader = FireRedMemoryReader(emu)
+        if state_path:
+            emu.load_state(state_path)
+        emu.tick(60)
+        _emulator = emu
+        _emu_state = "ready"
+        _emit_status()
+        _publish_frame()  # first frame lands immediately
+        return {"state": _emu_state, "frame": emu.frame_count}
+    except Exception as exc:
+        _fail(f"boot failed: {type(exc).__name__}: {exc}")
+        raise
+
+
+def _start_emulator_thread() -> None:
+    global _emu_thread
+    if _emu_thread is not None and _emu_thread.is_alive():
+        return
+    _emu_stop.clear()
+    _emu_thread = threading.Thread(target=_emulator_worker, name="emu", daemon=True)
+    _emu_thread.start()
 
 
 def configure(config: GameConfig):
@@ -383,10 +560,8 @@ async def _startup():
         logger.warning("Call server.configure(GameConfig(...)) before startup.")
         return
 
-    # Start the emulator in a dedicated thread
-    # (Moved to deferred start until a game is selected/loaded)
-    # _emu_thread = threading.Thread(target=_emulator_worker, daemon=True)
-    # _emu_thread.start()
+    # Start the emulator thread
+    _start_emulator_thread()
 
     # Create data directories
     data_dir = Path(_config.data_dir).expanduser().resolve()
@@ -411,21 +586,16 @@ async def _startup():
         logger.warning("Dashboard not installed — /dashboard unavailable")
         logger.warning("Install with: pip install pokemon-agent[dashboard]")
 
-    # Auto-load a save state if specified
+    # Auto-load a save state if specified — ARM ONLY, don't boot yet
     if _config.load_state:
         saves_dir = data_dir / "saves"
         state_path = saves_dir / f"{_config.load_state}.state"
         if state_path.exists():
-            try:
-                # We need the emulator thread to be running to load the state.
-                # If we are autoloading, we must start it now.
-                _start_emulator_thread()
-                _emu_queue.put(("load_state", [str(state_path)]))
-                logger.info(f"Loaded save state: {_config.load_state}")
-            except Exception as e:
-                logger.warning(f"Failed to load state '{_config.load_state}': {e}")
+            global _pending_state
+            _pending_state = str(state_path)
+            logger.info("Armed save state (press START to boot): %s", _config.load_state)
         else:
-            logger.warning(f"Save state not found: {state_path}")
+            logger.warning("Save state not found: %s", state_path)
 
     logger.info(f"Ready — listening on port {_config.port}")
     logger.info("Endpoints: /, /state, /screenshot, /action, /save, /load, /saves, /minimap, /health, /ws")
@@ -434,21 +604,18 @@ async def _startup():
 @app.on_event("shutdown")
 def _shutdown():
     """Cleanup emulator on server shutdown."""
-    global _emulator
+    global _emulator, _emu_thread, _emu_stop
+    _emu_stop.set()
+    if _emu_thread and _emu_thread.is_alive():
+        _emu_thread.join(timeout=2.0)
     if _emulator:
         logger.info("Shutting down emulator...")
-        _emulator.close()
+        try:
+            _emulator.close()
+        except Exception:
+            pass
         _emulator = None
     logger.info("Server shutdown complete.")
-
-
-def _start_emulator_thread():
-    """Helper to start the emulator thread if not already running."""
-    global _emu_thread
-    if _emu_thread is None:
-        _emu_thread = threading.Thread(target=_emulator_worker, daemon=True)
-        _emu_thread.start()
-        logger.info("Emulator worker thread started.")
 
 
 # ---------------------------------------------------------------------------
@@ -465,19 +632,20 @@ async def index():
         "rom": _config.rom_path if _config else None,
         "uptime_seconds": round(time.time() - _start_time, 1) if _start_time else 0,
         "emulator_ready": _emulator is not None,
+        **_emu_status(),
     }
 
 
 @app.get("/health")
 async def health():
     """Health check."""
-    return {"status": "ok", "emulator_ready": _emulator is not None}
+    return {"status": "ok", "emulator_ready": _emulator is not None, **_emu_status()}
 
 
 @app.get("/state")
 async def get_state():
     """Full game state JSON."""
-    state = await _run_sync(_get_state_dict)
+    state = await emu_call(_state_dict)
     return JSONResponse(content=state)
 
 
@@ -493,15 +661,15 @@ async def screenshot_grid(scale: int = 4):
     try:
         from pokemon_agent.overlay import render_grid_overlay_bytes
 
-        def _grid_png() -> bytes:
-            screen = _emulator.get_screen()
+        def _grid_png(emu) -> bytes:
+            screen = emu.get_screen()
             from PIL import Image
             if not isinstance(screen, Image.Image):
                 import numpy as np  # noqa: F401
                 screen = Image.fromarray(screen)
             return render_grid_overlay_bytes(screen, scale=scale)
 
-        png_bytes = await _run_sync(_grid_png)
+        png_bytes = await emu_call(_grid_png)
         return Response(content=png_bytes, media_type="image/png")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Grid screenshot error: {e}")
@@ -509,25 +677,27 @@ async def screenshot_grid(scale: int = 4):
 
 @app.get("/screenshot")
 async def screenshot():
-    """Current emulator frame as PNG image."""
-    _ensure_emulator()
-    try:
-        png_bytes = await _run_sync(_get_screenshot_bytes)
-        return Response(content=png_bytes, media_type="image/png")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Screenshot error: {e}")
+    """Current emulator frame as PNG image (served from cache)."""
+    with _frame_lock:
+        png = _frame_png
+    if png is None:
+        raise HTTPException(status_code=503,
+                            detail=f"No frame yet ({_emu_state})")
+    return Response(content=png, media_type="image/png",
+                    headers={"Cache-Control": "no-store",
+                             "X-Frame-Number": str(_frame_no)})
 
 
 @app.get("/screenshot/base64")
 async def screenshot_base64():
-    """Current emulator frame as base64-encoded PNG in JSON."""
-    _ensure_emulator()
-    try:
-        png_bytes = await _run_sync(_get_screenshot_bytes)
-        b64 = base64.b64encode(png_bytes).decode("ascii")
-        return {"image": b64, "format": "png"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Screenshot error: {e}")
+    """Current emulator frame as base64-encoded PNG in JSON (served from cache)."""
+    with _frame_lock:
+        png = _frame_png
+    if png is None:
+        raise HTTPException(status_code=503,
+                            detail=f"No frame yet ({_emu_state})")
+    b64 = base64.b64encode(png).decode("ascii")
+    return {"image": b64, "format": "png", "frame": _frame_no}
 
 
 @app.post("/event")
@@ -592,20 +762,22 @@ async def set_control(req: ControlRequest):
     while the state is "running". This endpoint is the wiring behind the
     dashboard's control buttons; it does not itself drive the emulator.
     """
-    global _control_state, _emulator
-    
-    # If starting, signal the emulator worker to initialize if not already
-    if req.state == "running" and _emulator is None:
-        logger.info("Signaling emulator worker to start.")
-        _start_emulator_thread()
-        _emu_queue.put(("start", []))
-
+    global _control_state, _pending_state
     valid = {"running", "paused", "stopped"}
     if req.state not in valid:
-        raise HTTPException(status_code=400, detail=f"state must be one of {sorted(valid)}")
+        raise HTTPException(status_code=400,
+                            detail=f"state must be one of {sorted(valid)}")
+
+    if req.state == "running" and _emu_state in ("idle", "error"):
+        if _active_session is None:
+            raise HTTPException(status_code=409,
+                                detail="No active game — create or load one first")
+        _start_emulator_thread()
+        await emu_call(_boot, _config.rom_path, _pending_state, timeout=120)
+
     _control_state = req.state
     await broadcast({"type": "control", "state": _control_state})
-    return {"success": True, "state": _control_state}
+    return {"success": True, "state": _control_state, **_emu_status()}
 
 
 # ---------------------------------------------------------------------------
@@ -623,16 +795,10 @@ def _game_summary() -> dict:
 
 async def _activate(gs) -> None:
     """Make `gs` the active session: sync objectives, broadcast, persist."""
-    global _active_session, _objectives, _emu_thread
+    global _active_session, _objectives
     _active_session = gs
     _objectives = gs.objectives or _objectives
     _session_mgr.save(gs)
-
-    # Lazy-start emulator thread if not already running
-    if _emu_thread is None:
-        _emu_thread = threading.Thread(target=_emulator_worker, daemon=True)
-        _emu_thread.start()
-        logger.info("Emulator worker thread started (lazy-init)")
 
     await broadcast({"type": "objectives", "objectives": _objectives})
     await broadcast({"type": "game", **_game_summary()})
@@ -661,12 +827,14 @@ async def new_game(req: NewGameRequest):
     new GameSession (new Hermes brain — hermes_session_id starts null and is
     bound on the autopilot's first turn).
     """
+    global _pending_state
     if _session_mgr is None or _config is None:
         raise HTTPException(status_code=503, detail="Server not ready")
 
     gs = _session_mgr.create(name=req.name, game=_config.game_type)
+    _pending_state = None
     await _activate(gs)
-    
+
     await broadcast({"type": "control", "state": _control_state})
     return {"success": True, "game": gs.to_dict()}
 
@@ -676,32 +844,20 @@ async def load_game(sid: str):
     """Load an existing game session: restore its latest save-state and make
     it active (its Hermes session id is restored too, so the autopilot resumes
     the SAME brain). If the session has no save yet, just activate it."""
-    
-    # We signal the emulator worker to initialize and load the state
-    global _emulator
-    if _emulator is None:
-        logger.info("Signaling emulator worker to load state.")
-        _start_emulator_thread()
-        latest = _session_mgr.latest_save_path(sid)
-        if latest is not None:
-            _emu_queue.put(("load_state", [str(latest)]))
-        else:
-            _emu_queue.put(("start", []))
-
-    if _session_mgr is None:
-        raise HTTPException(status_code=503, detail="Session manager not ready")
+    global _pending_state
+    if _session_mgr is None or _config is None:
+        raise HTTPException(status_code=503, detail="Server not ready")
     gs = _session_mgr.load(sid)
     if gs is None:
         raise HTTPException(status_code=404, detail=f"Game session not found: {sid}")
-    
+
+    latest = _session_mgr.latest_save_path(sid)
+    _pending_state = str(latest) if latest else None
     await _activate(gs)
-    
-    # Trigger an async check to update the client with state once init happens
-    # (Simplified: emulator is now managed by the background worker)
-    await broadcast({"type": "state_update", "reason": "load_game", "state": {"status": "loading"}})
-    
+    _emit_status()
     return {"success": True, "game": gs.to_dict(),
-            "restored_save": latest.stem if latest else None}
+            "restored_save": latest.stem if latest else None,
+            "armed": True, "note": "press START to boot"}
 
 
 @app.post("/games/{sid}/hermes")
@@ -740,10 +896,10 @@ async def execute_actions(req: ActionRequest):
     try:
         executed = 0
         for action_str in req.actions:
-            await _execute_action(action_str)
+            await emu_call(_do_action, action_str)
             executed += 1
 
-        state_after = await _run_sync(_get_state_dict)
+        state_after = await emu_call(_state_dict)
 
         # Bump per-session stats.
         if _active_session is not None and _session_mgr is not None:
@@ -753,7 +909,7 @@ async def execute_actions(req: ActionRequest):
             _session_mgr.save(_active_session)
 
         try:
-            png_bytes = await _run_sync(_get_screenshot_bytes)
+            png_bytes = await emu_call(_screenshot_bytes)
             screenshot_b64 = base64.b64encode(png_bytes).decode("ascii")
         except Exception:
             screenshot_b64 = None
@@ -790,68 +946,40 @@ async def save_state(req: SaveRequest):
     _ensure_emulator()
     if not _config:
         raise HTTPException(status_code=503, detail="Server not configured")
-    try:
-        if _active_session is not None and _session_mgr is not None:
-            saves_dir = _session_mgr.saves_dir(_active_session.id)
-        else:
-            saves_dir = Path(_config.data_dir).expanduser().resolve() / "saves"
-            saves_dir.mkdir(parents=True, exist_ok=True)
-        save_path = saves_dir / f"{req.name}.state"
-        await _run_sync(_emulator.save_state, str(save_path))
-        if _active_session is not None and _session_mgr is not None:
-            _active_session.stats["saves"] = _active_session.stats.get("saves", 0) + 1
-            _session_mgr.save(_active_session)
-        return {"success": True, "path": str(save_path),
-                "session": _active_session.id if _active_session else None}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Save error: {e}")
+    path = _saves_dir() / f"{req.name}.state"
+    await emu_call(lambda e, p=str(path): e.save_state(p))
+    if _active_session is not None and _session_mgr is not None:
+        _active_session.stats["saves"] = _active_session.stats.get("saves", 0) + 1
+        await asyncio.to_thread(_session_mgr.save, _active_session)
+        await asyncio.to_thread(_session_mgr.prune_saves, _active_session.id, 20)
+    return {"success": True, "path": str(path), "name": req.name,
+            "session": _active_session.id if _active_session else None}
 
 
 @app.post("/load")
 async def load_state(req: SaveRequest):
-    """Load emulator state from disk."""
-    _ensure_emulator()
-    if not _config:
-        raise HTTPException(status_code=503, detail="Server not configured")
-    try:
-        saves_dir = Path(_config.data_dir).expanduser().resolve() / "saves"
-        save_path = saves_dir / f"{req.name}.state"
-        if not save_path.exists():
-            raise HTTPException(status_code=404, detail=f"Save not found: {req.name}")
-        await _run_sync(_emulator.load_state, str(save_path))
-        state_after = await _run_sync(_get_state_dict)
-
+    @app.post("/load")
+    async def load_state(req: SaveRequest):
+        if not _config:
+            raise HTTPException(status_code=503, detail="Server not configured")
+        path = _resolve_save(req.name)
+        await emu_call(lambda e, p=str(path): e.load_state(p))
+        state_after = await emu_call(_state_dict)
         await broadcast({"type": "state_update", "reason": "load", "state": state_after})
-
         return {"success": True, "name": req.name, "state_after": state_after}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Load error: {e}")
 
 
 @app.get("/saves")
 async def list_saves():
-    """List available save-state files."""
     if not _config:
         raise HTTPException(status_code=503, detail="Server not configured")
-    try:
-        saves_dir = Path(_config.data_dir).expanduser().resolve() / "saves"
-        if not saves_dir.exists():
-            return {"saves": []}
-        files = sorted(saves_dir.glob("*.state"))
-        saves = [
-            {
-                "name": f.stem,
-                "file": f.name,
-                "size_bytes": f.stat().st_size,
-                "modified": f.stat().st_mtime,
-            }
-            for f in files
-        ]
-        return {"saves": saves}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error listing saves: {e}")
+    d = _saves_dir()
+    files = sorted(d.glob("*.state"), key=lambda f: f.stat().st_mtime, reverse=True)
+    return {"dir": str(d),
+            "session": _active_session.id if _active_session else None,
+            "saves": [{"name": f.stem, "file": f.name,
+                       "size_bytes": f.stat().st_size,
+                       "modified": f.stat().st_mtime} for f in files]}
 
 
 @app.get("/map/ascii")
@@ -863,10 +991,10 @@ async def map_ascii():
     """
     _ensure_emulator()
     try:
-        def _ascii() -> str:
+        def _ascii(emu) -> str:
             from pokemon_agent.collision import build_collision_grid, render_ascii_map
-            return render_ascii_map(build_collision_grid(_reader.emu), legend=True)
-        text = await _run_sync(_ascii)
+            return render_ascii_map(build_collision_grid(emu), legend=True)
+        text = await emu_call(_ascii)
         return Response(content=text, media_type="text/plain")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"ASCII map error: {e}")
@@ -877,7 +1005,7 @@ async def minimap():
     """Simple ASCII minimap — current map name + player position."""
     _ensure_emulator()
     try:
-        state = await _run_sync(_get_state_dict)
+        state = await emu_call(_state_dict)
         map_info = state.get("map", {})
         player = state.get("player", {})
         map_name = map_info.get("map_name", "Unknown")
@@ -906,8 +1034,15 @@ async def minimap():
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
     """Live event stream via WebSocket."""
+    global _screenshot_task
+    
     await ws.accept()
     _ws_clients.add(ws)
+    
+    # Start screenshot broadcast task on first client
+    if len(_ws_clients) == 1 and _screenshot_task is None:
+        _screenshot_task = asyncio.create_task(_screenshot_broadcast_task())
+    
     try:
         # Send a welcome message
         await ws.send_json({
@@ -915,6 +1050,8 @@ async def websocket_endpoint(ws: WebSocket):
             "version": __version__,
             "emulator_ready": _emulator is not None,
         })
+        # Also send current emulator status so dashboard shows correct state immediately
+        await ws.send_json({"type": "emulator", **_emu_status()})
         # Backfill: replay recent narration/milestone/action events so the
         # Field Log is populated immediately instead of starting empty.
         if _event_history:
@@ -938,6 +1075,10 @@ async def websocket_endpoint(ws: WebSocket):
         pass
     finally:
         _ws_clients.discard(ws)
+        # Stop screenshot broadcast task when last client disconnects
+        if len(_ws_clients) == 0 and _screenshot_task is not None:
+            _screenshot_task.cancel()
+            _screenshot_task = None
 
 
 # ---------------------------------------------------------------------------

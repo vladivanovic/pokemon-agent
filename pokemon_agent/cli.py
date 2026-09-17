@@ -19,7 +19,7 @@ BANNER = r"""
  |  _ \ ___ | | _____ _ __ ___   ___  _ __ / \   __ _  ___ _ __ | |_
  | |_) / _ \| |/ / _ \ '_ ` _ \ / _ \| '_ / _ \ / _` |/ _ \ '_ \| __|
  |  __/ (_) |   <  __/ | | | | | (_) | | / ___ \ (_| |  __/ | | | |_
- |_|   \___/|_|\_\___|_| |_| |_|\___/|_|/_/   \_\__, |\___|_| |_|\__|
+ |_|   \___/|_|\_\___|_| |_| |_|\___/|_|/_/   \_\__, |___|_| |_|\__|
                                                   |___/  v{version}
 """
 
@@ -98,6 +98,19 @@ def cmd_play(args):
     run_autopilot(server=server, model=args.model, turn_delay=args.turn_delay)
 
 
+def cmd_play_api(args):
+    """Run the autopilot using Hermes AIAgent API instead of subprocess."""
+    from pokemon_agent.hermes_api_driver import APIDriver
+    server = f"http://{args.host}:{args.port}"
+    driver = APIDriver(
+        server=server,
+        model=args.model,
+        provider=args.provider,
+        turn_delay=args.turn_delay,
+    )
+    driver.run()
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="pokemon-agent",
@@ -131,7 +144,7 @@ def main():
     info_p.add_argument("--rom", required=True, help="Path to Pokemon ROM file")
 
     # --- play (autopilot) ---
-    play_p = sub.add_parser("play", help="Run the LLM autopilot against a running server")
+    play_p = sub.add_parser("play", help="Run the LLM autopilot against a running server (subprocess CLI)")
     play_p.add_argument("--host", default="localhost", help="Server host (default: localhost)")
     play_p.add_argument("--port", type=int, default=8765, help="Server port (default: 8765)")
     play_p.add_argument("--model", default=None,
@@ -139,6 +152,18 @@ def main():
     play_p.add_argument("--turn-delay", type=float, default=1.5,
                         help="Seconds between turns (default: 1.5)")
     play_p.add_argument("--debug", action="store_true", help="Enable debug logging")
+
+    # --- play-api (Hermes AIAgent direct) ---
+    play_api_p = sub.add_parser("play-api", help="Run the LLM autopilot using Hermes AIAgent API (direct, faster)")
+    play_api_p.add_argument("--host", default="localhost", help="Server host (default: localhost)")
+    play_api_p.add_argument("--port", type=int, default=8765, help="Server port (default: 8765)")
+    play_api_p.add_argument("--model", default=None,
+                        help="LLM model (default: nvidia/nemotron-3-ultra-550b-a55b)")
+    play_api_p.add_argument("--provider", default=None,
+                        help="LLM provider (default: nvidia)")
+    play_api_p.add_argument("--turn-delay", type=float, default=1.5,
+                        help="Seconds between turns (default: 1.5)")
+    play_api_p.add_argument("--debug", action="store_true", help="Enable debug logging")
 
     args = parser.parse_args()
 
@@ -148,6 +173,8 @@ def main():
         cmd_info(args)
     elif args.command == "play":
         cmd_play(args)
+    elif args.command == "play-api":
+        cmd_play_api(args)
     else:
         parser.print_help()
         sys.exit(1)
