@@ -29,14 +29,13 @@ from PIL import Image, ImageDraw, ImageFont
 
 # --- Geometry -------------------------------------------------------------
 
-GB_W, GB_H = 160, 144
-BLOCK = 16                      # world block size in GB pixels
-COLS = GB_W // BLOCK            # 10
-ROWS = GB_H // BLOCK            # 9
-PLAYER_COL = 4                  # on-screen block the player is locked to (E)
-PLAYER_ROW = 4                  # (row 5, 1-indexed)
+from pokemon_agent.collision import (
+    BLOCK_COLS as COLS, BLOCK_ROWS as ROWS, BLOCK_PX as BLOCK,
+    PLAYER_COL, PLAYER_ROW, PLAYER_PX_X, PLAYER_PX_Y, cell_label,
+)
+from functools import lru_cache
 
-COL_LABELS = "ABCDEFGHIJ"       # 10 columns
+GB_W, GB_H = 160, 144
 
 # DMG-flavoured overlay colours (RGBA)
 GRID_LINE = (139, 172, 15, 150)        # #8BAC0F semi-transparent
@@ -53,19 +52,22 @@ def cell_label(col: int, row: int) -> str:
     return f"{COL_LABELS[col]}{row + 1}"
 
 
+@lru_cache(maxsize=8)
 def _load_font(size: int):
     """Try a few common monospace/bitmap fonts, fall back to PIL default."""
-    candidates = [
+    for path in (
         "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationMono-Bold.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-    ]
-    for path in candidates:
+        r"C:\Windows\Fonts\consolab.ttf",
+    ):
         try:
             return ImageFont.truetype(path, size)
         except OSError:
             continue
-    return ImageFont.load_default()
+    try:
+        return ImageFont.load_default(size=size)   # Pillow >= 10.1
+    except TypeError:
+        return ImageFont.load_default()
 
 
 def render_grid_overlay(
@@ -109,6 +111,8 @@ def render_grid_overlay(
     cell = BLOCK * scale
     font = _load_font(max(10, cell // 3))
 
+    y_off = (PLAYER_PX_Y - PLAYER_ROW * BLOCK) * scale   # 8 * scale 
+
     # Walkability wash (under the grid lines / labels)
     if walkable is not None:
         for r in range(min(ROWS, len(walkable))):
@@ -116,15 +120,15 @@ def render_grid_overlay(
                 if r == PLAYER_ROW and c == PLAYER_COL:
                     continue
                 wash = WALK_WASH if walkable[r][c] else BLOCK_WASH
-                x0, y0 = c * cell, r * cell
-                draw.rectangle([x0, y0, x0 + cell - 1, y0 + cell - 1], fill=wash)
+                x0, y0 = c * cell, r * cell + y_off
+                draw.rectangle([x0, y0, x0 + cell - 1, min(y0 + cell - 1, big.height - 1)], fill=wash)
 
     # Player box (over the wash, under nothing important)
     if mark_player:
         x0 = PLAYER_COL * cell
-        y0 = PLAYER_ROW * cell
+        y0 = PLAYER_ROW * cell + y_off
         draw.rectangle(
-            [x0, y0, x0 + cell - 1, y0 + cell - 1],
+            [x0, y0, x0 + cell - 1, min(y0 + cell - 1, big.height - 1)],
             outline=PLAYER_BOX,
             width=max(2, scale),
         )
@@ -133,8 +137,8 @@ def render_grid_overlay(
     for c in range(COLS + 1):
         x = c * cell
         draw.line([(x, 0), (x, big.height)], fill=GRID_LINE, width=1)
-    for r in range(ROWS + 1):
-        y = r * cell
+    for r in range(ROWS + 2):
+        y = r * cell + y_off
         draw.line([(0, y), (big.width, y)], fill=GRID_LINE, width=1)
 
     # Labels in each cell's top-left corner
@@ -143,7 +147,7 @@ def render_grid_overlay(
             for c in range(COLS):
                 label = cell_label(c, r)
                 lx = c * cell + 2
-                ly = r * cell + 1
+                ly = r * cell + 1 + y_off
                 # tiny dark plate behind the text for contrast over busy art
                 tb = draw.textbbox((lx, ly), label, font=font)
                 draw.rectangle(

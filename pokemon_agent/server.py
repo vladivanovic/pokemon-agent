@@ -20,10 +20,12 @@ from functools import partial
 from pathlib import Path
 from typing import Callable, Optional, Set
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Path as PathParam
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
+
+SID_PATTERN = r"^[0-9]{8}_[0-9]{6}_[0-9a-f]{6}$"
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -42,6 +44,7 @@ class GameConfig(BaseModel):
     port: int = 8765
     data_dir: str = "~/.pokemon-agent"
     load_state: Optional[str] = None  # Save-state name to auto-load on startup
+    no_dashboard: bool = False
 
 
 class ActionRequest(BaseModel):
@@ -164,7 +167,7 @@ app = FastAPI(
 # CORS — allow everything for local dev
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -182,7 +185,7 @@ def _detect_game_type(rom_path: str) -> str:
         return "red"
     elif ext == ".gba":
         return "firered"
-    raise ValueError(f"Unrecognised ROM extension: {ext}")
+    return "unknown"
 
 
 def _ensure_emulator():
@@ -311,7 +314,16 @@ def _get_state_dict() -> dict:
                 and not (state.get("battle") or {}).get("in_battle")
                 and not dlg.get("input_locked")):
             from pokemon_agent.collision import build_collision_grid, render_ascii_map
-            col = build_collision_grid(_reader.emu)
+            from pokemon_agent.memory.red import MAP_NAMES
+            player = state.get("player") or {}
+            col = build_collision_grid(
+                _reader.emu,
+                facing=player.get("facing"),
+                player_pos=player.get("position"))
+            
+            for w in col.get("warps", []):
+                w["dest_map_name"] = MAP_NAMES.get(w["dest_map"], f"Map {w['dest_map']}")
+
             col["ascii"] = render_ascii_map(col, legend=True)
             state["collision"] = col
         else:
@@ -573,18 +585,19 @@ async def _startup():
     _session_mgr = GameSessionManager(str(data_dir))
 
     # Try mounting dashboard
-    try:
-        import pokemon_agent.dashboard as dashboard_mod  # noqa: F401
-        from fastapi.staticfiles import StaticFiles
-        dash_dir = Path(dashboard_mod.__file__).parent / "static"
-        if dash_dir.is_dir():
-            app.mount("/dashboard", StaticFiles(directory=str(dash_dir), html=True), name="dashboard")
-            logger.info("Dashboard mounted at /dashboard")
-        else:
-            logger.warning("Dashboard module found but no static/ directory")
-    except ImportError:
-        logger.warning("Dashboard not installed — /dashboard unavailable")
-        logger.warning("Install with: pip install pokemon-agent[dashboard]")
+    if not _config.no_dashboard:
+        try:
+            import pokemon_agent.dashboard as dashboard_mod  # noqa: F401
+            from fastapi.staticfiles import StaticFiles
+            dash_dir = Path(dashboard_mod.__file__).parent / "static"
+            if dash_dir.is_dir():
+                app.mount("/dashboard", StaticFiles(directory=str(dash_dir), html=True), name="dashboard")
+                logger.info("Dashboard mounted at /dashboard")
+            else:
+                logger.warning("Dashboard module found but no static/ directory")
+        except ImportError:
+            logger.warning("Dashboard not installed — /dashboard unavailable")
+            logger.warning("Install with: pip install pokemon-agent[dashboard]")
 
     # Auto-load a save state if specified — ARM ONLY, don't boot yet
     if _config.load_state:
@@ -660,14 +673,22 @@ async def screenshot_grid(scale: int = 4):
     _ensure_emulator()
     try:
         from pokemon_agent.overlay import render_grid_overlay_bytes
+        from pokemon_agent.collision import build_collision_grid
 
         def _grid_png(emu) -> bytes:
+            player = (_get_state_dict().get("player") or {})
+            col = build_collision_grid(
+                emu,
+                facing=player.get("facing"),
+                player_pos=player.get("position"))
+            walkable = col["walkable"] if col.get("valid") else None
+            
             screen = emu.get_screen()
             from PIL import Image
             if not isinstance(screen, Image.Image):
                 import numpy as np  # noqa: F401
                 screen = Image.fromarray(screen)
-            return render_grid_overlay_bytes(screen, scale=scale)
+            return render_grid_overlay_bytes(screen, scale=scale, walkable=walkable)
 
         png_bytes = await emu_call(_grid_png)
         return Response(content=png_bytes, media_type="image/png")
@@ -840,7 +861,7 @@ async def new_game(req: NewGameRequest):
 
 
 @app.post("/games/{sid}/load")
-async def load_game(sid: str):
+async def load_game(sid: str = PathParam(..., pattern=SID_PATTERN)):
     """Load an existing game session: restore its latest save-state and make
     it active (its Hermes session id is restored too, so the autopilot resumes
     the SAME brain). If the session has no save yet, just activate it."""
@@ -861,7 +882,7 @@ async def load_game(sid: str):
 
 
 @app.post("/games/{sid}/hermes")
-async def bind_hermes(sid: str, req: HermesSessionRequest):
+async def bind_hermes(sid: str = PathParam(..., pattern=SID_PATTERN), req: HermesSessionRequest = None):
     """Bind/refresh the Hermes session id for a game (autopilot calls this on
     its first turn so the run's brain memory is persisted in the manifest)."""
     if _session_mgr is None:
@@ -877,7 +898,7 @@ async def bind_hermes(sid: str, req: HermesSessionRequest):
 
 
 @app.delete("/games/{sid}")
-async def delete_game(sid: str):
+async def delete_game(sid: str = PathParam(..., pattern=SID_PATTERN)):
     """Delete a game session and its saves (cannot delete the active one)."""
     if _session_mgr is None:
         raise HTTPException(status_code=503, detail="Session manager not ready")
@@ -958,15 +979,13 @@ async def save_state(req: SaveRequest):
 
 @app.post("/load")
 async def load_state(req: SaveRequest):
-    @app.post("/load")
-    async def load_state(req: SaveRequest):
-        if not _config:
-            raise HTTPException(status_code=503, detail="Server not configured")
-        path = _resolve_save(req.name)
-        await emu_call(lambda e, p=str(path): e.load_state(p))
-        state_after = await emu_call(_state_dict)
-        await broadcast({"type": "state_update", "reason": "load", "state": state_after})
-        return {"success": True, "name": req.name, "state_after": state_after}
+    if not _config:
+        raise HTTPException(status_code=503, detail="Server not configured")
+    path = _resolve_save(req.name)
+    await emu_call(lambda e, p=str(path): e.load_state(p))
+    state_after = await emu_call(_state_dict)
+    await broadcast({"type": "state_update", "reason": "load", "state": state_after})
+    return {"success": True, "name": req.name, "state_after": state_after}
 
 
 @app.get("/saves")
