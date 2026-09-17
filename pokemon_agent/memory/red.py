@@ -685,25 +685,37 @@ class RedBlueMemoryReader(GameMemoryReader):
         }
 
     def read_context(self) -> Dict[str, Any]:
-        """Coarse game phase, so consumers can reject garbage pre-game RAM.
-
-        Before the player names their character, wPlayerName is unset and
-        party/map RAM is uninitialised. Without this, every downstream
-        consumer treats boot-time noise as real state.
-        """
-        first = self.emu.read_u8(ADDR_PLAYER_NAME_0)
+        """Coarse game phase. Deliberately conservative: the intro writes to
+        wPlayerName at the name-entry screen, so a set name alone is not
+        evidence that gameplay RAM is initialised."""
+        raw = self.emu.read_range(ADDR_PLAYER_NAME, 11)
         party = self.emu.read_u8(ADDR_PARTY_COUNT)
         map_id = self.emu.read_u8(ADDR_MAP_ID)
-        named = first not in (0x00, 0x50, 0xFF)
-        sane = party <= 6 and map_id in MAP_NAMES
-        if not named:
+        y = self.emu.read_u8(ADDR_MAP_Y)
+        x = self.emu.read_u8(ADDR_MAP_X)
+
+        term = next((i for i, b in enumerate(raw) if b == 0x50), -1)
+        name_ok = term > 0 and all(b in GEN1_ENCODING for b in raw[:term])
+
+        reasons = []
+        if not name_ok:
+            reasons.append("name_unset")
+        if party > 6:
+            reasons.append("party_count_insane")
+        if map_id not in MAP_NAMES:
+            reasons.append("map_unknown")
+        if x == 0 and y == 0:
+            reasons.append("position_uninitialised")
+
+        if not name_ok:
             phase = "title_screen"
-        elif not sane:
-            phase = "transition"
+        elif reasons:
+            phase = "intro_or_transition"
         else:
             phase = "in_game"
         return {"phase": phase, "in_game": phase == "in_game",
-                "name_set": named, "ram_sane": sane}
+                "name_set": name_ok, "reasons": reasons,
+                "raw": {"party": party, "map_id": map_id, "x": x, "y": y}}
 
     def read_party(self) -> List[Dict[str, Any]]:
         """Read the player's party (up to 6 Pokemon)."""

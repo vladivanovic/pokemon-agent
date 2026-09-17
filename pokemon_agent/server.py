@@ -480,28 +480,29 @@ def _emulator_worker() -> None:
         except queue.Empty:
             pass
 
-        if _emulator is None or _emu_state != "ready":
-            next_due = time.perf_counter()
-            next_publish = time.perf_counter()
-            continue
-
+        running = (_emulator is not None and _emu_state == "ready"
+                   and _control_state == "running")
         now = time.perf_counter()
-        if now < next_due:
-            continue
-        due = min(int((now - next_due) / period) + 1, MAX_CATCHUP)
-        try:
-            _emulator.tick(due)
-        except Exception as exc:
-            _fail(f"tick failed: {type(exc).__name__}: {exc}")
-            continue
-        next_due += due * period
-        if next_due < now - 0.25:      # fell behind badly; resync
+        
+        if not running:
             next_due = now
+        else:
+            if now < next_due:
+                continue
+            due = min(int((now - next_due) / period) + 1, MAX_CATCHUP)
+            try:
+                _emulator.tick(due, render_last=False)
+            except Exception as exc:
+                _fail(f"tick failed: {type(exc).__name__}: {exc}")
+                continue
+            next_due += due * period
+            if next_due < now - 0.25:
+                next_due = now
 
         # Publish frame at PUBLISH_HZ regardless of agent running
-        if now >= next_publish:
+        if _emulator is not None and _emu_state == "ready" and now >= next_publish:
             _publish_frame()
-            next_publish = now + publish_period
+            next_publish = now + (1.0 / PUBLISH_HZ if running else 1.0)
 
     if _emulator is not None:
         try:
@@ -675,25 +676,42 @@ async def screenshot_grid(scale: int = 4):
         from pokemon_agent.overlay import render_grid_overlay_bytes
         from pokemon_agent.collision import build_collision_grid
 
-        def _grid_png(emu) -> bytes:
-            player = (_get_state_dict().get("player") or {})
-            col = build_collision_grid(
-                emu,
-                facing=player.get("facing"),
-                player_pos=player.get("position"))
-            walkable = col["walkable"] if col.get("valid") else None
-            
-            screen = emu.get_screen()
-            from PIL import Image
-            if not isinstance(screen, Image.Image):
-                import numpy as np  # noqa: F401
-                screen = Image.fromarray(screen)
-            return render_grid_overlay_bytes(screen, scale=scale, walkable=walkable)
+def _grid_png(emu, scale: int) -> bytes:
+    from pokemon_agent.collision import build_collision_grid
+    from pokemon_agent.overlay import render_grid_overlay_bytes
+    emu.tick(1, render_last=True)      # worker ticks unrendered; refresh first
+    walkable = None
+    try:
+        player = _reader.read_player() or {}
+        col = build_collision_grid(emu, facing=player.get("facing"),
+                                   player_pos=player.get("position"))
+        if col.get("valid"):
+            walkable = col["walkable"]
+    except Exception:
+        logger.debug("collision unavailable for overlay", exc_info=True)
+    return render_grid_overlay_bytes(emu.get_screen(), scale=scale, walkable=walkable)
 
-        png_bytes = await emu_call(_grid_png)
-        return Response(content=png_bytes, media_type="image/png")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Grid screenshot error: {e}")
+
+@app.get("/screenshot/grid")
+async def screenshot_grid(scale: int = 4):
+    """Current frame with a labelled A1..J9 movement grid drawn on top.
+
+    The grid divides the 160x144 screen into the game's 10x9 walkable
+    block layout. The player is always in cell E5 (marked). This gives a
+    vision model discrete, nameable coordinates to plan movement with.
+    """
+    _ensure_emulator()
+    if not 1 <= scale <= 8:
+        raise HTTPException(status_code=400, detail="scale must be 1..8")
+    try:
+        return Response(content=await emu_call(_grid_png, scale),
+                        media_type="image/png")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("grid screenshot failed")
+        raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}")
+
 
 
 @app.get("/screenshot")
