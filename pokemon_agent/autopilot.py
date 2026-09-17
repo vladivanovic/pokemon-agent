@@ -253,9 +253,14 @@ class HermesDriver:
                 stdout = out.stdout or ""
                 stderr = out.stderr or ""
                 logger.debug(f"Hermes stdout: {stdout}")
-                logger.debug(f"Hermes stderr: {stderr}")
-            except subprocess.TimeoutExpired:
-                logger.error("Hermes turn timed out")
+                if stderr:
+                    logger.debug("Hermes stderr: %s", stderr[-2000:])
+            except subprocess.TimeoutExpired as exc:
+                out_part = (exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or ""))[-2000:]
+                err_part = (exc.stderr.decode(errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or ""))[-2000:]
+                logger.error("Hermes timed out after %ss", self.turn_timeout)
+                logger.error("last stdout: %s", out_part)
+                logger.error("last stderr: %s", err_part)
                 self.event(type="alert", text="Turn timed out — retrying.")
                 return
             except Exception as e:
@@ -319,11 +324,12 @@ class HermesDriver:
 
 
 def run_autopilot(server: str = "http://localhost:8765", model: Optional[str] = None,
-                  turn_delay: float = 1.5, debug: bool = False):
+                  turn_delay: float = 1.5, turn_timeout: int = 240, debug: bool = False):
     if debug:
         logging.getLogger("pokemon-agent").setLevel(logging.DEBUG)
         logger.info("Debug logging enabled")
     
     model = model or os.environ.get("POKEMON_HERMES_MODEL")
     provider = os.environ.get("POKEMON_HERMES_PROVIDER")
-    HermesDriver(server, model, provider, turn_delay=turn_delay).run()
+    HermesDriver(server, model, provider, turn_delay=turn_delay, 
+                 turn_timeout=turn_timeout).run()

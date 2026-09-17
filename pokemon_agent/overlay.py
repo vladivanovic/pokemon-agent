@@ -31,7 +31,6 @@ from PIL import Image, ImageDraw, ImageFont
 
 from pokemon_agent.collision import (
     BLOCK_COLS as COLS, BLOCK_ROWS as ROWS, BLOCK_PX as BLOCK,
-    PLAYER_COL, PLAYER_ROW, PLAYER_PX_X, PLAYER_PX_Y, cell_label,
 )
 from functools import lru_cache
 
@@ -49,7 +48,8 @@ BLOCK_WASH = (217, 72, 47, 70)         # translucent red over blocked cells
 
 def cell_label(col: int, row: int) -> str:
     """Return e.g. 'E5' for 0-indexed (col=4, row=4)."""
-    return f"{COL_LABELS[col]}{row + 1}"
+    from pokemon_agent.collision import cell_label as collision_cell_label
+    return collision_cell_label(col, row)
 
 
 @lru_cache(maxsize=8)
