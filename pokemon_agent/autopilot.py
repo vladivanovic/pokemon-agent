@@ -41,13 +41,17 @@ import requests
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("pokemon-agent.autopilot")
 
-# What Hermes is told once at the start of the session, then nudged each turn.
+VISION_OK = "1. Look at the attached screenshot — it is the current game view."
+VISION_NONE = ("1. NO SCREENSHOT THIS TURN — the game view is unavailable. "
+               "Decide from CURRENT STATE and map_ascii only. Do not guess "
+               "at anything visual.")
+
 TURN_NUDGE = """You are playing Pokémon Red live on the Hermes Plays Pokémon dashboard.
 
 The game server is at {server}. Take ONE short turn now, then stop and reply.
 
 This turn:
-1. Look at the attached screenshot (it is the current game view).
+{vision}
 2. Use the game state to decide a move.
 3. Narrate to the stream, then act, using the terminal tool with curl:
    - POST {server}/event  body {{"type":"reasoning","text":"..."}}  (what you see)
@@ -205,20 +209,24 @@ class HermesDriver:
 
             # Grab the full screenshot for vision model analysis.
             img_path = str(Path(tempfile.gettempdir()) / "pokemon_turn.png")
-            try:
-                shot = self._get("/screenshot/grid?scale=4").content
-                if not shot.startswith(b"\x89PNG"):
-                    raise ValueError(f"not a PNG ({shot[:40]!r})")
-                with open(img_path, "wb") as f:
-                    f.write(shot)
-                have_img = True
-                logger.debug(f"Screenshot taken, saved to {img_path}")
-            except Exception as e:
-                logger.warning(f"Screenshot failed: {e}")
                 have_img = False
+            for ep in ("/screenshot/grid?scale=4", "/screenshot"):
+                try:
+                    shot = self._get(ep).content
+                    if not shot.startswith(b"\x89PNG"):
+                        raise ValueError(f"not a PNG ({shot[:40]!r})")
+                    with open(img_path, "wb") as f:
+                        f.write(shot)
+                    have_img = True
+                    logger.debug(f"Screenshot taken, saved to {img_path}")
+                    break
+                except Exception as exc:
+                    body = getattr(getattr(exc, "response", None), "text", "")
+                    logger.warning("screenshot %s failed: %s %s", ep, exc, body[:200])
 
             prompt = TURN_NUDGE.format(
                 server=self.server,
+                vision=VISION_OK if have_img else VISION_NONE,
                 state=json.dumps(_compact_state(state), indent=2),
             )
             if self.session_id is None:
