@@ -167,6 +167,30 @@ class HermesDriver:
             except Exception:
                 pass
 
+    def preflight(self) -> bool:
+        """Fail loudly at startup rather than silently timing out each turn."""
+        import shutil
+        if shutil.which("hermes") is None:
+            logger.error("`hermes` not found on PATH")
+            return False
+        try:
+            r = subprocess.run(
+                ["hermes", "chat", "-Q", "--yolo"]
+                + (["-m", self.model] if self.model else [])
+                + (["--provider", self.provider] if self.provider else [])
+                + ["-q", "Reply with exactly: OK"],
+                capture_output=True, text=True,
+                stdin=subprocess.DEVNULL, timeout=90)
+        except subprocess.TimeoutExpired:
+            logger.error("preflight timed out — model or gateway not responding")
+            return False
+        blob = (r.stdout or "") + (r.stderr or "")
+        if r.returncode != 0 or "turned off" in blob or "not found" in blob:
+            logger.error("preflight failed (rc=%s): %s", r.returncode, blob[-500:].strip())
+            return False
+        logger.info("preflight OK: %s", (r.stdout or "").strip()[:80])
+        return True
+
     def save_game(self) -> None:
         """Autosave into the active session's dir."""
         try:
@@ -249,6 +273,7 @@ class HermesDriver:
 
             try:
                 out = subprocess.run(cmd, capture_output=True, text=True,
+                                     stdin=subprocess.DEVNULL,
                                      timeout=self.turn_timeout)
                 stdout = out.stdout or ""
                 stderr = out.stderr or ""
@@ -292,6 +317,9 @@ class HermesDriver:
                 self.save_game()
 
     def run(self):
+        if not self.preflight():
+            self.event(type="alert", text="Hermes preflight failed — see driver log.")
+            sys.exit(1)
         model_note = self.model or "config default"
         print(f"[driver] Hermes-driven autopilot. server={self.server} model={model_note}")
         print("[driver] waiting for control=running + an active game…")
