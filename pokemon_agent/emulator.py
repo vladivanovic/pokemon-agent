@@ -167,28 +167,25 @@ class Emulator(ABC):
 # ---------------------------------------------------------------------------
 
 def _pyboy_sound_kwargs(cls) -> Dict[str, bool]:
-    """Every sound-related PyBoy kwarg this version accepts, set to False.
+    """Sound-related PyBoy kwargs set to False.
 
-    PyBoy 2.x has both ``sound`` (SDL output) and ``sound_emulated`` (APU
-    emulation). Disabling output while leaving the APU emulated keeps the
-    whole audio pipeline alive: wasted CPU plus a live SDL audio path that can
-    fault in native code. The names have moved across 2.x releases, so we
-    introspect the constructor rather than guessing and silently missing one.
-
-    Takes the PyBoy class as an argument because pyboy is imported lazily
-    inside load() and is not available at module import time.
+    PyBoy's __init__ is Cython-compiled and often has no introspectable
+    signature, so fall back to probing the docstring for known names.
     """
+    names = set()
     try:
-        params = inspect.signature(cls.__init__).parameters
+        names = {n for n in inspect.signature(cls.__init__).parameters
+                 if "sound" in n.lower() or "audio" in n.lower()}
     except (TypeError, ValueError):
-        logger.warning("could not introspect PyBoy.__init__; falling back to sound=False")
-        return {"sound": False}
-    kwargs = {name: False for name in params
-              if "sound" in name.lower() or "audio" in name.lower()}
-    if not kwargs:
-        logger.warning("no sound-related PyBoy kwargs found; audio may be active")
-    else:
-        logger.info("PyBoy sound kwargs disabled: %s", sorted(kwargs))
+        doc = (cls.__init__.__doc__ or "") + (cls.__doc__ or "")
+        for cand in ("sound_emulated", "sound_volume", "sound"):
+            if cand in doc:
+                names.add(cand)
+        if not names:
+            names = {"sound", "sound_emulated"}
+        logger.info("PyBoy signature not introspectable; trying %s", sorted(names))
+    kwargs = {n: False for n in names}
+    logger.info("PyBoy sound kwargs: %s", sorted(kwargs))
     return kwargs
 
 
@@ -240,7 +237,12 @@ class PyBoyEmulator(Emulator):
                 raise FileNotFoundError(f"ROM not found: {rom_path}")
 
             kwargs = {"window": "null", **_pyboy_sound_kwargs(PyBoy)}
-            pb = PyBoy(rom_path, **kwargs)
+            try:
+                pb = PyBoy(rom_path, **kwargs)
+            except TypeError as exc:
+                logger.warning("PyBoy rejected kwargs %s (%s); retrying minimal",
+                               sorted(kwargs), exc)
+                pb = PyBoy(rom_path, window="null", sound=False)
 
             # Remove the realtime throttle. Harmless if a null window already
             # runs unbounded; essential if it does not.

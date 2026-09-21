@@ -580,6 +580,8 @@ def configure(config: GameConfig):
     """Set server configuration. Call before app startup."""
     global _config
     _config = config
+    global _start_time, _loop, _session_mgr, _pending_state
+    global _active_session, _objectives
 
 
 @app.on_event("startup")
@@ -601,6 +603,24 @@ async def _startup():
 
     from pokemon_agent.sessions import GameSessionManager
     _session_mgr = GameSessionManager(str(data_dir))
+
+    # Re-adopt the most recently played session. Without this a server restart
+    # leaves the dashboard pointing at a game the server has forgotten, and
+    # START fails with 409 for no visible reason.
+    try:
+        recent = await asyncio.to_thread(_session_mgr.list)
+    except Exception:
+        logger.warning("could not list sessions", exc_info=True)
+        recent = []
+    if recent:
+        gs = await asyncio.to_thread(_session_mgr.load, recent[0]["id"])
+        if gs is not None:
+            _active_session = gs
+            _objectives = gs.objectives or _objectives
+            latest = await asyncio.to_thread(_session_mgr.latest_save_path, gs.id)
+            _pending_state = str(latest) if latest else None
+            logger.info("restored session %s (%s)%s", gs.id, gs.name,
+                        f", armed {latest.name}" if latest else " — no save yet")
 
     if not _config.no_dashboard:
         try:
