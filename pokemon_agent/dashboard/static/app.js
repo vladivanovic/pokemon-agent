@@ -203,9 +203,19 @@
     }
     function setControl(state){
         fetch(baseURL+'/control', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({state:state})})
-            .then(function(r){ return r.json(); })
-            .then(function(d){ if(d&&d.state) renderControl(d.state); })
-            .catch(function(){});
+            .then(function(r){
+                return r.json().then(function(d){
+                    if(!r.ok){
+                        var msg = (d && d.detail) || ('HTTP '+r.status);
+                        entry('alert','ERROR', msg);
+                        setStatus(false, 'start refused');
+                        throw new Error(msg);
+                    }
+                    return d;
+                });
+            })
+            .then(function(d){ if(d && d.state) renderControl(d.state); })
+            .catch(function(e){ console.warn('control failed:', e); });
     }
 
     // ---- game session ----
