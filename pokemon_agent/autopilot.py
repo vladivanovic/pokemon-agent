@@ -46,28 +46,27 @@ VISION_NONE = ("1. NO SCREENSHOT THIS TURN — the game view is unavailable. "
                "Decide from CURRENT STATE and map_ascii only. Do not guess "
                "at anything visual.")
 
-TURN_NUDGE = """You are playing Pokémon Red live on the Hermes Plays Pokémon dashboard.
+TURN_NUDGE = """You are playing Pokémon Red on the Hermes Plays Pokémon dashboard.
 
-The game server is at {server}. Take ONE short turn now, then stop and reply.
+Server: {server}
 
-This turn:
-{vision}
-2. Use the game state to decide a move.
-3. Narrate to the stream, then act, using the terminal tool with curl:
-   - POST {server}/event  body {{"type":"reasoning","text":"..."}}  (what you see)
-   - POST {server}/event  body {{"type":"decision","text":"..."}}   (your plan)
-   - POST {server}/action body {{"actions":["walk_down","walk_down"]}} (2-4 moves)
-   - On a real beat (new town/badge/item/catch): POST {server}/event
-     body {{"type":"key_moment","description":"...","category":"milestone|badge|catch"}}
-   - If your goals change: POST {server}/objectives body
-     {{"objectives":[{{"tier":"primary","text":"...","done":false}}, ...]}}
-   All POSTs need  -H 'Content-Type: application/json'.
-4. Keep it to 2-4 game actions this turn — you'll get another turn next.
+MAP — ground truth read from game memory. Trust this over any image. You are always at @ (cell E5). Columns A-J left to right, rows 1-9 top to bottom.
+{map_ascii}
 
-CURRENT STATE:
+STATE:
 {state}
 
-Take your turn now."""
+Take ONE short turn:
+1. POST {server}/event  {{"type":"reasoning","text":"..."}}    what you see
+2. POST {server}/action {{"actions":["walk_down","walk_down"]}}  2-4 moves
+3. Reply with ONE short sentence. Be brief.
+
+If the map is unavailable, or you are in a menu/battle/dialog and cannot tell what is on screen, you may look at the frame:
+  curl -s '{server}/screenshot' -o /tmp/look.png
+then use the vision tool on /tmp/look.png. Only do this when the map and state are not enough — it costs an extra round trip.
+
+All POSTs need -H 'Content-Type: application/json'.
+"""
 
 FIRST_TURN_PREFIX = """This is the start of your Pokémon Red run. First, set your objectives by
 POSTing to {server}/objectives (primary/secondary/tertiary tiers), then take
@@ -103,7 +102,6 @@ def _compact_state(state: Dict[str, Any]) -> Dict[str, Any]:
         "status": state.get("status"),
         "errors": state.get("errors") or None,
         "active_mon": state.get("active_mon"),
-        "map_ascii": (state.get("collision") or {}).get("ascii"),
     }
 
 
@@ -248,13 +246,17 @@ class HermesDriver:
                     body = getattr(getattr(exc, "response", None), "text", "")
                     logger.warning("screenshot %s failed: %s %s", ep, exc, body[:200])
 
-            prompt = TURN_NUDGE.format(
-                server=self.server,
-                vision=VISION_OK if have_img else VISION_NONE,
-                state=json.dumps(_compact_state(state), indent=2),
-            )
-            if self.session_id is None:
-                prompt = FIRST_TURN_PREFIX.format(server=self.server) + prompt
+            ctx = state.get("context") or {}
+            intro = ctx.get("phase") != "in_game"
+            if intro:
+                prompt = INTRO_NUDGE.format(server=self.server,
+                                            phase=ctx.get("phase", "unknown"))
+            else:
+                prompt = TURN_NUDGE.format(
+                    server=self.server,
+                    map_ascii=map_ascii,
+                    state=json.dumps(_compact_state(state), indent=2),
+                )
 
             cmd = ["hermes", "chat", "-Q", "--yolo", "--pass-session-id",
                    "-s", "pokemon-player",
