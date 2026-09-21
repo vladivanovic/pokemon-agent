@@ -19,30 +19,33 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
-ADDR_TILEMAP = 0xC3A0       # wTileMap, 20x18 bytes
-ADDR_TILESET = 0xD367       # wCurMapTileset
+ADDR_TILEMAP       = 0xC3A0   # wTileMap, 20x18 bytes
+ADDR_TILESET       = 0xD367   # wCurMapTileset
 ADDR_TILE_IN_FRONT = 0xCFC6   # wTileInFrontOfPlayer
-ADDR_WALK_COUNTER  = 0xCFC5   # wWalkCounter; nonzero = mid-step, camera moving
-ADDR_SPRITE_DATA1 = 0xC100   # wSpriteStateData1, 16 slots x 16 bytes
-ADDR_NUM_WARPS  = 0xD3AE   # wNumberOfWarps
-ADDR_WARP_ENTRY = 0xD3AF   # wWarpEntries: y, x, dest_warp, dest_map
-SPRITE_SLOT_SIZE  = 16
-SPRITE_SLOTS      = 16
-S_PICTURE_ID      = 0x00     # 0 = slot disabled
-S_YPIXELS         = 0x04     # screen Y, biased
-S_XPIXELS         = 0x06     # screen X, biased
-WARP_ENTRY_SIZE = 4
-MAX_WARPS       = 32
-BLOCK_PX           = 16       # world block size in GB pixels
-GRID_ROW_OFFSET    = 1        # tilemap row offset; see read_block_tile_ids
-PLAYER_PX_X        = PLAYER_COL * BLOCK_PX                      # 64
-PLAYER_PX_Y        = PLAYER_ROW * BLOCK_PX + GRID_ROW_OFFSET * 8  # 72
-TILEMAP_W, TILEMAP_H = 20, 18
+ADDR_WALK_COUNTER  = 0xCFC5   # wWalkCounter; nonzero = mid-step
+ADDR_SPRITE_DATA1  = 0xC100   # wSpriteStateData1, 16 slots x 16 bytes
+ADDR_NUM_WARPS     = 0xD3AE   # wNumberOfWarps
+ADDR_WARP_ENTRY    = 0xD3AF   # wWarpEntries: y, x, dest_warp, dest_map
 
-BLOCK_COLS = 10             # on-screen walkable blocks across
-BLOCK_ROWS = 9             # on-screen walkable blocks down
-PLAYER_COL = 4             # the block the player is locked to (cell E5)
+TILEMAP_W, TILEMAP_H = 20, 18
+BLOCK_COLS = 10               # on-screen walkable blocks across
+BLOCK_ROWS = 9                # on-screen walkable blocks down
+BLOCK_PX   = 16               # world block size in GB pixels
+PLAYER_COL = 4                # block the player is locked to (cell E5)
 PLAYER_ROW = 4
+GRID_ROW_OFFSET = 1           # tilemap row offset; see read_block_tile_ids
+
+# Derived — must come after the above.
+PLAYER_PX_X = PLAYER_COL * BLOCK_PX                        # 64
+PLAYER_PX_Y = PLAYER_ROW * BLOCK_PX + GRID_ROW_OFFSET * 8  # 72
+
+SPRITE_SLOT_SIZE = 16
+SPRITE_SLOTS     = 16
+S_PICTURE_ID, S_YPIXELS, S_XPIXELS = 0x00, 0x04, 0x06
+WARP_ENTRY_SIZE, MAX_WARPS = 4, 32
+
+COL_LABELS = "ABCDEFGHIJ"
+_FACING_DELTA = {"up": (0, -1), "down": (0, 1), "left": (-1, 0), "right": (1, 0)}
 
 # Per-tileset walkable tile-id sets, transcribed from pokered
 # data/tilesets/collision_tile_ids.asm. Key = wCurMapTileset value.
