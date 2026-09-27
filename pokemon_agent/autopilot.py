@@ -41,6 +41,18 @@ from typing import Any, Dict, Optional
 
 import requests
 
+# Laya decision model — opt-in replacement for Hermes CLI per-turn calls.
+# When use_laya=True, step() uses router.predict(state, questions) instead of
+# subprocess.run(["hermes", "chat", ...]). This is ~30-40ms on Orin GPU vs
+# several seconds for a new Python process each turn, and returns structured
+# choices (choice / noul / score) with calibrated probabilities, no text
+# generation, no regex parsing, zero hallucination on action selection.
+try:
+    from laya import Router  # type: ignore
+    LAYA_AVAILABLE = True
+except Exception:  # pragma: no cover — import failure at runtime
+    LAYA_AVAILABLE = False  # pragma: no cover
+
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("pokemon-agent.autopilot")
@@ -166,18 +178,29 @@ def _compact_state(state: Dict[str, Any]) -> Dict[str, Any]:
 class HermesDriver:
     def __init__(self, server: str, model: Optional[str], provider: Optional[str],
                  turn_delay: float = 1.5, save_every: int = 20,
-                 turn_timeout: int = 240):
+                 turn_timeout: int = 240, use_laya: bool = False):
         self.server = server.rstrip("/")
         self.model = model
         self.provider = provider
         self.turn_delay = turn_delay
         self.save_every = save_every
         self.turn_timeout = turn_timeout
+        self.use_laya = use_laya
         self.game_id: Optional[str] = None      # active game session id
         self.session_id: Optional[str] = None   # bound Hermes session id
         self.turn = 0
         self.last_pos: Optional[Any] = None     # stuck detection
         self.stuck = 0
+
+        # Laya decision model (opt-in, GPU-accelerated, ~30-40ms/inference)
+        self.laya_router: Optional[Any] = None
+        if self.use_laya and LAYA_AVAILABLE:
+            try:
+                self.laya_router = Router(preload=True)
+                logger.info("Laya decision model enabled — will use instead of Hermes CLI")
+            except Exception as exc:
+                logger.warning("Laya router preload failed: %s", exc)
+                self.use_laya = False
 
     # --- server helpers ----------------------------------------------------
 
@@ -313,6 +336,70 @@ class HermesDriver:
         pos = (state.get("player") or {}).get("position")
         self.stuck = self.stuck + 1 if (pos is not None and pos == self.last_pos) else 0
         self.last_pos = pos
+
+        # --- Laya decision model opt-in (early return) ---
+        if self.use_laya and self.laya_router is not None:
+            # Structured prediction ~30-40ms on Orin GPU, replacing
+            # subprocess.run(["hermes", "chat", ...]) per turn.
+            try:
+                state = self._get("/state").json()
+            except Exception as e:
+                logger.error(f"State read failed: {e}")
+                time.sleep(2)
+                return
+
+            ctx = state.get("context") or {}
+            intro = not ctx.get("in_game", False)
+
+            # Build minimal state dict for Laya questions
+            p = state.get("player") or {}
+            col = state.get("collision") or {}
+            battle = state.get("battle") or {}
+
+            laya_state = {
+                "player_x": p.get("position", {}).get("x") if p.get("position") else 0,
+                "player_y": p.get("position", {}).get("y") if p.get("position") else 0,
+                "enemies": [(e.get("species"), e.get("position", {}).get("x", 0),
+                             e.get("position", {}).get("y", 0))
+                            for e in (battle.get("enemy") or [])],
+                "health": p.get("health", 100),
+                "in_battle": battle.get("in_battle", False),
+                "map_name": (state.get("map") or {}).get("map_name", ""),
+            }
+
+            # Questions: what should the agent do this turn?
+            questions = {
+                "action": {
+                    "type": "choice",
+                    "criteria": {
+                        "move_left": "Press D-pad left / walk left",
+                        "move_right": "Press D-pad right / walk right",
+                        "do_nothing": "Wait / hold position",
+                        "use_item": "Press Select / Open menu",
+                    }
+                }
+            }
+
+            result = self.laya_router.predict(laya_state, questions)
+            choice = result.get("action", {}).get("choice", "do_nothing")
+
+            # Map Laya choice to Hermes events
+            if choice == "move_left":
+                self.event(type="action", text="walk_left")
+            elif choice == "move_right":
+                self.event(type="action", text="walk_right")
+            elif choice == "use_item":
+                self.event(type="action", text="use_item")
+            else:
+                # do_nothing or unrecognized — no action this turn
+                logger.debug(f"Laya chose: {choice} — no action taken")
+
+            logger.info("turn %d: Laya choice=%s phase=%s", self.turn + 1, choice,
+                        ctx.get("phase", "unknown"))
+            self.turn += 1
+            if self.save_every and self.turn % self.save_every == 0:
+                self.save_game()
+            return
 
         col = state.get("collision") or {}
         map_ascii = col.get("ascii") or (
@@ -465,11 +552,13 @@ def run_autopilot(server: str = "http://localhost:8765",
                   turn_delay: float = 1.5,
                   turn_timeout: int = 240,
                   save_every: int = 20,
-                  debug: bool = False) -> None:
+                  debug: bool = False,
+                  use_laya: bool = False) -> None:
     if debug:
         logging.getLogger("pokemon-agent").setLevel(logging.DEBUG)
         logger.info("debug logging enabled")
     model = model or os.environ.get("POKEMON_HERMES_MODEL")
     provider = os.environ.get("POKEMON_HERMES_PROVIDER")
     HermesDriver(server, model, provider, turn_delay=turn_delay,
-                 turn_timeout=turn_timeout, save_every=save_every).run()
+                 turn_timeout=turn_timeout, save_every=save_every,
+                 use_laya=use_laya).run()
