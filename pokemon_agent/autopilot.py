@@ -264,6 +264,7 @@ class HermesDriver:
         self.turn = 0
         self.last_pos: Optional[Any] = None     # stuck detection
         self.stuck = 0
+        self.consecutive_fail = 0               # consecutive laya failures
 
         self.laya_router: Optional[Any] = None
         if self.use_laya:
@@ -409,10 +410,18 @@ class HermesDriver:
     # signature differs from what is assumed here, this is the only method
     # that needs changing.
 
-    def _laya_choose(self, laya_state: Dict[str, Any],
+def _laya_choose(self, laya_state: Dict[str, Any],
                      criteria: Dict[str, str],
                      instructions: str) -> Optional[str]:
-        """Ask Laya to pick one key from *criteria*. Returns the key or None."""
+        """Ask Laya to pick one key from *criteria*. Returns the key or None.
+
+        ASSUMED API:
+            router.predict(state: dict, questions: dict) -> dict
+            questions = {"action": {"type": "choice",
+                                    "instructions": str,
+                                    "criteria": {key: description}}}
+            result["action"]["choice"] == one of the criteria keys
+        """
         try:
             result = self.laya_router.predict(  # type: ignore[union-attr]
                 laya_state,
@@ -420,8 +429,13 @@ class HermesDriver:
                             "instructions": instructions,
                             "criteria": criteria}},
             )
-        except Exception:
-            logger.exception("laya predict failed")
+        except Exception as exc:
+            # Full traceback once, then just the message — this fires every
+            # turn when the schema is wrong and drowns the log otherwise.
+            if self.consecutive_fail == 0:
+                logger.exception("laya predict failed")
+            else:
+                logger.error("laya predict failed: %s", exc)
             return None
 
         ans = result.get("action") if isinstance(result, dict) else None
@@ -441,8 +455,8 @@ class HermesDriver:
         p = state.get("player") or {}
         warps = col.get("warps") or []
 
-        # Candidate set is constructed from ground truth, so an illegal move
-        # is not merely discouraged — it is not offered.
+        # The candidate set is built from ground truth, so an illegal move is
+        # not merely discouraged — it is never offered.
         criteria: Dict[str, str] = {}
         if intro or dlg.get("text_active"):
             instructions = ("A text box or menu is on screen. Choose the single "
@@ -470,10 +484,12 @@ class HermesDriver:
                 cell = w.get("cell")
                 dest = w.get("dest_map_name") or f"map {w.get('dest_map')}"
                 if cell:
-                    criteria[f"goto_{cell}"] = f"Walk to the exit at {cell} leading to {dest}"
+                    criteria[f"goto_{cell}"] = (
+                        f"Walk to the exit at {cell} leading to {dest}")
 
         if not criteria:
-            criteria["back_out"] = "Nothing else is possible; press B"
+            instructions = "Nothing is possible right now. Press B."
+            criteria["back_out"] = "Press B"
 
         laya_state = {
             "map_name": (state.get("map") or {}).get("map_name", ""),
@@ -489,21 +505,24 @@ class HermesDriver:
         }
 
         started = time.perf_counter()
-        choice = self._laya_choose(laya_state, criteria)
+        choice = self._laya_choose(laya_state, criteria, instructions)
         took_ms = (time.perf_counter() - started) * 1000.0
 
-        actions: List[str] = []
-        self.consecutive_fail = 0
+        # A failed decision must not consume a turn, and must not loop forever.
         if choice is None:
             self.consecutive_fail += 1
             logger.error("laya returned no choice (%d consecutive)",
                          self.consecutive_fail)
             if self.consecutive_fail >= 5:
-                raise SystemExit("Laya failed 5 turns in a row — see the "
-                                 "traceback above; the question schema is wrong.")
+                raise SystemExit(
+                    "Laya failed 5 turns in a row — see the traceback above. "
+                    "The question schema is probably wrong.")
             time.sleep(1.0)
             return
-        elif choice == "advance_text":
+        self.consecutive_fail = 0
+
+        actions: List[str] = []
+        if choice == "advance_text":
             actions = ["a_until_dialog_end"] if dlg.get("text_active") else ["press_a"]
         elif choice == "menu_down_a":
             actions = ["press_down", "press_a"]
@@ -514,17 +533,23 @@ class HermesDriver:
         elif choice in _DIRS:
             actions = [choice]
         elif choice.startswith("goto_"):
+            # One decision, many tiles: BFS over verified walkability turns a
+            # per-tile decision loop into a per-destination one.
             label = choice[5:]
             target = next(((w["row"], w["col"]) for w in warps
                            if w.get("cell") == label), None)
             if target is not None:
                 actions = _path_to(passable, target)
             if not actions:
-                logger.warning("no path to %s; falling back to a single step", label)
+                logger.warning("no path to %s; taking a single step instead", label)
                 legal = list(_legal_dirs(passable))
                 actions = [legal[0]] if legal else ["wait_30"]
+        else:
+            logger.warning("unhandled laya choice %r — waiting", choice)
+            actions = ["wait_30"]
 
-        logger.info("turn %d: laya=%s in %.0fms -> %s (from %d options) phase=%s stuck=%d",
+        logger.info("turn %d: laya=%s in %.0fms -> %s (from %d options) "
+                    "phase=%s stuck=%d",
                     self.turn + 1, choice, took_ms, actions, len(criteria),
                     laya_state["phase"], self.stuck)
 
