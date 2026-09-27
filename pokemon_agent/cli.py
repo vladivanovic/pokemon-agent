@@ -165,6 +165,7 @@ def main():
     play_p.add_argument("--turn-timeout", type=int, default=240,
                         help="Seconds per Hermes turn (default: 240)")
     play_p.add_argument("--debug", action="store_true", help="Enable debug logging")
+    play_p.add_argument("--laya", action="store_true", default=False, help="Use Laya decision model instead of Hermes CLI")
 
     # --- play-api (Hermes AIAgent direct) ---
     play_api_p = sub.add_parser("play-api", help="Run the LLM autopilot using Hermes AIAgent API (direct, faster)")
