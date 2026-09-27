@@ -267,6 +267,8 @@ class HermesDriver:
         self.consecutive_fail = 0               # consecutive laya failures
         self.last_confidence = 0
         self.recent: deque = deque(maxlen=8)    # oscillation detection
+        self.prev_map: Optional[str] = None
+        self.map_changed_at: int = -99
 
         self.laya_router: Optional[Any] = None
         if self.use_laya:
@@ -493,10 +495,13 @@ class HermesDriver:
             for name in _legal_dirs(passable):
                 criteria[name] = f"Move one tile {name.split('_')[1]}"
             criteria["interact"] = "Press A to talk to or examine what you face"
+            recent_transition = (self.turn - self.map_changed_at) < 6
             for w in warps[:4]:
                 cell = w.get("cell")
                 if not cell or (w.get("row"), w.get("col")) == (PLAYER_ROW, PLAYER_COL):
-                    continue      # standing on it already; A or a step triggers it
+                    continue
+                if recent_transition:
+                    continue      # just arrived; don't offer the way back
                 dest = w.get("dest_map_name") or f"map {w.get('dest_map')}"
                 criteria[f"goto_{cell}"] = f"Walk to the exit at {cell} leading to {dest}"
 
@@ -517,6 +522,11 @@ class HermesDriver:
             "stuck_turns": self.stuck,
         }
 
+        cur_map = laya_state["map_name"]
+        if cur_map != self.prev_map:
+            logger.info("map changed: %s -> %s", self.prev_map, cur_map)
+            self.prev_map, self.map_changed_at = cur_map, self.turn
+
         # Oscillation guard: cycling through the same couple of positions means
         # the candidate set is wrong for this situation, not that Laya is
         # unlucky. Only meaningful while exploring — a static position is
@@ -527,10 +537,15 @@ class HermesDriver:
                                 laya_state["x"], laya_state["y"]))
             if (len(self.recent) == self.recent.maxlen
                     and len(set(self.recent)) <= 2):
-                logger.warning("oscillating between %d position(s) — forcing A",
-                               len(set(self.recent)))
+                # A does nothing on a staircase, and the candidate set clearly
+                # cannot break the cycle. Take a long run in one direction to
+                # leave the neighbourhood entirely.
+                legal = list(_legal_dirs(passable))
+                escape = legal[self.turn % len(legal)] if legal else "press_b"
+                logger.warning("oscillating between %d position(s) — escaping via %s",
+                               len(set(self.recent)), escape)
                 self.recent.clear()
-                self.act(["press_a", "wait_30"])
+                self.act([escape] * 4)
                 return
         else:
             self.recent.clear()
