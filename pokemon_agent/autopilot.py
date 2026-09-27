@@ -266,7 +266,7 @@ class HermesDriver:
         self.stuck = 0
         self.consecutive_fail = 0               # consecutive laya failures
         self.last_confidence = 0
-        self.recent: deque = deque(maxlen=8)    # oscillation detection
+        self.recent: deque = deque(maxlen=12)    # oscillation detection
         self.prev_map: Optional[str] = None
         self.map_changed_at: int = -99
 
@@ -470,6 +470,11 @@ class HermesDriver:
         p = state.get("player") or {}
         warps = col.get("warps") or []
 
+        cur_map = laya_state["map_name"]
+        if cur_map != self.prev_map:
+            logger.info("map changed: %s -> %s", self.prev_map, cur_map)
+            self.prev_map, self.map_changed_at = cur_map, self.turn
+
         # The candidate set is built from ground truth, so an illegal move is
         # not merely discouraged — it is never offered.
         criteria: Dict[str, str] = {}
@@ -492,10 +497,18 @@ class HermesDriver:
                 "'.' is walkable, '#' is a wall, 'N' is a person blocking you, "
                 "'D' is a door or exit, '@' is you. Choose the single best move to "
                 "make progress — head for an exit when you have explored the room.")
+            recent_transition = (self.turn - self.map_changed_at) < 6
+            # Block the warp we just came through. Suppressing only the named
+            # goto_ option is not enough — walking onto the tile triggers it too.
+            if recent_transition and warps:
+                passable = [list(r) for r in passable]      # copy before mutating
+                for w in warps:
+                    r, c = w.get("row"), w.get("col")
+                    if r is not None and 0 <= r < len(passable) and 0 <= c < len(passable[r]):
+                        passable[r][c] = False
             for name in _legal_dirs(passable):
                 criteria[name] = f"Move one tile {name.split('_')[1]}"
             criteria["interact"] = "Press A to talk to or examine what you face"
-            recent_transition = (self.turn - self.map_changed_at) < 6
             for w in warps[:4]:
                 cell = w.get("cell")
                 if not cell or (w.get("row"), w.get("col")) == (PLAYER_ROW, PLAYER_COL):
@@ -522,11 +535,6 @@ class HermesDriver:
             "stuck_turns": self.stuck,
         }
 
-        cur_map = laya_state["map_name"]
-        if cur_map != self.prev_map:
-            logger.info("map changed: %s -> %s", self.prev_map, cur_map)
-            self.prev_map, self.map_changed_at = cur_map, self.turn
-
         # Oscillation guard: cycling through the same couple of positions means
         # the candidate set is wrong for this situation, not that Laya is
         # unlucky. Only meaningful while exploring — a static position is
@@ -535,15 +543,17 @@ class HermesDriver:
         if exploring:
             self.recent.append((laya_state["map_name"],
                                 laya_state["x"], laya_state["y"]))
-            if (len(self.recent) == self.recent.maxlen
-                    and len(set(self.recent)) <= 2):
-                # A does nothing on a staircase, and the candidate set clearly
-                # cannot break the cycle. Take a long run in one direction to
-                # leave the neighbourhood entirely.
+        # Do NOT clear on dialog turns — a text box mid-cycle is part of the
+        # cycle, and clearing means the window never fills.
+        if len(self.recent) == self.recent.maxlen:
+            maps = {m for m, _, _ in self.recent}
+            cells = set(self.recent)
+            # Ping-ponging between two maps is a loop even though the cells differ.
+            if len(cells) <= 3 or (len(maps) == 2 and len(cells) <= 6):
                 legal = list(_legal_dirs(passable))
                 escape = legal[self.turn % len(legal)] if legal else "press_b"
-                logger.warning("oscillating between %d position(s) — escaping via %s",
-                               len(set(self.recent)), escape)
+                logger.warning("loop detected (%d maps, %d cells) — escaping via %s",
+                               len(maps), len(cells), escape)
                 self.recent.clear()
                 self.act([escape] * 4)
                 return
