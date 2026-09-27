@@ -410,18 +410,15 @@ class HermesDriver:
     # that needs changing.
 
     def _laya_choose(self, laya_state: Dict[str, Any],
-                     criteria: Dict[str, str]) -> Optional[str]:
-        """Ask Laya to pick one key from *criteria*. Returns the key or None.
-
-        ASSUMED API:
-            router.predict(state: dict, questions: dict) -> dict
-            questions = {"action": {"type": "choice", "criteria": {key: desc}}}
-            result["action"]["choice"] == one of the criteria keys
-        """
+                     criteria: Dict[str, str],
+                     instructions: str) -> Optional[str]:
+        """Ask Laya to pick one key from *criteria*. Returns the key or None."""
         try:
             result = self.laya_router.predict(  # type: ignore[union-attr]
                 laya_state,
-                {"action": {"type": "choice", "criteria": criteria}},
+                {"action": {"type": "choice",
+                            "instructions": instructions,
+                            "criteria": criteria}},
             )
         except Exception:
             logger.exception("laya predict failed")
@@ -448,15 +445,24 @@ class HermesDriver:
         # is not merely discouraged — it is not offered.
         criteria: Dict[str, str] = {}
         if intro or dlg.get("text_active"):
+            instructions = ("A text box or menu is on screen. Choose the single "
+                            "best button press to advance it.")
             criteria["advance_text"] = "Press A to advance dialog, menu or intro"
             if intro:
                 criteria["menu_down_a"] = "Move the menu cursor down, then confirm"
                 criteria["back_out"] = "Press B to leave this menu"
         elif battle.get("in_battle"):
+            instructions = ("You are in a Pokemon battle. Choose the single best "
+                            "menu action for this turn.")
             criteria["advance_text"] = "Press A to confirm the highlighted option"
             criteria["menu_down_a"] = "Move down one option, then confirm"
             criteria["back_out"] = "Press B to go back"
         else:
+            instructions = (
+                "You are exploring Pokemon Red. The MAP shows what is around you: "
+                "'.' is walkable, '#' is a wall, 'N' is a person blocking you, "
+                "'D' is a door or exit, '@' is you. Choose the single best move to "
+                "make progress — head for an exit when you have explored the room.")
             for name in _legal_dirs(passable):
                 criteria[name] = f"Move one tile {name.split('_')[1]}"
             criteria["interact"] = "Press A to talk to or examine what you face"
@@ -487,8 +493,16 @@ class HermesDriver:
         took_ms = (time.perf_counter() - started) * 1000.0
 
         actions: List[str] = []
+        self.consecutive_fail = 0
         if choice is None:
-            actions = ["wait_30"]
+            self.consecutive_fail += 1
+            logger.error("laya returned no choice (%d consecutive)",
+                         self.consecutive_fail)
+            if self.consecutive_fail >= 5:
+                raise SystemExit("Laya failed 5 turns in a row — see the "
+                                 "traceback above; the question schema is wrong.")
+            time.sleep(1.0)
+            return
         elif choice == "advance_text":
             actions = ["a_until_dialog_end"] if dlg.get("text_active") else ["press_a"]
         elif choice == "menu_down_a":
@@ -653,6 +667,13 @@ class HermesDriver:
         self.stuck = self.stuck + 1 if (pos is not None and pos == self.last_pos) else 0
         self.last_pos = pos
 
+        if self.stuck >= 5:
+            logger.warning("stuck %d turns — forcing B to clear any text box",
+                           self.stuck)
+            self.act(["press_b", "wait_30"])
+            self.stuck = 0
+            return
+
         if self.use_laya:
             narrate = (self.laya_narrate_every
                        and (self.turn + 1) % self.laya_narrate_every == 0)
@@ -723,10 +744,12 @@ class HermesDriver:
                 continue
             try:
                 self.step()
-            except Exception:
-                logger.exception("turn failed — continuing")
-                self.event(type="alert", text="Driver error — see log.")
-                time.sleep(3)
+            except Exception as exc:
+                if self.consecutive_fail == 0:
+                    logger.exception("laya predict failed")
+                else:
+                    logger.error("laya predict failed: %s", exc)
+                return None
 
 
 def run_autopilot(server: str = "http://localhost:8765",
