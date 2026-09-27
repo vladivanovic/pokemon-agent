@@ -269,6 +269,7 @@ class HermesDriver:
         self.recent: deque = deque(maxlen=12)    # oscillation detection
         self.prev_map: Optional[str] = None
         self.map_changed_at: int = -99
+        self.visits: Dict[tuple, int] = {}      # (map, x, y) -> times seen
 
         self.laya_router: Optional[Any] = None
         if self.use_laya:
