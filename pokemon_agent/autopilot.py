@@ -265,6 +265,7 @@ class HermesDriver:
         self.last_pos: Optional[Any] = None     # stuck detection
         self.stuck = 0
         self.consecutive_fail = 0               # consecutive laya failures
+        self.last_confidence = 0
 
         self.laya_router: Optional[Any] = None
         if self.use_laya:
@@ -438,12 +439,23 @@ class HermesDriver:
                 logger.error("laya predict failed: %s", exc)
             return None
 
-        ans = result.get("action") if isinstance(result, dict) else None
-        choice = ans.get("choice") if isinstance(ans, dict) else ans
+        # Response shape: {"answers": {"action": {"choice": ..., "probabilities": {...},
+        #                                        "answer_confidence": float}}, ...}
+        answers = result.get("answers") if isinstance(result, dict) else None
+        ans = (answers or {}).get("action") if isinstance(answers, dict) else None
+        if not isinstance(ans, dict):
+            logger.warning("unexpected laya response shape: %r", result)
+            return None
+
+        choice = ans.get("choice")
         if choice not in criteria:
             logger.warning("laya returned %r which is not in %s",
                            choice, sorted(criteria))
             return None
+
+        conf = ans.get("answer_confidence")
+        if isinstance(conf, (int, float)):
+            self.last_confidence = float(conf)
         return choice
 
     def _laya_turn(self, state: Dict[str, Any], intro: bool) -> None:
@@ -548,10 +560,10 @@ class HermesDriver:
             logger.warning("unhandled laya choice %r — waiting", choice)
             actions = ["wait_30"]
 
-        logger.info("turn %d: laya=%s in %.0fms -> %s (from %d options) "
+        logger.info("turn %d: laya=%s (p=%.2f) in %.0fms -> %s (from %d options) "
                     "phase=%s stuck=%d",
-                    self.turn + 1, choice, took_ms, actions, len(criteria),
-                    laya_state["phase"], self.stuck)
+                    self.turn + 1, choice, self.last_confidence, took_ms, actions,
+                    len(criteria), laya_state["phase"], self.stuck)
 
         self.act(actions)
         self.event(type="decision",
