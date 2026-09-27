@@ -470,10 +470,13 @@ class HermesDriver:
         p = state.get("player") or {}
         warps = col.get("warps") or []
 
-        cur_map = laya_state["map_name"]
+        cur_map = (state.get("map") or {}).get("map_name", "")
+        pos = p.get("position") or {}
         if cur_map != self.prev_map:
             logger.info("map changed: %s -> %s", self.prev_map, cur_map)
             self.prev_map, self.map_changed_at = cur_map, self.turn
+        key = (cur_map, pos.get("x"), pos.get("y"))
+        self.visits[key] = self.visits.get(key, 0) + 1
 
         # The candidate set is built from ground truth, so an illegal move is
         # not merely discouraged — it is never offered.
