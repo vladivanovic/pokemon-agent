@@ -814,22 +814,43 @@ class RedBlueMemoryReader(GameMemoryReader):
             logger.warning(f"Enemy species ID {spc} unusual - struct offset mismatch?")
 
     def read_dialog(self) -> Dict[str, Any]:
-        """Input-lock and text-box state.
+        """Text-box and input-lock state.
 
-        wd730 bit 5 is set during scripted sprite movement as well as text,
-        so it means "input locked", not "dialog open". Reported separately
-        so callers can tell a cutscene walk from a text box.
+        Two independent signals, deliberately not conflated:
+          wTextBoxID  — non-zero while a text box is on screen, including
+                        while it waits for A. Can retain a stale value after
+                        the box closes.
+          wd730 bit 5 — _JOY_IGNORE: input disabled. Set during text scroll
+                        AND during scripted cutscene movement.
+
+        A box waiting for A has text_box set but may have released the input
+        lock, so requiring both misses the most common case.
         """
         text_box = self.emu.read_u8(ADDR_TEXT_BOX_ID)
         d730 = self.emu.read_u8(ADDR_D730)
         input_locked = bool(d730 & 0x20)
+        on_screen = self.text_box_on_screen()
+        text_box_open = on_screen and (text_box != 0 or input_locked)
         return {
-            "active": input_locked,        # kept for back-compat
+            "active": text_box_open or input_locked,
+            "text_active": text_box_open,
             "input_locked": input_locked,
-            "text_active": bool(text_box) and input_locked,
+            "cutscene": input_locked and not text_box_open,
             "text_box_id": text_box,
+            "text_box_on_screen": on_screen,
             "d730": d730,
         }
+
+    def text_box_on_screen(self) -> bool:
+        """Corroborate wTextBoxID against the screen itself.
+
+        A Gen 1 text box draws a border across the bottom rows of wTileMap.
+        wTextBoxID can retain a stale non-zero value after a box closes, so
+        the tilemap is the authority — it cannot go stale.
+        """
+        from pokemon_agent.collision import ADDR_TILEMAP, TILEMAP_W
+        row = self.emu.read_range(ADDR_TILEMAP + 12 * TILEMAP_W, TILEMAP_W)
+        return row[0] == row[-1] != 0x7F and row[0] == row[1]
 
     def read_map_info(self) -> Dict[str, Any]:
         """Read current map id and name."""

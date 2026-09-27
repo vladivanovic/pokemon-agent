@@ -266,6 +266,7 @@ class HermesDriver:
         self.stuck = 0
         self.consecutive_fail = 0               # consecutive laya failures
         self.last_confidence = 0
+        self.recent: deque = deque(maxlen=8)    # oscillation detection
 
         self.laya_router: Optional[Any] = None
         if self.use_laya:
@@ -494,10 +495,10 @@ class HermesDriver:
             criteria["interact"] = "Press A to talk to or examine what you face"
             for w in warps[:4]:
                 cell = w.get("cell")
+                if not cell or (w.get("row"), w.get("col")) == (PLAYER_ROW, PLAYER_COL):
+                    continue      # standing on it already; A or a step triggers it
                 dest = w.get("dest_map_name") or f"map {w.get('dest_map')}"
-                if cell:
-                    criteria[f"goto_{cell}"] = (
-                        f"Walk to the exit at {cell} leading to {dest}")
+                criteria[f"goto_{cell}"] = f"Walk to the exit at {cell} leading to {dest}"
 
         if not criteria:
             instructions = "Nothing is possible right now. Press B."
@@ -515,6 +516,24 @@ class HermesDriver:
             "exits": [w.get("cell") for w in warps],
             "stuck_turns": self.stuck,
         }
+
+        # Oscillation guard: cycling through the same couple of positions means
+        # the candidate set is wrong for this situation, not that Laya is
+        # unlucky. Only meaningful while exploring — a static position is
+        # normal and expected in battle and during dialog.
+        exploring = not (intro or dlg.get("text_active") or battle.get("in_battle"))
+        if exploring:
+            self.recent.append((laya_state["map_name"],
+                                laya_state["x"], laya_state["y"]))
+            if (len(self.recent) == self.recent.maxlen
+                    and len(set(self.recent)) <= 2):
+                logger.warning("oscillating between %d position(s) — forcing A",
+                               len(set(self.recent)))
+                self.recent.clear()
+                self.act(["press_a", "wait_30"])
+                return
+        else:
+            self.recent.clear()
 
         started = time.perf_counter()
         choice = self._laya_choose(laya_state, criteria, instructions)
@@ -545,12 +564,12 @@ class HermesDriver:
         elif choice in _DIRS:
             actions = [choice]
         elif choice.startswith("goto_"):
-            # One decision, many tiles: BFS over verified walkability turns a
-            # per-tile decision loop into a per-destination one.
             label = choice[5:]
             target = next(((w["row"], w["col"]) for w in warps
                            if w.get("cell") == label), None)
-            if target is not None:
+            if target == (PLAYER_ROW, PLAYER_COL):
+                actions = ["press_a"]     # already on the warp tile
+            elif target is not None:
                 actions = _path_to(passable, target)
             if not actions:
                 logger.warning("no path to %s; taking a single step instead", label)

@@ -492,7 +492,7 @@ def _get_state_dict() -> dict:
         dlg = state.get("dialog") or {}
         if (_config and _config.game_type == "red" and ctx.get("in_game")
                 and not (state.get("battle") or {}).get("in_battle")
-                and not dlg.get("input_locked")):
+                and not dlg.get("active")):
             from pokemon_agent.collision import (build_collision_grid,
                                                  render_ascii_map)
             from pokemon_agent.memory.red import MAP_NAMES
