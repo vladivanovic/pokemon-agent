@@ -274,10 +274,15 @@ class HermesDriver:
                 self.use_laya = False
             else:
                 try:
+                    logger.info("loading Laya (first run downloads ~1GB)…")
+                    t0 = time.perf_counter()
                     self.laya_router = Router(preload=True)  # type: ignore[misc]
-                    logger.info("Laya enabled — bypassing Hermes CLI for decisions")
+                    logger.info("Laya ready in %.1fs — bypassing Hermes CLI",
+                                time.perf_counter() - t0)
                 except Exception:
                     logger.exception("Laya router preload failed; falling back to Hermes")
+                    logger.error("pre-download with: "
+                                 "HF_HUB_ENABLE_HF_TRANSFER=1 hf download convaiinnovations/laya")
                     self.use_laya = False
 
     # --- server helpers ----------------------------------------------------
@@ -639,6 +644,10 @@ class HermesDriver:
         ctx = state.get("context") or {}
         intro = not ctx.get("in_game", False)
 
+        if self.control_state() != "running":
+            logger.info("control changed mid-turn — skipping Hermes call")
+            return
+        
         # Stuck detection: the map says we can move but the position is not
         # changing. Escalates to vision (Hermes) which usually reveals an
         # unnoticed text box or a sprite the grid missed.
@@ -712,14 +721,15 @@ class HermesDriver:
                 continue
             no_game_logged = False
 
-            # A bad turn must not kill the run.
+            # Re-check immediately before acting: a long turn can span a STOP.
+            if self.control_state() != "running":
+                continue
             try:
                 self.step()
             except Exception:
                 logger.exception("turn failed — continuing")
                 self.event(type="alert", text="Driver error — see log.")
                 time.sleep(3)
-            time.sleep(self.turn_delay)
 
 
 def run_autopilot(server: str = "http://localhost:8765",
