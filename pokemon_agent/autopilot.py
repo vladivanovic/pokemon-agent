@@ -410,7 +410,7 @@ class HermesDriver:
     # signature differs from what is assumed here, this is the only method
     # that needs changing.
 
-def _laya_choose(self, laya_state: Dict[str, Any],
+    def _laya_choose(self, laya_state: Dict[str, Any],
                      criteria: Dict[str, str],
                      instructions: str) -> Optional[str]:
         """Ask Laya to pick one key from *criteria*. Returns the key or None.
