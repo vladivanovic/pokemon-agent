@@ -268,22 +268,20 @@ class HermesDriver:
         self.laya_router: Optional[Any] = None
         if self.use_laya:
             if not LAYA_AVAILABLE:
-                logger.error("--laya requested but `import laya` failed: %r",
-                             _LAYA_IMPORT_ERROR)
-                logger.error("check you are in the venv where laya is installed")
-                self.use_laya = False
-            else:
-                try:
-                    logger.info("loading Laya (first run downloads ~1GB)…")
-                    t0 = time.perf_counter()
-                    self.laya_router = Router(preload=True)  # type: ignore[misc]
-                    logger.info("Laya ready in %.1fs — bypassing Hermes CLI",
-                                time.perf_counter() - t0)
-                except Exception:
-                    logger.exception("Laya router preload failed; falling back to Hermes")
-                    logger.error("pre-download with: "
-                                 "HF_HUB_ENABLE_HF_TRANSFER=1 hf download convaiinnovations/laya")
-                    self.use_laya = False
+                raise SystemExit(
+                    f"--laya requested but `import laya` failed: {_LAYA_IMPORT_ERROR!r}\n"
+                    f"check you are in the venv where laya is installed")
+            try:
+                logger.info("loading Laya (first run downloads ~1GB)…")
+                t0 = time.perf_counter()
+                self.laya_router = Router(preload=True)  # type: ignore[misc]
+                logger.info("Laya ready in %.1fs", time.perf_counter() - t0)
+            except Exception:
+                logger.exception("Laya router preload failed")
+                raise SystemExit(
+                    "Laya could not load. Pre-download it with:\n"
+                    "  rm -rf ~/.cache/huggingface/hub/models--convaiinnovations--laya\n"
+                    "  HF_HUB_ENABLE_HF_TRANSFER=1 hf download convaiinnovations/laya")
 
     # --- server helpers ----------------------------------------------------
 
@@ -655,11 +653,10 @@ class HermesDriver:
         self.stuck = self.stuck + 1 if (pos is not None and pos == self.last_pos) else 0
         self.last_pos = pos
 
-        if self.use_laya and self.laya_router is not None:
+        if self.use_laya:
             narrate = (self.laya_narrate_every
                        and (self.turn + 1) % self.laya_narrate_every == 0)
             if narrate:
-                logger.info("turn %d: Hermes narration turn", self.turn + 1)
                 self._hermes_turn(state, intro)
             else:
                 self._laya_turn(state, intro)
