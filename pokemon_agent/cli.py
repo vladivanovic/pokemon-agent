@@ -99,12 +99,15 @@ def cmd_info(args):
 
 
 def cmd_play(args):
-    """Run the standalone autopilot loop (LLM plays the game)."""
+    """Run the standalone autopilot loop."""
     from pokemon_agent.autopilot import run_autopilot
     server = f"http://{args.host}:{args.port}"
     run_autopilot(server=server, model=args.model,
-                  turn_delay=args.turn_delay, turn_timeout=args.turn_timeout,
-                  debug=args.debug)
+                  turn_delay=args.turn_delay,
+                  turn_timeout=getattr(args, "turn_timeout", 240),
+                  debug=getattr(args, "debug", False),
+                  use_laya=getattr(args, "laya", False),
+                  laya_narrate_every=getattr(args, "laya_narrate_every", 0))
 
 
 def cmd_play_api(args):
