@@ -1,22 +1,24 @@
-"""Standalone driver that lets **Hermes Agent** play Pokemon through a session.
+"""Standalone driver that plays Pokemon through a game session.
 
-This is NOT a raw-LLM loop. The brain is a real Hermes Agent session — with
-the `pokemon-player` skill, vision, memory, and the terminal tool — driven one
-turn at a time. The driver is intentionally thin:
+Two brains are supported:
 
-  loop while /control == "running":
-      hermes chat --resume <session> --yolo -s pokemon-player \
-        -q "<turn nudge + ascii map + compact state>"
+  Hermes (default) — a real Hermes Agent session with the `pokemon-player`
+    skill, vision, memory and the terminal tool, driven one turn at a time via
+    `hermes chat --resume`. Slow (seconds to minutes per turn on local
+    hardware) but can reason, narrate, search the web and set objectives.
 
-Normal turns are TEXT ONLY. The ASCII collision map in /state is ground truth
-read from game RAM, so it beats asking a vision model to read pixel art — and
-it keeps the prompt small, which matters a lot on local hardware. Hermes can
-fetch a frame itself (curl /screenshot + its vision tool) when the map is not
-enough: menus, dialog text, battle screens. The intro/title screens are the
-one case where the driver pushes an image, because no map exists there yet.
+  Laya (--laya)    — an in-process decision model. Milliseconds per turn,
+    returns a structured choice from a fixed candidate set, no text
+    generation, no regex parsing, no hallucinated actions. Bypasses Hermes
+    entirely. Cannot narrate or plan.
 
-Because we pass --resume with a single persistent session id, Hermes keeps
-memory and context across the whole playthrough.
+Normal Hermes turns are TEXT ONLY. The ASCII collision map in /state is
+ground truth read from game RAM, so it beats asking a vision model to read
+pixel art — and it keeps the prompt small, which matters a lot on local
+hardware. Hermes can fetch a frame itself (curl /screenshot + its vision
+tool) when the map is not enough: menus, dialog text, battle screens. The
+driver only pushes an image for the intro screens, where no map exists yet,
+and when the player appears wedged.
 
 The loop is gated by the server's /control state (Start/Pause/Stop buttons).
 
@@ -36,26 +38,35 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections import deque
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
-# Laya decision model — opt-in replacement for Hermes CLI per-turn calls.
-# When use_laya=True, step() uses router.predict(state, questions) instead of
-# subprocess.run(["hermes", "chat", ...]). This is ~30-40ms on Orin GPU vs
-# several seconds for a new Python process each turn, and returns structured
-# choices (choice / noul / score) with calibrated probabilities, no text
-# generation, no regex parsing, zero hallucination on action selection.
+# Laya decision model — optional. Import failure must be loud at use time,
+# not silently equivalent to "feature disabled".
 try:
     from laya import Router  # type: ignore
     LAYA_AVAILABLE = True
-except Exception:  # pragma: no cover — import failure at runtime
-    LAYA_AVAILABLE = False  # pragma: no cover
+    _LAYA_IMPORT_ERROR: Optional[BaseException] = None
+except Exception as _exc:  # pragma: no cover
+    Router = None  # type: ignore
+    LAYA_AVAILABLE = False
+    _LAYA_IMPORT_ERROR = _exc
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("pokemon-agent.autopilot")
+
+# The collision grid is screen-relative and the player is always at E5,
+# i.e. (row 4, col 4) in the 9x10 walkability grids.
+PLAYER_ROW, PLAYER_COL = 4, 4
+GRID_ROWS, GRID_COLS = 9, 10
+_DIRS: Dict[str, Tuple[int, int]] = {
+    "walk_up": (-1, 0), "walk_down": (1, 0),
+    "walk_left": (0, -1), "walk_right": (0, 1),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -81,11 +92,11 @@ IGNORE them entirely. {vision}
 Your only job this turn: advance the intro. POST one of these to
 {server}/action with -H 'Content-Type: application/json':
 
-  Title screen / NEW GAME      {{"actions":["press_a"]}}
-  Oak talking / any text box   {{"actions":["a_until_dialog_end"]}}
-  Name menu (NEW NAME/RED/...) {{"actions":["press_down","press_a"]}}
+  Title screen / NEW GAME       {{"actions":["press_a"]}}
+  Oak talking / any text box    {{"actions":["a_until_dialog_end"]}}
+  Name menu (NEW NAME/RED/...)  {{"actions":["press_down","press_a"]}}
   Options screen (went too far) {{"actions":["press_b"]}}
-  Unsure                       {{"actions":["press_a"]}}
+  Unsure                        {{"actions":["press_a"]}}
 
 On the name menu do NOT press A on "NEW NAME" — that opens letter-by-letter
 entry. Press down first to take a preset.
@@ -127,6 +138,10 @@ STATE:
 """
 
 
+# ---------------------------------------------------------------------------
+# State trimming
+# ---------------------------------------------------------------------------
+
 def _compact_state(state: Dict[str, Any]) -> Dict[str, Any]:
     """Trim the full state dict to what a turn actually needs.
 
@@ -159,6 +174,7 @@ def _compact_state(state: Dict[str, Any]) -> Dict[str, Any]:
         "text_active": dialog.get("text_active"),
         "input_locked": dialog.get("input_locked"),
         "in_battle": battle.get("in_battle"),
+        # battle.enemy is a DICT, not a list — one active enemy at a time.
         "enemy": ({"species": enemy.get("species"), "level": enemy.get("level"),
                    "hp": enemy.get("hp"), "max_hp": enemy.get("max_hp"),
                    "types": enemy.get("types")}
@@ -175,10 +191,66 @@ def _compact_state(state: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# Grid helpers — screen-relative pathing over verified walkability
+# ---------------------------------------------------------------------------
+
+def _grid_open(passable: List[List[bool]], r: int, c: int) -> bool:
+    return bool(passable
+                and 0 <= r < len(passable)
+                and 0 <= c < len(passable[r])
+                and passable[r][c])
+
+
+def _legal_dirs(passable: List[List[bool]]) -> Dict[str, Tuple[int, int]]:
+    """Directions the collision map says are actually possible from E5."""
+    return {name: d for name, d in _DIRS.items()
+            if _grid_open(passable, PLAYER_ROW + d[0], PLAYER_COL + d[1])}
+
+
+def _path_to(passable: List[List[bool]], target: Tuple[int, int],
+             limit: int = 12) -> List[str]:
+    """BFS from E5 to *target*, returning walk actions.
+
+    Trivially cheap on a 10x9 grid, and it converts "one LLM call per tile"
+    into "one call per destination" — the single biggest speed win available
+    when the decision model is the bottleneck.
+    """
+    start = (PLAYER_ROW, PLAYER_COL)
+    if target == start:
+        return []
+    seen = {start}
+    q = deque([(start, [])])
+    while q:
+        (r, c), path = q.popleft()
+        if len(path) >= limit:
+            continue
+        for name, (dr, dc) in _DIRS.items():
+            nr, nc = r + dr, c + dc
+            if (nr, nc) in seen:
+                continue
+            if not (0 <= nr < GRID_ROWS and 0 <= nc < GRID_COLS):
+                continue
+            # The destination itself may be a door/NPC tile that reads as
+            # blocked; allow stepping onto it as the final move.
+            if not _grid_open(passable, nr, nc) and (nr, nc) != target:
+                continue
+            seen.add((nr, nc))
+            if (nr, nc) == target:
+                return path + [name]
+            q.append(((nr, nc), path + [name]))
+    return []
+
+
+# ---------------------------------------------------------------------------
+# Driver
+# ---------------------------------------------------------------------------
+
 class HermesDriver:
     def __init__(self, server: str, model: Optional[str], provider: Optional[str],
                  turn_delay: float = 1.5, save_every: int = 20,
-                 turn_timeout: int = 240, use_laya: bool = False):
+                 turn_timeout: int = 240, use_laya: bool = False,
+                 laya_narrate_every: int = 0):
         self.server = server.rstrip("/")
         self.model = model
         self.provider = provider
@@ -186,21 +258,27 @@ class HermesDriver:
         self.save_every = save_every
         self.turn_timeout = turn_timeout
         self.use_laya = use_laya
+        self.laya_narrate_every = laya_narrate_every
         self.game_id: Optional[str] = None      # active game session id
         self.session_id: Optional[str] = None   # bound Hermes session id
         self.turn = 0
         self.last_pos: Optional[Any] = None     # stuck detection
         self.stuck = 0
 
-        # Laya decision model (opt-in, GPU-accelerated, ~30-40ms/inference)
         self.laya_router: Optional[Any] = None
-        if self.use_laya and LAYA_AVAILABLE:
-            try:
-                self.laya_router = Router(preload=True)
-                logger.info("Laya decision model enabled — will use instead of Hermes CLI")
-            except Exception as exc:
-                logger.warning("Laya router preload failed: %s", exc)
+        if self.use_laya:
+            if not LAYA_AVAILABLE:
+                logger.error("--laya requested but `import laya` failed: %r",
+                             _LAYA_IMPORT_ERROR)
+                logger.error("check you are in the venv where laya is installed")
                 self.use_laya = False
+            else:
+                try:
+                    self.laya_router = Router(preload=True)  # type: ignore[misc]
+                    logger.info("Laya enabled — bypassing Hermes CLI for decisions")
+                except Exception:
+                    logger.exception("Laya router preload failed; falling back to Hermes")
+                    self.use_laya = False
 
     # --- server helpers ----------------------------------------------------
 
@@ -227,6 +305,26 @@ class HermesDriver:
         except Exception:
             return "unknown"
 
+    def act(self, actions: List[str]) -> bool:
+        """Send actions to the EMULATOR. /event is narration only and moves
+        nothing — this is the endpoint that actually presses buttons."""
+        if not actions:
+            return False
+        try:
+            self._post("/action", {"actions": actions}, timeout=90)
+            return True
+        except Exception as exc:
+            body = getattr(getattr(exc, "response", None), "text", "")
+            logger.warning("action %s failed: %s %s", actions, exc, body[:200])
+            return False
+
+    def event(self, **kw) -> None:
+        """Push narration to the dashboard. Never affects the game."""
+        try:
+            self._post("/event", kw)
+        except Exception:
+            pass
+
     def sync_active_game(self) -> None:
         """Adopt the active game's id and its Hermes brain id.
 
@@ -244,12 +342,6 @@ class HermesDriver:
             self.game_id = cur.get("id")
             self.session_id = cur.get("hermes_session_id")  # None for a new game
             print(f"[driver] active game: {self.game_id} (hermes={self.session_id})")
-
-    def event(self, **kw) -> None:
-        try:
-            self._post("/event", kw)
-        except Exception:
-            pass
 
     def bind_hermes(self) -> None:
         if self.game_id and self.session_id:
@@ -292,7 +384,7 @@ class HermesDriver:
         logger.info("preflight OK: %s", (r.stdout or "").strip()[:120])
         return True
 
-    # --- one turn ----------------------------------------------------------
+    # --- frames ------------------------------------------------------------
 
     def _fetch_frame(self, endpoint: str, path: str) -> bool:
         """Download a PNG to *path*. Returns True on success."""
@@ -308,106 +400,133 @@ class HermesDriver:
             logger.warning("screenshot %s failed: %s %s", endpoint, exc, body[:200])
             return False
 
-    def step(self) -> None:
-        emu = self.emulator_state()
-        if emu != "ready":
-            logger.info("emulator %s — waiting", emu)
-            time.sleep(3)
-            return
+    # --- Laya --------------------------------------------------------------
+    #
+    # ALL Laya-specific API usage is confined to _laya_choose(). If the real
+    # signature differs from what is assumed here, this is the only method
+    # that needs changing.
 
+    def _laya_choose(self, laya_state: Dict[str, Any],
+                     criteria: Dict[str, str]) -> Optional[str]:
+        """Ask Laya to pick one key from *criteria*. Returns the key or None.
+
+        ASSUMED API:
+            router.predict(state: dict, questions: dict) -> dict
+            questions = {"action": {"type": "choice", "criteria": {key: desc}}}
+            result["action"]["choice"] == one of the criteria keys
+        """
         try:
-            state = self._get("/state").json()
-        except Exception as exc:
-            logger.error("state read failed: %s", exc)
-            time.sleep(2)
-            return
+            result = self.laya_router.predict(  # type: ignore[union-attr]
+                laya_state,
+                {"action": {"type": "choice", "criteria": criteria}},
+            )
+        except Exception:
+            logger.exception("laya predict failed")
+            return None
 
-        if state.get("status") == "not_ready":
-            logger.info("state not ready — waiting")
-            time.sleep(2)
-            return
+        ans = result.get("action") if isinstance(result, dict) else None
+        choice = ans.get("choice") if isinstance(ans, dict) else ans
+        if choice not in criteria:
+            logger.warning("laya returned %r which is not in %s",
+                           choice, sorted(criteria))
+            return None
+        return choice
 
+    def _laya_turn(self, state: Dict[str, Any], intro: bool) -> None:
+        """One Laya-driven turn: pick from a legal candidate set and execute."""
+        col = state.get("collision") or {}
+        passable = col.get("passable") or col.get("walkable") or []
+        dlg = state.get("dialog") or {}
+        battle = state.get("battle") or {}
+        p = state.get("player") or {}
+        warps = col.get("warps") or []
+
+        # Candidate set is constructed from ground truth, so an illegal move
+        # is not merely discouraged — it is not offered.
+        criteria: Dict[str, str] = {}
+        if intro or dlg.get("text_active"):
+            criteria["advance_text"] = "Press A to advance dialog, menu or intro"
+            if intro:
+                criteria["menu_down_a"] = "Move the menu cursor down, then confirm"
+                criteria["back_out"] = "Press B to leave this menu"
+        elif battle.get("in_battle"):
+            criteria["advance_text"] = "Press A to confirm the highlighted option"
+            criteria["menu_down_a"] = "Move down one option, then confirm"
+            criteria["back_out"] = "Press B to go back"
+        else:
+            for name in _legal_dirs(passable):
+                criteria[name] = f"Move one tile {name.split('_')[1]}"
+            criteria["interact"] = "Press A to talk to or examine what you face"
+            for w in warps[:4]:
+                cell = w.get("cell")
+                dest = w.get("dest_map_name") or f"map {w.get('dest_map')}"
+                if cell:
+                    criteria[f"goto_{cell}"] = f"Walk to the exit at {cell} leading to {dest}"
+
+        if not criteria:
+            criteria["back_out"] = "Nothing else is possible; press B"
+
+        laya_state = {
+            "map_name": (state.get("map") or {}).get("map_name", ""),
+            "x": (p.get("position") or {}).get("x"),
+            "y": (p.get("position") or {}).get("y"),
+            "facing": p.get("facing"),
+            "in_battle": bool(battle.get("in_battle")),
+            "text_active": bool(dlg.get("text_active")),
+            "phase": (state.get("context") or {}).get("phase"),
+            "map_ascii": col.get("ascii") or "",
+            "exits": [w.get("cell") for w in warps],
+            "stuck_turns": self.stuck,
+        }
+
+        started = time.perf_counter()
+        choice = self._laya_choose(laya_state, criteria)
+        took_ms = (time.perf_counter() - started) * 1000.0
+
+        actions: List[str] = []
+        if choice is None:
+            actions = ["wait_30"]
+        elif choice == "advance_text":
+            actions = ["a_until_dialog_end"] if dlg.get("text_active") else ["press_a"]
+        elif choice == "menu_down_a":
+            actions = ["press_down", "press_a"]
+        elif choice == "back_out":
+            actions = ["press_b"]
+        elif choice == "interact":
+            actions = ["press_a"]
+        elif choice in _DIRS:
+            actions = [choice]
+        elif choice.startswith("goto_"):
+            label = choice[5:]
+            target = next(((w["row"], w["col"]) for w in warps
+                           if w.get("cell") == label), None)
+            if target is not None:
+                actions = _path_to(passable, target)
+            if not actions:
+                logger.warning("no path to %s; falling back to a single step", label)
+                legal = list(_legal_dirs(passable))
+                actions = [legal[0]] if legal else ["wait_30"]
+
+        logger.info("turn %d: laya=%s in %.0fms -> %s (from %d options) phase=%s stuck=%d",
+                    self.turn + 1, choice, took_ms, actions, len(criteria),
+                    laya_state["phase"], self.stuck)
+
+        self.act(actions)
+        self.event(type="decision",
+                   text=f"[laya {took_ms:.0f}ms] {choice} → {' · '.join(actions)}")
+
+    # --- Hermes ------------------------------------------------------------
+
+    def _hermes_turn(self, state: Dict[str, Any], intro: bool) -> None:
+        """One Hermes-driven turn: build a prompt, shell out, let it act."""
         ctx = state.get("context") or {}
-        intro = not ctx.get("in_game", False)
-
-        # Stuck detection: the map says we can move but the position is not
-        # changing. Escalates to vision, which usually reveals an unnoticed
-        # text box or a sprite the grid missed.
-        pos = (state.get("player") or {}).get("position")
-        self.stuck = self.stuck + 1 if (pos is not None and pos == self.last_pos) else 0
-        self.last_pos = pos
-
-        # --- Laya decision model opt-in (early return) ---
-        if self.use_laya and self.laya_router is not None:
-            # Structured prediction ~30-40ms on Orin GPU, replacing
-            # subprocess.run(["hermes", "chat", ...]) per turn.
-            try:
-                state = self._get("/state").json()
-            except Exception as e:
-                logger.error(f"State read failed: {e}")
-                time.sleep(2)
-                return
-
-            ctx = state.get("context") or {}
-            intro = not ctx.get("in_game", False)
-
-            # Build minimal state dict for Laya questions
-            p = state.get("player") or {}
-            col = state.get("collision") or {}
-            battle = state.get("battle") or {}
-
-            laya_state = {
-                "player_x": p.get("position", {}).get("x") if p.get("position") else 0,
-                "player_y": p.get("position", {}).get("y") if p.get("position") else 0,
-                "enemies": [(e.get("species"), e.get("position", {}).get("x", 0),
-                             e.get("position", {}).get("y", 0))
-                            for e in (battle.get("enemy") or [])],
-                "health": p.get("health", 100),
-                "in_battle": battle.get("in_battle", False),
-                "map_name": (state.get("map") or {}).get("map_name", ""),
-            }
-
-            # Questions: what should the agent do this turn?
-            questions = {
-                "action": {
-                    "type": "choice",
-                    "criteria": {
-                        "move_left": "Press D-pad left / walk left",
-                        "move_right": "Press D-pad right / walk right",
-                        "do_nothing": "Wait / hold position",
-                        "use_item": "Press Select / Open menu",
-                    }
-                }
-            }
-
-            result = self.laya_router.predict(laya_state, questions)
-            choice = result.get("action", {}).get("choice", "do_nothing")
-
-            # Map Laya choice to Hermes events
-            if choice == "move_left":
-                self.event(type="action", text="walk_left")
-            elif choice == "move_right":
-                self.event(type="action", text="walk_right")
-            elif choice == "use_item":
-                self.event(type="action", text="use_item")
-            else:
-                # do_nothing or unrecognized — no action this turn
-                logger.debug(f"Laya chose: {choice} — no action taken")
-
-            logger.info("turn %d: Laya choice=%s phase=%s", self.turn + 1, choice,
-                        ctx.get("phase", "unknown"))
-            self.turn += 1
-            if self.save_every and self.turn % self.save_every == 0:
-                self.save_game()
-            return
-
         col = state.get("collision") or {}
         map_ascii = col.get("ascii") or (
             f"(map unavailable: {col.get('reason', 'not built')})")
 
-        # Push an image only when there is no usable map: the intro screens,
-        # or when we appear wedged. Ordinary turns are text-only and cheap;
-        # Hermes can curl a frame itself when it decides it needs one.
+        # Push an image only when there is no usable map: the intro screens, or
+        # when we appear wedged. Ordinary turns are text-only and cheap; Hermes
+        # can curl a frame itself when it decides it needs one.
         img_path = str(Path(tempfile.gettempdir()) / "pokemon_turn.png")
         have_img = False
         if intro:
@@ -443,17 +562,20 @@ class HermesDriver:
         cmd += ["-q", prompt]
 
         logger.info("turn %d: phase=%s img=%s stuck=%d prompt=%dB",
-                    self.turn + 1, ctx.get("phase"), have_img, self.stuck, len(prompt))
+                    self.turn + 1, ctx.get("phase"), have_img, self.stuck,
+                    len(prompt))
         logger.debug("prompt:\n%s", prompt)
 
         started = time.perf_counter()
         try:
+            # stdin=DEVNULL so an interactive prompt from hermes fails fast
+            # instead of blocking until the turn timeout.
             out = subprocess.run(cmd, capture_output=True, text=True,
                                  stdin=subprocess.DEVNULL,
                                  timeout=self.turn_timeout)
             stdout, stderr = out.stdout or "", out.stderr or ""
-            logger.info("turn took %.1fs (rc=%s)", time.perf_counter() - started,
-                        out.returncode)
+            logger.info("turn took %.1fs (rc=%s)",
+                        time.perf_counter() - started, out.returncode)
             if stdout.strip():
                 logger.info("hermes: %s", stdout.strip()[:400])
             if stderr.strip():
@@ -475,6 +597,7 @@ class HermesDriver:
             return
 
         # Capture the session id from the first run so later turns resume it.
+        # Without this every turn is a brand-new session with no memory.
         if self.session_id is None:
             combined = stdout + "\n" + stderr
             m = (re.search(r"session_id:\s*(\S+)", combined)
@@ -492,6 +615,48 @@ class HermesDriver:
                                "NO memory across turns")
                 logger.debug("searched output: %s", combined[:800])
 
+    # --- one turn ----------------------------------------------------------
+
+    def step(self) -> None:
+        emu = self.emulator_state()
+        if emu != "ready":
+            logger.info("emulator %s — waiting (press START on the dashboard)", emu)
+            time.sleep(3)
+            return
+
+        try:
+            state = self._get("/state").json()
+        except Exception as exc:
+            logger.error("state read failed: %s", exc)
+            time.sleep(2)
+            return
+
+        if state.get("status") == "not_ready":
+            logger.info("state not ready — waiting")
+            time.sleep(2)
+            return
+
+        ctx = state.get("context") or {}
+        intro = not ctx.get("in_game", False)
+
+        # Stuck detection: the map says we can move but the position is not
+        # changing. Escalates to vision (Hermes) which usually reveals an
+        # unnoticed text box or a sprite the grid missed.
+        pos = (state.get("player") or {}).get("position")
+        self.stuck = self.stuck + 1 if (pos is not None and pos == self.last_pos) else 0
+        self.last_pos = pos
+
+        if self.use_laya and self.laya_router is not None:
+            narrate = (self.laya_narrate_every
+                       and (self.turn + 1) % self.laya_narrate_every == 0)
+            if narrate:
+                logger.info("turn %d: Hermes narration turn", self.turn + 1)
+                self._hermes_turn(state, intro)
+            else:
+                self._laya_turn(state, intro)
+        else:
+            self._hermes_turn(state, intro)
+
         self.turn += 1
         if self.save_every and self.turn % self.save_every == 0:
             self.save_game()
@@ -499,15 +664,25 @@ class HermesDriver:
     # --- main loop ---------------------------------------------------------
 
     def run(self) -> None:
-        if not self.preflight():
-            self.event(type="alert", text="Hermes preflight failed — see driver log.")
-            sys.exit(1)
+        # Laya does not shell out to hermes, so a hermes preflight failure
+        # must not kill a Laya run. Narration turns still need it, though.
+        needs_hermes = (not self.use_laya) or self.laya_narrate_every > 0
+        if needs_hermes:
+            if not self.preflight():
+                self.event(type="alert",
+                           text="Hermes preflight failed — see driver log.")
+                sys.exit(1)
+        else:
+            logger.info("Laya-only mode — skipping Hermes preflight")
 
-        print(f"[driver] Hermes-driven autopilot. server={self.server} "
+        brain = "laya" if self.use_laya else "hermes"
+        if self.use_laya and self.laya_narrate_every:
+            brain = f"laya + hermes every {self.laya_narrate_every} turns"
+        print(f"[driver] autopilot. server={self.server} brain={brain} "
               f"model={self.model or 'config default'}")
         print("[driver] waiting for control=running + an active game…")
         self.event(type="alert",
-                   text="Hermes online — start or load a game, then press START.")
+                   text=f"Driver online ({brain}) — load a game, then press START.")
 
         idle_logged = False
         no_game_logged = False
@@ -553,12 +728,14 @@ def run_autopilot(server: str = "http://localhost:8765",
                   turn_timeout: int = 240,
                   save_every: int = 20,
                   debug: bool = False,
-                  use_laya: bool = False) -> None:
+                  use_laya: bool = False,
+                  laya_narrate_every: int = 0) -> None:
     if debug:
         logging.getLogger("pokemon-agent").setLevel(logging.DEBUG)
         logger.info("debug logging enabled")
     model = model or os.environ.get("POKEMON_HERMES_MODEL")
     provider = os.environ.get("POKEMON_HERMES_PROVIDER")
-    HermesDriver(server, model, provider, turn_delay=turn_delay,
-                 turn_timeout=turn_timeout, save_every=save_every,
-                 use_laya=use_laya).run()
+    HermesDriver(server, model, provider,
+                 turn_delay=turn_delay, turn_timeout=turn_timeout,
+                 save_every=save_every, use_laya=use_laya,
+                 laya_narrate_every=laya_narrate_every).run()
