@@ -212,7 +212,7 @@ def _compact_state(state: Dict[str, Any]) -> Dict[str, Any]:
                    "types": enemy.get("types")}
                   if battle.get("in_battle") else None),
         "status": state.get("status"),
-        "dialog_text": (state.get("dialog"),
+        "dialog_text": (state.get("dialog")),
     }
     # Only surface failures when there are some — silence is the normal case.
     if state.get("errors"):
