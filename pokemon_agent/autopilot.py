@@ -149,6 +149,10 @@ Server: {server}
 You know Pokémon Red. Laya does not — it only picks directions. Use that
 knowledge: work out what the game is waiting for, and do it.
 
+NEVER call /load or /save. NEVER load a save state. If movement seems not to
+work, it is because a text box is open or an NPC is in the way — not because
+the emulator is broken. Press B to clear text, or walk around the obstacle.
+
 Each turn:
 1. POST {server}/event {{"type":"reasoning","text":"..."}}  what is blocking us
 2. POST {server}/action {{"actions":[...]}}  up to 8 actions — you may send a
@@ -208,6 +212,7 @@ def _compact_state(state: Dict[str, Any]) -> Dict[str, Any]:
                    "types": enemy.get("types")}
                   if battle.get("in_battle") else None),
         "status": state.get("status"),
+        "dialog_text": (state.get("dialog"),
     }
     # Only surface failures when there are some — silence is the normal case.
     if state.get("errors"):
@@ -349,6 +354,7 @@ class HermesDriver:
         self.hermes_goal: str = ""
         self.progress_fp: Optional[tuple] = None
         self.progress_at: float = time.perf_counter()
+        
 
         self.laya_router: Optional[Any] = None
         if self.use_laya:
@@ -471,6 +477,33 @@ class HermesDriver:
             return False
         logger.info("preflight OK: %s", (r.stdout or "").strip()[:120])
         return True
+
+    def _sync_objectives(self, state: Dict[str, Any]) -> None:
+        """Recompute objective completion from game state.
+
+        Objectives are display-only, but a stale list showing a finished task
+        is worse than none — it misleads both the viewer and any LLM that
+        reads the dashboard.
+        """
+        flags = state.get("flags") or {}
+        party = state.get("party") or []
+        objs = [
+            {"tier": "primary",
+             "text": "Get a starter Pokémon from Oak's Lab",
+             "done": len(party) > 0},
+            {"tier": "primary",
+             "text": "Deliver Oak's Parcel · get the Pokédex",
+             "done": bool(flags.get("has_pokedex"))},
+            {"tier": "secondary",
+             "text": "Reach Pewter City · Boulder Badge",
+             "done": flags.get("badge_count", 0) >= 1},
+        ]
+        if objs != self._last_objs:
+            self._last_objs = None
+            try:
+                self._post("/objectives", {"objectives": objs})
+            except Exception:
+                pass
 
     # --- frames ------------------------------------------------------------
 
@@ -841,11 +874,11 @@ class HermesDriver:
         # Push an image only when there is no usable map: the intro screens, or
         # when we appear wedged. Ordinary turns are text-only and cheap; Hermes
         # can curl a frame itself when it decides it needs one.
-        img_path = str(Path(tempfile.gettempdir()) / "pokemon_turn.png")
+img_path = str(Path(tempfile.gettempdir()) / "pokemon_turn.png")
         have_img = False
-        if intro:
+        if self.vision and intro:
             have_img = self._fetch_frame("/screenshot", img_path)
-        elif self.stuck >= 2:
+        elif self.vision and self.stuck >= 2:
             logger.info("position unchanged for %d turns — attaching frame", self.stuck)
             have_img = (self._fetch_frame("/screenshot/grid?scale=2", img_path)
                         or self._fetch_frame("/screenshot", img_path))
@@ -869,8 +902,10 @@ class HermesDriver:
                 state=json.dumps(_compact_state(state), indent=2),
             )
 
+        #cmd = ["hermes", "chat", "-Q", "--yolo", "--pass-session-id",
+        #       "-s", "pokemon-player", "-t", "file,terminal,web,vision"]
         cmd = ["hermes", "chat", "-Q", "--yolo", "--pass-session-id",
-               "-s", "pokemon-player", "-t", "file,terminal,web,vision"]
+                "-s", "pokemon-player", "-t", "terminal,webex,vision"]
         if self.session_id:
             cmd += ["--resume", self.session_id]
         if self.model:
@@ -987,6 +1022,7 @@ class HermesDriver:
                 logger.info("progress: %s -> %s", self.progress_fp, fp)
             self.progress_fp = fp
             self.progress_at = time.perf_counter()
+            self._sync_objectives(state)
 
         mode = self._arbitrate(state, made_progress) if self.use_laya else "hermes"
         if mode == "hermes":

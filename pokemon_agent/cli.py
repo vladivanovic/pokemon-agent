@@ -175,6 +175,8 @@ def main():
                         help="Seconds without progress before escalating to Hermes")
     play_p.add_argument("--hermes-turns", type=int, default=12,
                         help="Turns Hermes keeps control once escalated")
+    play_p.add_argument("--no-vision", action="store_true",
+                        help="Model is text-only; never attach screenshots")
 
     # --- play-api (Hermes AIAgent direct) ---
     play_api_p = sub.add_parser("play-api", help="Run the LLM autopilot using Hermes AIAgent API (direct, faster)")

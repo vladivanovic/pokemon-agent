@@ -835,6 +835,7 @@ class RedBlueMemoryReader(GameMemoryReader):
             "cutscene": input_locked and text_box == 0,
             "text_box_id": text_box,       # informational only — stale
             "d730": d730,
+            "text": self.read_screen_text()
         }
 
     def text_box_on_screen(self) -> bool:
@@ -847,6 +848,26 @@ class RedBlueMemoryReader(GameMemoryReader):
         from pokemon_agent.collision import ADDR_TILEMAP, TILEMAP_W
         row = self.emu.read_range(ADDR_TILEMAP + 12 * TILEMAP_W, TILEMAP_W)
         return row[0] == row[-1] != 0x7F and row[0] == row[1]
+
+    def read_screen_text(self) -> str:
+        """Decode on-screen text from the tilemap.
+
+        Gen 1's font tiles are laid out so tile ids match the text charmap,
+        so the same table that decodes names decodes the screen. This is the
+        only way a text-only agent can know what the game just said.
+
+        NEEDS VERIFICATION: row range and the space tile (0x7F) are from the
+        decomp but untested here.
+        """
+        from pokemon_agent.collision import ADDR_TILEMAP, TILEMAP_W
+        lines = []
+        for row in range(12, 18):
+            raw = self.emu.read_range(ADDR_TILEMAP + row * TILEMAP_W, TILEMAP_W)
+            s = "".join(GEN1_ENCODING.get(b, " ") if b != 0x7F else " "
+                        for b in raw).rstrip()
+            if s.strip():
+                lines.append(s.strip())
+        return " ".join(lines)
 
     def read_map_info(self) -> Dict[str, Any]:
         """Read current map id and name."""
