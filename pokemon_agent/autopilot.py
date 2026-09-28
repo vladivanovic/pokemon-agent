@@ -874,7 +874,7 @@ class HermesDriver:
         # Push an image only when there is no usable map: the intro screens, or
         # when we appear wedged. Ordinary turns are text-only and cheap; Hermes
         # can curl a frame itself when it decides it needs one.
-img_path = str(Path(tempfile.gettempdir()) / "pokemon_turn.png")
+        img_path = str(Path(tempfile.gettempdir()) / "pokemon_turn.png")
         have_img = False
         if self.vision and intro:
             have_img = self._fetch_frame("/screenshot", img_path)
