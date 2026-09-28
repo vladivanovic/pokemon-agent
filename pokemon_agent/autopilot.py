@@ -324,7 +324,8 @@ class HermesDriver:
                  turn_delay: float = 1.5, save_every: int = 20,
                  turn_timeout: int = 240, use_laya: bool = False,
                  laya_narrate_every: int = 0,
-                 stall_seconds: float = 60.0, hermes_turns: int = 12):
+                 stall_seconds: float = 60.0, hermes_turns: int = 12,
+                 vision: bool = True):
         self.server = server.rstrip("/")
         self.model = model
         self.provider = provider
@@ -355,6 +356,12 @@ class HermesDriver:
         self.progress_fp: Optional[tuple] = None
         self.progress_at: float = time.perf_counter()
         self._last_objs: Optional[list] = None
+        self.turn_timeout = turn_timeout
+        self.use_laya = use_laya
+        self.vision = vision          # False for text-only models
+        self.failed_targets: Dict[tuple, int] = {}   # (map, r, c) -> failures
+        self.last_explore_target: Optional[tuple] = None
+        self.last_explore_from: Optional[tuple] = None
         
         self.laya_router: Optional[Any] = None
         if self.use_laya:
@@ -648,6 +655,21 @@ class HermesDriver:
         key = (cur_map, pos.get("x"), pos.get("y"))
         self.visits[key] = self.visits.get(key, 0) + 1
 
+        # If the previous turn dispatched an explore path and we did not move,
+        # that destination is unreachable — a table or NPC the collision grid
+        # thinks is walkable. Record it or Laya will offer it forever.
+        if self.last_explore_target is not None:
+            want_r, want_c = self.last_explore_target
+            # Convert the intended screen cell to world coords as of last turn.
+            fx = self.last_explore_from[0] + (want_c - PLAYER_COL)
+            fy = self.last_explore_from[1] + (want_r - PLAYER_ROW)
+            if (pos.get("x"), pos.get("y")) != (fx, fy):
+                fk = (cur_map, want_r, want_c)
+                self.failed_targets[fk] = self.failed_targets.get(fk, 0) + 1
+                logger.info("explore target %s not reached (%d failures)",
+                            self.last_explore_target, self.failed_targets[fk])
+            self.last_explore_target = None
+
         # Wall-clock, not turn count: Laya runs ~10 turns/sec, so a 6-turn
         # window expires before the agent has taken a single step away from
         # the door it just came through.
@@ -710,6 +732,8 @@ class HermesDriver:
             for fr, fc in frontier:
                 if added >= 4:
                     break
+                if self.failed_targets.get((cur_map, fr, fc), 0) >= 2:
+                    continue          # proven unreachable; stop offering it
                 path = _path_to(passable, (fr, fc))
                 if not path:
                     continue
@@ -827,6 +851,10 @@ class HermesDriver:
                 fc = COL_LABELS_LOCAL.index(label[0])
                 fr = int(label[1:]) - 1
                 actions = _path_to(passable, (fr, fc))
+                # Remember the attempt so the next turn can tell whether it
+                # actually worked.
+                self.last_explore_target = (fr, fc)
+                self.last_explore_from = (pos.get("x"), pos.get("y"))
             except (ValueError, IndexError):
                 actions = []
             if not actions:
@@ -1117,7 +1145,8 @@ def run_autopilot(server: str = "http://localhost:8765",
                   use_laya: bool = False,
                   laya_narrate_every: int = 0,
                   stall_seconds: float = 60.0,
-                  hermes_turns: int = 12) -> None:
+                  hermes_turns: int = 12,
+                  vision: bool = True) -> None:
     if debug:
         logging.getLogger("pokemon-agent").setLevel(logging.DEBUG)
         logger.info("debug logging enabled")
@@ -1128,4 +1157,5 @@ def run_autopilot(server: str = "http://localhost:8765",
                  save_every=save_every, use_laya=use_laya,
                  laya_narrate_every=laya_narrate_every,
                  stall_seconds=stall_seconds,
-                 hermes_turns=hermes_turns).run()
+                 hermes_turns=hermes_turns,
+                 vision=vision).run()
