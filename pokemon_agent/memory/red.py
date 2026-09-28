@@ -813,31 +813,27 @@ class RedBlueMemoryReader(GameMemoryReader):
         if spc not in range(1, 152) and spc != 0:
             logger.warning(f"Enemy species ID {spc} unusual - struct offset mismatch?")
 
-    def read_dialog(self) -> Dict[str, Any]:
+def read_dialog(self) -> Dict[str, Any]:
         """Text-box and input-lock state.
 
-        Two independent signals, deliberately not conflated:
-          wTextBoxID  — non-zero while a text box is on screen, including
-                        while it waits for A. Can retain a stale value after
-                        the box closes.
-          wd730 bit 5 — _JOY_IGNORE: input disabled. Set during text scroll
-                        AND during scripted cutscene movement.
+        wd730 bit 5 (_JOY_IGNORE) is the only trustworthy signal: the engine
+        sets it whenever it is swallowing joypad input. wTextBoxID is NOT
+        cleared when a box closes, so it is stale by design and must never be
+        used on its own.
 
-        A box waiting for A has text_box set but may have released the input
-        lock, so requiring both misses the most common case.
+        Deliberately biased toward false negatives. Reporting "no dialog" when
+        there is one costs a wasted turn; reporting "dialog" when there is
+        none traps the agent permanently, because movement stops being offered.
         """
         text_box = self.emu.read_u8(ADDR_TEXT_BOX_ID)
         d730 = self.emu.read_u8(ADDR_D730)
         input_locked = bool(d730 & 0x20)
-        on_screen = self.text_box_on_screen()
-        text_box_open = on_screen and (text_box != 0 or input_locked)
         return {
-            "active": text_box_open or input_locked,
-            "text_active": text_box_open,
+            "active": input_locked,
+            "text_active": input_locked,
             "input_locked": input_locked,
-            "cutscene": input_locked and not text_box_open,
-            "text_box_id": text_box,
-            "text_box_on_screen": on_screen,
+            "cutscene": input_locked and text_box == 0,
+            "text_box_id": text_box,       # informational only — stale
             "d730": d730,
         }
 
