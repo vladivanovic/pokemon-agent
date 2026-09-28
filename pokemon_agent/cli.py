@@ -109,7 +109,9 @@ def cmd_play(args):
                   use_laya=getattr(args, "laya", False),
                   laya_narrate_every=getattr(args, "laya_narrate_every", 0),
                   stall_seconds=getattr(args, "stall_seconds", 60.0),
-                  hermes_turns=getattr(args, "hermes_turns", 12))
+                  hermes_turns=getattr(args, "hermes_turns", 12),
+                  hermes_turns=getattr(args, "hermes_turns", 12),
+                  vision=not getattr(args, "no_vision", False))
 
 
 def cmd_play_api(args):
