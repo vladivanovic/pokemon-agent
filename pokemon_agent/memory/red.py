@@ -92,6 +92,10 @@ ADDR_OAK_PARCEL    = 0xD74E   # bit 1 = has parcel
 ADDR_POKEDEX_FLAG  = 0xD74B   # bit 5 = has pokedex
 ADDR_TOWN_MAP_FLAG = 0xD5F3   # bit 0 = has town map
 
+# -- Menu Item Tracking --
+ADDR_CURRENT_MENU_ITEM = 0xCC26   # wCurrentMenuItem — cursor index
+ADDR_MAX_MENU_ITEM     = 0xCC28   # wMaxMenuItem
+
 
 # ===================================================================
 # Gen-1 character encoding table
@@ -786,6 +790,8 @@ class RedBlueMemoryReader(GameMemoryReader):
         if result["in_battle"]:
             result["enemy"] = self._read_battle_mon(ADDR_ENEMY_MON)
             result["active"] = self._read_battle_mon(ADDR_BATTLE_MON)
+            result["menu_index"] = self.emu.read_u8(ADDR_CURRENT_MENU_ITEM)
+            result["menu_max"] = self.emu.read_u8(ADDR_MAX_MENU_ITEM)
         return result
 
     def _validate_enemy_struct(self, data: bytes) -> None:
