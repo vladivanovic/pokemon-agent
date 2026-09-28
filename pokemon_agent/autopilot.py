@@ -138,6 +138,33 @@ STATE:
 {state}
 """
 
+ESCALATION_NUDGE = """You are playing Pokémon Red. Laya (a fast movement model) has
+been driving, but nothing has advanced for a while, so YOU have control for the
+next {budget} turns. This is turn {n} of {budget}.
+
+GOAL: {goal}
+
+Server: {server}
+
+You know Pokémon Red. Laya does not — it only picks directions. Use that
+knowledge: work out what the game is waiting for, and do it.
+
+Each turn:
+1. POST {server}/event {{"type":"reasoning","text":"..."}}  what is blocking us
+2. POST {server}/action {{"actions":[...]}}  up to 8 actions — you may send a
+   longer sequence than usual since you have the context to plan it
+3. If the blocker is cleared and only movement remains, write HANDBACK in your
+   reply and Laya will resume.
+
+All POSTs need -H 'Content-Type: application/json'.
+
+MAP:
+{map_ascii}
+
+STATE:
+{state}
+"""
+
 
 # ---------------------------------------------------------------------------
 # State trimming
@@ -191,6 +218,24 @@ def _compact_state(state: Dict[str, Any]) -> Dict[str, Any]:
         out["exits"] = exits
     return out
 
+def _progress_fingerprint(state: Dict[str, Any]) -> tuple:
+    """State that only changes on genuine advancement.
+
+    Deliberately excludes position: wandering changes x/y every turn but is
+    not progress. Map transitions, party growth, badges and story flags are.
+    """
+    flags = state.get("flags") or {}
+    party = state.get("party") or []
+    return (
+        (state.get("map") or {}).get("map_id"),
+        len(party),
+        sum(m.get("level", 0) for m in party),
+        flags.get("badge_count", 0),
+        bool(flags.get("has_pokedex")),
+        bool(flags.get("has_oaks_parcel")),
+        flags.get("pokedex_owned", 0),
+        len(state.get("bag") or []),
+    )
 
 # ---------------------------------------------------------------------------
 # Grid helpers — screen-relative pathing over verified walkability
@@ -273,7 +318,8 @@ class HermesDriver:
     def __init__(self, server: str, model: Optional[str], provider: Optional[str],
                  turn_delay: float = 1.5, save_every: int = 20,
                  turn_timeout: int = 240, use_laya: bool = False,
-                 laya_narrate_every: int = 0):
+                 laya_narrate_every: int = 0,
+                 stall_seconds: float = 60.0, hermes_turns: int = 12):
         self.server = server.rstrip("/")
         self.model = model
         self.provider = provider
@@ -294,6 +340,15 @@ class HermesDriver:
         self.visits: Dict[tuple, int] = {}      # (map, x, y) -> times seen
         self.map_changed_at: int = -99
         self.map_changed_time: float = 0.0
+        # --- brain arbitration ---
+        self.stall_seconds = stall_seconds
+        self.hermes_turns = hermes_turns
+        self.mode: str = "laya" if use_laya else "hermes"
+        self.mode_turns: int = 0
+        self.hermes_budget: int = 0
+        self.hermes_goal: str = ""
+        self.progress_fp: Optional[tuple] = None
+        self.progress_at: float = time.perf_counter()
 
         self.laya_router: Optional[Any] = None
         if self.use_laya:
@@ -432,6 +487,60 @@ class HermesDriver:
             body = getattr(getattr(exc, "response", None), "text", "")
             logger.warning("screenshot %s failed: %s %s", endpoint, exc, body[:200])
             return False
+
+    def _enter_mode(self, mode: str) -> None:
+        self.mode, self.mode_turns = mode, 0
+        self.recent.clear()
+        self.progress_at = time.perf_counter()   # grace period in the new mode
+        self.event(type="decision", text=f"[brain] switched to {mode}")
+
+    def _infer_goal(self, state: Dict[str, Any]) -> str:
+        """A coarse objective for the escalated turns, from game state alone."""
+        flags = state.get("flags") or {}
+        party = state.get("party") or []
+        map_name = (state.get("map") or {}).get("map_name", "?")
+        if not party:
+            return "Get your first Pokemon from Oak's Lab"
+        if not flags.get("has_pokedex"):
+            return ("Deliver Oak's Parcel from the Viridian City mart, "
+                    "then get the Pokedex")
+        if flags.get("badge_count", 0) == 0:
+            return "Reach Pewter City Gym and beat Brock for the Boulder Badge"
+        return f"Make story progress; you appear stuck in {map_name}"
+
+    def _arbitrate(self, state: Dict[str, Any], made_progress: bool) -> str:
+        """Decide which brain drives this turn.
+
+        Laya is the default: ~500x cheaper and good at movement. Hermes takes
+        over when nothing has advanced for a while and KEEPS control for a
+        budget of turns, so it can finish a multi-step errand instead of being
+        cut off mid-sequence.
+        """
+        stalled_for = time.perf_counter() - self.progress_at
+
+        if self.mode == "hermes":
+            self.mode_turns += 1
+            if made_progress and self.mode_turns >= 2:
+                logger.info("hermes made progress after %d turns — back to laya",
+                            self.mode_turns)
+                self._enter_mode("laya")
+            elif self.mode_turns >= self.hermes_budget:
+                logger.warning("hermes budget (%d turns) exhausted without "
+                               "progress — back to laya", self.hermes_budget)
+                self._enter_mode("laya")
+            return self.mode
+
+        self.mode_turns += 1
+        if stalled_for > self.stall_seconds:
+            self.hermes_goal = self._infer_goal(state)
+            self.hermes_budget = self.hermes_turns
+            logger.warning("no progress for %.0fs — escalating to hermes "
+                           "(budget %d turns, goal: %s)",
+                           stalled_for, self.hermes_budget, self.hermes_goal)
+            self._enter_mode("hermes")
+            self.event(type="alert",
+                       text=f"Escalating to Hermes: {self.hermes_goal}")
+        return self.mode
 
     # --- Laya --------------------------------------------------------------
     #
@@ -721,7 +830,8 @@ class HermesDriver:
         
     # --- Hermes ------------------------------------------------------------
 
-    def _hermes_turn(self, state: Dict[str, Any], intro: bool) -> None:
+    def _hermes_turn(self, state: Dict[str, Any], intro: bool,
+                     goal: str = "", budget: int = 0, n: int = 0) -> None:
         """One Hermes-driven turn: build a prompt, shell out, let it act."""
         ctx = state.get("context") or {}
         col = state.get("collision") or {}
@@ -745,6 +855,12 @@ class HermesDriver:
                 server=self.server,
                 phase=ctx.get("phase", "unknown"),
                 vision=INTRO_VISION_OK if have_img else INTRO_VISION_NONE,
+            )
+        elif goal:
+            prompt = ESCALATION_NUDGE.format(
+                server=self.server, goal=goal, budget=budget, n=n,
+                map_ascii=map_ascii,
+                state=json.dumps(_compact_state(state), indent=2),
             )
         else:
             prompt = TURN_NUDGE.format(
@@ -782,6 +898,9 @@ class HermesDriver:
                         time.perf_counter() - started, out.returncode)
             if stdout.strip():
                 logger.info("hermes: %s", stdout.strip()[:400])
+                if goal and "HANDBACK" in stdout.upper():
+                    logger.info("hermes requested handback")
+                    self._enter_mode("laya")
             if stderr.strip():
                 logger.debug("hermes stderr: %s", stderr[-2000:])
         except subprocess.TimeoutExpired as exc:
@@ -861,15 +980,20 @@ class HermesDriver:
             self.stuck = 0
             return
 
-        if self.use_laya:
-            narrate = (self.laya_narrate_every
-                       and (self.turn + 1) % self.laya_narrate_every == 0)
-            if narrate:
-                self._hermes_turn(state, intro)
-            else:
-                self._laya_turn(state, intro)
+        fp = _progress_fingerprint(state)
+        made_progress = fp != self.progress_fp
+        if made_progress:
+            if self.progress_fp is not None:
+                logger.info("progress: %s -> %s", self.progress_fp, fp)
+            self.progress_fp = fp
+            self.progress_at = time.perf_counter()
+
+        mode = self._arbitrate(state, made_progress) if self.use_laya else "hermes"
+        if mode == "hermes":
+            self._hermes_turn(state, intro, goal=self.hermes_goal,
+                              budget=self.hermes_budget, n=self.mode_turns)
         else:
-            self._hermes_turn(state, intro)
+            self._laya_turn(state, intro)
 
         self.turn += 1
         if self.save_every and self.turn % self.save_every == 0:
@@ -877,23 +1001,22 @@ class HermesDriver:
 
     # --- main loop ---------------------------------------------------------
 
-    def run(self) -> None:
-        # Laya does not shell out to hermes, so a hermes preflight failure
-        # must not kill a Laya run. Narration turns still need it, though.
-        needs_hermes = (not self.use_laya) or self.laya_narrate_every > 0
-        if needs_hermes:
-            if not self.preflight():
-                self.event(type="alert",
-                           text="Hermes preflight failed — see driver log.")
-                sys.exit(1)
-        else:
-            logger.info("Laya-only mode — skipping Hermes preflight")
+# --- main loop ---------------------------------------------------------
 
-        brain = "laya" if self.use_laya else "hermes"
-        if self.use_laya and self.laya_narrate_every:
-            brain = f"laya + hermes every {self.laya_narrate_every} turns"
+    def run(self) -> None:
+        # Hermes must always be reachable: escalation can fire at any time when
+        # Laya stalls, so a broken hermes is fatal even in --laya mode.
+        if not self.preflight():
+            self.event(type="alert",
+                       text="Hermes preflight failed — see driver log.")
+            sys.exit(1)
+
+        brain = "laya + hermes escalation" if self.use_laya else "hermes"
         print(f"[driver] autopilot. server={self.server} brain={brain} "
               f"model={self.model or 'config default'}")
+        if self.use_laya:
+            print(f"[driver] escalating to hermes after {self.stall_seconds:.0f}s "
+                  f"without progress, for up to {self.hermes_turns} turns")
         print("[driver] waiting for control=running + an active game…")
         self.event(type="alert",
                    text=f"Driver online ({brain}) — load a game, then press START.")
@@ -907,6 +1030,7 @@ class HermesDriver:
                     print("[driver] stopped — idling.")
                     idle_logged = True
                 self.last_pos, self.stuck = None, 0
+                self.recent.clear()
                 time.sleep(2)
                 continue
             if st == "paused":
@@ -926,17 +1050,26 @@ class HermesDriver:
                 continue
             no_game_logged = False
 
-            # Re-check immediately before acting: a long turn can span a STOP.
+            # Re-check immediately before acting: a hermes turn can take tens of
+            # seconds and span a STOP press, and state is only read at the top.
             if self.control_state() != "running":
                 continue
+
+            # A bad turn must not kill the run. SystemExit is deliberate
+            # (repeated laya failures) and must propagate.
             try:
                 self.step()
-            except Exception as exc:
-                if self.consecutive_fail == 0:
-                    logger.exception("laya predict failed")
-                else:
-                    logger.error("laya predict failed: %s", exc)
-                return None
+            except SystemExit:
+                raise
+            except Exception:
+                logger.exception("turn failed — continuing")
+                self.event(type="alert", text="Driver error — see log.")
+                time.sleep(3)
+
+            # Laya turns are ~70ms; hermes turns are tens of seconds. Only the
+            # fast path needs throttling.
+            if self.mode == "laya":
+                time.sleep(self.turn_delay)
 
 
 def run_autopilot(server: str = "http://localhost:8765",
@@ -946,7 +1079,9 @@ def run_autopilot(server: str = "http://localhost:8765",
                   save_every: int = 20,
                   debug: bool = False,
                   use_laya: bool = False,
-                  laya_narrate_every: int = 0) -> None:
+                  laya_narrate_every: int = 0,
+                  stall_seconds: float = 60.0,
+                  hermes_turns: int = 12) -> None:
     if debug:
         logging.getLogger("pokemon-agent").setLevel(logging.DEBUG)
         logger.info("debug logging enabled")
@@ -955,4 +1090,6 @@ def run_autopilot(server: str = "http://localhost:8765",
     HermesDriver(server, model, provider,
                  turn_delay=turn_delay, turn_timeout=turn_timeout,
                  save_every=save_every, use_laya=use_laya,
-                 laya_narrate_every=laya_narrate_every).run()
+                 laya_narrate_every=laya_narrate_every,
+                 stall_seconds=stall_seconds,
+                 hermes_turns=hermes_turns).run()
