@@ -885,12 +885,11 @@ class HermesDriver:
         elif choice == "interact":
             actions = ["press_a"]
         elif choice == "attack":
-            # FIGHT is the default cursor position, so A-A selects it and the
-            # first move without any cursor navigation.
-            actions = ["press_a", "wait_30", "press_a", "wait_60"]
+            actions = ["press_b", "wait_30", "press_up", "press_left",
+                       "press_a", "wait_30", "press_a", "wait_60"]
         elif choice == "flee":
-            # RUN is bottom-right of the 2x2 menu.
-            actions = ["press_down", "press_right", "press_a", "wait_60"]
+            actions = ["press_b", "wait_30", "press_down", "press_right",
+                       "press_a", "wait_60"]
         elif choice == "exit_building":
             actions = ["walk_down", "walk_down"]
         elif choice in _DIRS:
