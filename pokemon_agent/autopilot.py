@@ -160,6 +160,11 @@ Each turn:
 3. If the blocker is cleared and only movement remains, write HANDBACK in your
    reply and Laya will resume.
 
+Warps (doors, stairs, exits) trigger when you WALK onto or off them — pressing
+A on a warp tile does nothing. Building exits in this game are on the SOUTH
+edge: to leave, walk DOWN off the doormat. `exits` in STATE gives the cell of
+each warp; "outside" means it leads out of the building.
+
 All POSTs need -H 'Content-Type: application/json'.
 
 MAP:
@@ -364,6 +369,7 @@ class HermesDriver:
         self.failed_targets: Dict[tuple, int] = {}   # (map, r, c) -> failures
         self.last_explore_target: Optional[tuple] = None
         self.last_explore_from: Optional[tuple] = None
+        self.session_started_at: int = 0
         
         self.laya_router: Optional[Any] = None
         if self.use_laya:
@@ -594,6 +600,12 @@ class HermesDriver:
         cut off mid-sequence.
         """
         stalled_for = time.perf_counter() - self.progress_at
+
+        # Mechanical problems have mechanical solutions. Escalating "walk out of
+        # a door" to a 550B model is both slow and unreliable.
+        # Laya is driving — never yank control away from a Hermes turn mid-budget.
+        if self.mode == "laya" and (state.get("collision") or {}).get("player_on_warp"):
+            return "laya"
 
         if self.mode == "hermes":
             self.mode_turns += 1
@@ -946,6 +958,14 @@ class HermesDriver:
     def _hermes_turn(self, state: Dict[str, Any], intro: bool,
                      goal: str = "", budget: int = 0, n: int = 0) -> None:
         """One Hermes-driven turn: build a prompt, shell out, let it act."""
+        # Replaying a 1000-message history dominates latency and buys nothing:
+        # the escalation goal is regenerated from live state every turn.
+        if self.session_id and (self.turn - self.session_started_at) > 30:
+            logger.info("rotating hermes session (was %d turns old)",
+                        self.turn - self.session_started_at)
+            self.session_id = None
+            self.session_started_at = self.turn
+
         ctx = state.get("context") or {}
         col = state.get("collision") or {}
         map_ascii = col.get("ascii") or (
@@ -985,8 +1005,8 @@ class HermesDriver:
         #cmd = ["hermes", "chat", "-Q", "--yolo", "--pass-session-id",
         #       "-s", "pokemon-player", "-t", "file,terminal,web,vision"]
         cmd = ["hermes", "chat", "-Q", "--yolo", "--pass-session-id",
-                "-s", "pokemon-player", "-t", "terminal,webex,vision"]
-        if self.session_id:
+                "-s", "pokemon-player", "-t", "terminal,web,vision"]
+        if self.session_id and not goal:
             cmd += ["--resume", self.session_id]
         if self.model:
             cmd += ["-m", self.model]
@@ -1192,7 +1212,7 @@ def run_autopilot(server: str = "http://localhost:8765",
                   model: Optional[str] = None,
                   turn_delay: float = 1.5,
                   turn_timeout: int = 240,
-                  save_every: int = 20,
+                  save_every: int = 200,
                   debug: bool = False,
                   use_laya: bool = False,
                   laya_narrate_every: int = 0,
