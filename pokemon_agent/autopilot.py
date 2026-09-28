@@ -67,6 +67,7 @@ _DIRS: Dict[str, Tuple[int, int]] = {
     "walk_up": (-1, 0), "walk_down": (1, 0),
     "walk_left": (0, -1), "walk_right": (0, 1),
 }
+COL_LABELS_LOCAL = "ABCDEFGHIJ"
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +241,28 @@ def _path_to(passable: List[List[bool]], target: Tuple[int, int],
                 return path + [name]
             q.append(((nr, nc), path + [name]))
     return []
+
+def _frontier_targets(passable: List[List[bool]], visits: Dict[tuple, int],
+                      cur_map: str, px: int, py: int) -> List[Tuple[int, int]]:
+    """On-screen cells the agent has never stood on, reachable from E5.
+
+    Screen cells map to world coords by offsetting from the player: the player
+    is always at (PLAYER_ROW, PLAYER_COL) and at world (px, py).
+    """
+    out = []
+    for r in range(GRID_ROWS):
+        for c in range(GRID_COLS):
+            if not _grid_open(passable, r, c):
+                continue
+            wx = px + (c - PLAYER_COL)
+            wy = py + (r - PLAYER_ROW)
+            if visits.get((cur_map, wx, wy), 0) == 0:
+                out.append((r, c))
+    return out
+
+def cell_label_local(col: int, row: int) -> str:
+    """0-indexed (col,row) -> 'E5'. Mirrors collision.cell_label."""
+    return f"{COL_LABELS_LOCAL[col]}{row + 1}"
 
 
 # ---------------------------------------------------------------------------
@@ -531,10 +554,35 @@ class HermesDriver:
                             and 0 <= wc < len(passable[wr])):
                         passable[wr][wc] = False
 
-            for name in _legal_dirs(passable):
-                criteria[name] = f"Move one tile {name.split('_')[1]}"
-            criteria["interact"] = "Press A to talk to or examine what you face"
+            # Frontier exploration: offer multi-tile destinations the agent has
+            # never stood on, rather than four interchangeable single steps.
+            # Laya scores ~0.33 on symmetric directions and ~0.99 on named
+            # destinations, so distinct options are worth far more than nudges.
+            frontier = _frontier_targets(passable, self.visits, cur_map,
+                                         pos.get("x") or 0, pos.get("y") or 0)
+            # Farthest first — a neighbouring unvisited tile is barely a choice,
+            # "walk to the far corner" is a plan.
+            frontier.sort(key=lambda rc: -(abs(rc[0] - PLAYER_ROW)
+                                           + abs(rc[1] - PLAYER_COL)))
+            added = 0
+            for fr, fc in frontier:
+                if added >= 4:
+                    break
+                path = _path_to(passable, (fr, fc))
+                if not path:
+                    continue
+                label = cell_label_local(fc, fr)
+                criteria[f"explore_{label}"] = (
+                    f"Walk {len(path)} tiles to {label}, never visited")
+                added += 1
 
+            # Single steps remain as a fallback: when every reachable cell has
+            # been seen, the frontier is empty and the agent still needs to move.
+            if added == 0:
+                for name in _legal_dirs(passable):
+                    criteria[name] = f"Move one tile {name.split('_')[1]}"
+
+            criteria["interact"] = "Press A to talk to or examine what you face"
             # Standing ON a doormat: "goto" it is a no-op, so offer the exit as
             # its own action instead.
             if on_warp and not recent_transition:
@@ -628,6 +676,21 @@ class HermesDriver:
             actions = ["walk_down", "walk_down"]
         elif choice in _DIRS:
             actions = [choice]
+        elif choice in _DIRS:
+            actions = [choice]
+        # ---- add ----
+        elif choice.startswith("explore_"):
+            label = choice[8:]
+            try:
+                fc = COL_LABELS_LOCAL.index(label[0])
+                fr = int(label[1:]) - 1
+                actions = _path_to(passable, (fr, fc))
+            except (ValueError, IndexError):
+                actions = []
+            if not actions:
+                legal = list(_legal_dirs(passable))
+                actions = [legal[0]] if legal else ["wait_30"]
+        # ---- end ----
         elif choice.startswith("goto_"):
             # One decision, many tiles: BFS over verified walkability turns a
             # per-tile decision loop into a per-destination one.
