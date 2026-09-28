@@ -102,17 +102,18 @@ def cmd_play(args):
     """Run the standalone autopilot loop."""
     from pokemon_agent.autopilot import run_autopilot
     server = f"http://{args.host}:{args.port}"
-    run_autopilot(server=server, model=args.model,
-                  turn_delay=args.turn_delay,
-                  turn_timeout=getattr(args, "turn_timeout", 240),
-                  debug=getattr(args, "debug", False),
-                  use_laya=getattr(args, "laya", False),
-                  laya_narrate_every=getattr(args, "laya_narrate_every", 0),
-                  stall_seconds=getattr(args, "stall_seconds", 60.0),
-                  hermes_turns=getattr(args, "hermes_turns", 12),
-                  hermes_turns=getattr(args, "hermes_turns", 12),
-                  vision=not getattr(args, "no_vision", False))
-
+    run_autopilot(
+        server=server,
+        model=args.model,
+        turn_delay=args.turn_delay,
+        turn_timeout=getattr(args, "turn_timeout", 240),
+        debug=getattr(args, "debug", False),
+        use_laya=getattr(args, "laya", False),
+        laya_narrate_every=getattr(args, "laya_narrate_every", 0),
+        stall_seconds=getattr(args, "stall_seconds", 60.0),
+        hermes_turns=getattr(args, "hermes_turns", 12),
+        vision=not getattr(args, "no_vision", False),
+    )
 
 def cmd_play_api(args):
     """Run the autopilot using Hermes AIAgent API instead of subprocess."""
