@@ -63,6 +63,14 @@ S_PICTURE_ID     = 0x00       # 0 = slot disabled
 S_YPIXELS        = 0x04       # screen Y, biased
 S_XPIXELS        = 0x06       # screen X, biased
 
+# Sprite picture ids from pokered constants/sprite_constants.asm.
+# Only the ones we care about identifying; everything else is a generic NPC.
+SPRITE_NAMES: Dict[int, str] = {
+    0x01: "Red (you)",
+    0x02: "Blue/Gary (your rival)",
+    0x03: "Prof. Oak",
+}
+
 WARP_ENTRY_SIZE = 4
 MAX_WARPS       = 32
 
@@ -197,8 +205,13 @@ def read_sprite_cells(emu) -> List[Dict]:
         if r == PLAYER_ROW and c == PLAYER_COL:
             continue                   # overlapping the player: mid-transition
         if 0 <= r < BLOCK_ROWS and 0 <= c < BLOCK_COLS:
+            pic = raw[base + S_PICTURE_ID]
             out.append({"slot": slot, "row": r, "col": c,
-                        "cell": cell_label(c, r)})
+                        "cell": cell_label(c, r),
+                        "picture_id": pic,
+                        # Identity matters: an agent that cannot tell Oak from
+                        # Gary will talk to the wrong person indefinitely.
+                        "who": SPRITE_NAMES.get(pic, f"NPC #{pic}")})
     return out
 
 

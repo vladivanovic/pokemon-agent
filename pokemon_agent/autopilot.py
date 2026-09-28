@@ -212,13 +212,15 @@ def _compact_state(state: Dict[str, Any]) -> Dict[str, Any]:
                    "types": enemy.get("types")}
                   if battle.get("in_battle") else None),
         "status": state.get("status"),
-        "dialog_text": (state.get("dialog")),
+        "dialog_text": (state.get("dialog")) or None,
     }
-    # Only surface failures when there are some — silence is the normal case.
-    if state.get("errors"):
-        out["errors"] = state["errors"]
+    col = state.get("collision") or {}
+    people = [{"cell": s.get("cell"), "who": s.get("who")}
+              for s in col.get("sprites") or []]
+    if people:
+        out["people"] = people
     exits = [{"cell": w.get("cell"), "to": w.get("dest_map_name")}
-             for w in (state.get("collision") or {}).get("warps") or []]
+             for w in col.get("warps") or []]
     if exits:
         out["exits"] = exits
     return out
@@ -535,18 +537,53 @@ class HermesDriver:
         self.event(type="decision", text=f"[brain] switched to {mode}")
 
     def _infer_goal(self, state: Dict[str, Any]) -> str:
-        """A coarse objective for the escalated turns, from game state alone."""
+        """A coarse objective for the escalated turns, from game state alone.
+
+        Only the current blocker is described, never the whole walkthrough —
+        the escalated model has limited context and a long plan dilutes the
+        one thing it needs to do right now.
+        """
         flags = state.get("flags") or {}
         party = state.get("party") or []
+        badges = flags.get("badge_count", 0)
         map_name = (state.get("map") or {}).get("map_name", "?")
+
         if not party:
-            return "Get your first Pokemon from Oak's Lab"
+            if map_name == "Oak's Lab":
+                return (
+                    "Take a starter Pokemon from the table in Oak's Lab. "
+                    "The three Pokeballs sit ON THE TABLE — walk so you are "
+                    "facing the table, then press A. "
+                    "WARNING: your rival Gary stands nearby and will talk to "
+                    "you, but he gives you NOTHING. Check the `people` field "
+                    "in STATE for who is where — talk to Prof. Oak, not Gary. "
+                    "Oak must speak to you before the balls can be taken."
+                )
+            return ("Walk to Oak's Lab in Pallet Town and get your first "
+                    "Pokemon. The lab is the large building in the south of town.")
+
         if not flags.get("has_pokedex"):
-            return ("Deliver Oak's Parcel from the Viridian City mart, "
-                    "then get the Pokedex")
-        if flags.get("badge_count", 0) == 0:
-            return "Reach Pewter City Gym and beat Brock for the Boulder Badge"
-        return f"Make story progress; you appear stuck in {map_name}"
+            if flags.get("has_oaks_parcel"):
+                return ("You are carrying Oak's Parcel. Return to Oak's Lab in "
+                        "Pallet Town (south, via Route 1) and give it to Oak to "
+                        "receive the Pokedex.")
+            return ("Go NORTH to Viridian City via Route 1, enter the Poke Mart "
+                    "(the blue-roofed shop), and talk to the clerk to collect "
+                    "Oak's Parcel.")
+
+        if badges == 0:
+            return ("Reach Pewter City and beat Brock at the Gym for the Boulder "
+                    "Badge. Route from Viridian City: north through Viridian "
+                    "Forest. Brock uses Rock types — a Grass or Water Pokemon "
+                    "helps. Train your party to about level 12 first.")
+
+        # General case: no scripted hint. Tell it where it has already been so
+        # it can pick somewhere new, rather than writing a walkthrough branch
+        # for every stage of the game.
+        seen = sorted({m for (m, _, _) in self.visits if m})
+        hint = f" Maps visited so far: {', '.join(seen)}." if seen else ""
+        return (f"You have {badges} badge(s) and appear stuck in {map_name}. "
+                f"Work out what the game is waiting for and do it.{hint}")
 
     def _arbitrate(self, state: Dict[str, Any], made_progress: bool) -> str:
         """Decide which brain drives this turn.
