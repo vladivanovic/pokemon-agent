@@ -813,7 +813,7 @@ class RedBlueMemoryReader(GameMemoryReader):
         if spc not in range(1, 152) and spc != 0:
             logger.warning(f"Enemy species ID {spc} unusual - struct offset mismatch?")
 
-def read_dialog(self) -> Dict[str, Any]:
+    def read_dialog(self) -> Dict[str, Any]:
         """Text-box and input-lock state.
 
         wd730 bit 5 (_JOY_IGNORE) is the only trustworthy signal: the engine
