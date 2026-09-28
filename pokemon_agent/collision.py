@@ -51,7 +51,7 @@ BLOCK_ROWS = 9                # on-screen walkable blocks down
 BLOCK_PX   = 16               # world block size in GB pixels
 PLAYER_COL = 4                # block the player is locked to (cell E5)
 PLAYER_ROW = 4
-GRID_ROW_OFFSET = 1           # tilemap row offset; see read_block_tile_ids()
+GRID_ROW_OFFSET = 0           # tilemap row offset; see read_block_tile_ids()
 
 # Derived — must stay below the definitions above.
 PLAYER_PX_X = PLAYER_COL * BLOCK_PX                        # 64
@@ -298,9 +298,20 @@ def build_collision_grid(emu,
     warps: List[Dict] = []
     if player_pos and player_pos.get("x") is not None:
         try:
-            warps = read_warp_cells(emu, int(player_pos["x"]), int(player_pos["y"]))
+            warps = read_warp_cells(emu, int(player_pos["x"]),
+                                    int(player_pos["y"]))
         except (TypeError, ValueError, KeyError):
             warps = []
+
+    # The engine's CheckWarpsNoCollision runs BEFORE the collision check, so a
+    # warp tile is enterable even when its tile id is absent from the tileset's
+    # walkable list. Without this override doors read as walls and the agent
+    # can never leave a building.
+    for w in warps:
+        wr, wc = w.get("row"), w.get("col")
+        if (wr is not None and wc is not None
+                and 0 <= wr < BLOCK_ROWS and 0 <= wc < BLOCK_COLS):
+            walkable[wr][wc] = True
 
     # Terrain walkability is kept separate from transient sprite blocking so
     # callers can distinguish "wall" from "someone is standing there".
@@ -321,13 +332,16 @@ def build_collision_grid(emu,
         "warps": warps,
         "player_cell": cell_label(PLAYER_COL, PLAYER_ROW),
         "player_tile_walkable": player_tile_walkable,
+        "player_on_warp": any((w.get("row"), w.get("col"))
+                              == (PLAYER_ROW, PLAYER_COL) for w in warps),
         "offset_verified": verify_offset(emu, facing, tile_ids),
         "geometry": {"block_px": BLOCK_PX,
                      "player_px": [PLAYER_PX_X, PLAYER_PX_Y],
                      "cols": BLOCK_COLS, "rows": BLOCK_ROWS},
     }
     if player_pos:
-        out["player_map_pos"] = {"x": player_pos.get("x"), "y": player_pos.get("y")}
+        out["player_map_pos"] = {"x": player_pos.get("x"),
+                                 "y": player_pos.get("y")}
     if include_tile_ids:
         out["tile_ids"] = tile_ids
     return out
