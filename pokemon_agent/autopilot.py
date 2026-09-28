@@ -354,8 +354,8 @@ class HermesDriver:
         self.hermes_goal: str = ""
         self.progress_fp: Optional[tuple] = None
         self.progress_at: float = time.perf_counter()
+        self._last_objs: Optional[list] = None
         
-
         self.laya_router: Optional[Any] = None
         if self.use_laya:
             if not LAYA_AVAILABLE:
