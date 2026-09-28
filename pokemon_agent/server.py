@@ -452,9 +452,20 @@ def _do_action(emu, action_str: str) -> None:
                 break
         return
 
-    if parts[0] in ("press", "walk") and len(parts) >= 2:
+    if parts[0] == "press" and len(parts) >= 2:
         emu.press("_".join(parts[1:]), 8)
         emu.tick(12, render_last=False)
+        return
+
+    if parts[0] == "walk" and len(parts) >= 2:
+        emu.press("_".join(parts[1:]), 8)
+        # Gen 1 discards input while wWalkCounter is non-zero. A fixed wait
+        # races the animation, so consecutive walks silently collapse into one.
+        for _ in range(8):
+            emu.tick(4, render_last=False)
+            if emu.read_u8(0xCFC5) == 0:      # wWalkCounter
+                break
+        emu.tick(4, render_last=False)
         return
 
     if parts[0] == "hold" and len(parts) >= 3:

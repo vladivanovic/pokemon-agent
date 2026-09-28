@@ -552,12 +552,12 @@ class HermesDriver:
             if map_name == "Oak's Lab":
                 return (
                     "Take a starter Pokemon from the table in Oak's Lab. "
-                    "The three Pokeballs sit ON THE TABLE — walk so you are "
-                    "facing the table, then press A. "
-                    "WARNING: your rival Gary stands nearby and will talk to "
-                    "you, but he gives you NOTHING. Check the `people` field "
-                    "in STATE for who is where — talk to Prof. Oak, not Gary. "
-                    "Oak must speak to you before the balls can be taken."
+                    "The three Pokeballs sit ON THE TABLE — stand so you are "
+                    "facing a ball and press A, then confirm YES. "
+                    "Your rival Gary is nearby and gives you nothing; the "
+                    "`people` field in STATE shows who is where. "
+                    "If Oak is blocking or still talking, press A to let him "
+                    "finish first."
                 )
             return ("Walk to Oak's Lab in Pallet Town and get your first "
                     "Pokemon. The lab is the large building in the south of town.")
@@ -730,11 +730,22 @@ class HermesDriver:
             if intro:
                 criteria["menu_down_a"] = "Move the menu cursor down, then confirm"
         elif battle.get("in_battle"):
-            instructions = ("You are in a Pokemon battle. Choose the single best "
-                            "menu action for this turn.")
-            criteria["advance_text"] = "Press A to confirm the highlighted option"
-            criteria["menu_down_a"] = "Move down one option, then confirm"
-            criteria["back_out"] = "Press B to go back"
+            enemy = battle.get("enemy") or {}
+            mine = state.get("active_mon") or {}
+            hp_frac = ((mine.get("hp") or 0) / (mine.get("max_hp") or 1))
+            instructions = (
+                f"You are in a battle against {enemy.get('species','?')} "
+                f"Lv{enemy.get('level','?')} "
+                f"({enemy.get('hp','?')}/{enemy.get('max_hp','?')} HP). "
+                f"Your {mine.get('nickname','?')} is at "
+                f"{mine.get('hp','?')}/{mine.get('max_hp','?')} HP. "
+                "The menu is FIGHT / PKMN / ITEM / RUN with FIGHT selected by "
+                "default. Choose what to do."
+            )
+            criteria["attack"] = "Select FIGHT and use the first move"
+            if hp_frac < 0.35:
+                criteria["flee"] = "Select RUN and escape this battle"
+            criteria["advance_text"] = "Press A to advance battle text"
         else:
             times_here = self.visits.get(key, 0)
             instructions = (
@@ -873,9 +884,14 @@ class HermesDriver:
             actions = ["press_b"]
         elif choice == "interact":
             actions = ["press_a"]
+        elif choice == "attack":
+            # FIGHT is the default cursor position, so A-A selects it and the
+            # first move without any cursor navigation.
+            actions = ["press_a", "wait_30", "press_a", "wait_60"]
+        elif choice == "flee":
+            # RUN is bottom-right of the 2x2 menu.
+            actions = ["press_down", "press_right", "press_a", "wait_60"]
         elif choice == "exit_building":
-            # House exits in Gen 1 are on the south edge, so walking down off
-            # the mat triggers the warp. Verified by hand on Red's House 1F.
             actions = ["walk_down", "walk_down"]
         elif choice in _DIRS:
             actions = [choice]
