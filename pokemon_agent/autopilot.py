@@ -268,8 +268,9 @@ class HermesDriver:
         self.last_confidence = 0
         self.recent: deque = deque(maxlen=12)    # oscillation detection
         self.prev_map: Optional[str] = None
-        self.map_changed_at: int = -99
         self.visits: Dict[tuple, int] = {}      # (map, x, y) -> times seen
+        self.map_changed_at: int = -99
+        self.map_changed_time: float = 0.0
 
         self.laya_router: Optional[Any] = None
         if self.use_laya:
@@ -475,20 +476,35 @@ class HermesDriver:
         pos = p.get("position") or {}
         if cur_map != self.prev_map:
             logger.info("map changed: %s -> %s", self.prev_map, cur_map)
-            self.prev_map, self.map_changed_at = cur_map, self.turn
+            self.prev_map = cur_map
+            self.map_changed_at = self.turn
+            self.map_changed_time = time.perf_counter()
+            self.recent.clear()          # a real transition is not a loop
         key = (cur_map, pos.get("x"), pos.get("y"))
         self.visits[key] = self.visits.get(key, 0) + 1
+
+        # Wall-clock, not turn count: Laya runs ~10 turns/sec, so a 6-turn
+        # window expires before the agent has taken a single step away from
+        # the door it just came through.
+        recent_transition = (time.perf_counter() - self.map_changed_time) < 8.0
+        on_warp = bool(col.get("player_on_warp")) or any(
+            (w.get("row"), w.get("col")) == (PLAYER_ROW, PLAYER_COL)
+            for w in warps)
 
         # The candidate set is built from ground truth, so an illegal move is
         # not merely discouraged — it is never offered.
         criteria: Dict[str, str] = {}
         if intro or dlg.get("text_active"):
-            instructions = ("A text box or menu is on screen. Choose the single "
-                            "best button press to advance it.")
+            instructions = ("A text box or menu may be on screen. Advance it, or "
+                            "move if you think it has already closed.")
             criteria["advance_text"] = "Press A to advance dialog, menu or intro"
+            criteria["back_out"] = "Press B to dismiss or cancel"
+            # Movement too: the dialog flag can be stale, and walking is the
+            # only way to find out. Never offer a single-option question.
+            for name in _legal_dirs(passable):
+                criteria[name] = f"Move one tile {name.split('_')[1]}"
             if intro:
                 criteria["menu_down_a"] = "Move the menu cursor down, then confirm"
-                criteria["back_out"] = "Press B to leave this menu"
         elif battle.get("in_battle"):
             instructions = ("You are in a Pokemon battle. Choose the single best "
                             "menu action for this turn.")
@@ -496,40 +512,54 @@ class HermesDriver:
             criteria["menu_down_a"] = "Move down one option, then confirm"
             criteria["back_out"] = "Press B to go back"
         else:
+            times_here = self.visits.get(key, 0)
             instructions = (
                 "You are exploring Pokemon Red. The MAP shows what is around you: "
                 "'.' is walkable, '#' is a wall, 'N' is a person blocking you, "
-                "'D' is a door or exit, '@' is you. Choose the single best move to "
-                "make progress — head for an exit when you have explored the room.")
-            recent_transition = (self.turn - self.map_changed_at) < 6
-            # Block the warp we just came through. Suppressing only the named
-            # goto_ option is not enough — walking onto the tile triggers it too.
+                "'D' is a door or exit, '@' is you. You have stood on this exact "
+                f"tile {times_here} time(s) — prefer moves that lead somewhere "
+                "new, and leave the building once the room is explored.")
+
+            # Suppress the warp we just came through. Blocking only the named
+            # goto_ option is not enough: walking onto the tile triggers it too.
             if recent_transition and warps:
-                passable = [list(r) for r in passable]      # copy before mutating
+                passable = [list(r) for r in passable]   # copy before mutating
                 for w in warps:
-                    r, c = w.get("row"), w.get("col")
-                    if r is not None and 0 <= r < len(passable) and 0 <= c < len(passable[r]):
-                        passable[r][c] = False
+                    wr, wc = w.get("row"), w.get("col")
+                    if (wr is not None and wc is not None
+                            and 0 <= wr < len(passable)
+                            and 0 <= wc < len(passable[wr])):
+                        passable[wr][wc] = False
+
             for name in _legal_dirs(passable):
                 criteria[name] = f"Move one tile {name.split('_')[1]}"
             criteria["interact"] = "Press A to talk to or examine what you face"
-            for w in warps[:4]:
-                cell = w.get("cell")
-                if not cell or (w.get("row"), w.get("col")) == (PLAYER_ROW, PLAYER_COL):
-                    continue
-                if recent_transition:
-                    continue      # just arrived; don't offer the way back
-                dest = w.get("dest_map_name") or f"map {w.get('dest_map')}"
-                criteria[f"goto_{cell}"] = f"Walk to the exit at {cell} leading to {dest}"
+
+            # Standing ON a doormat: "goto" it is a no-op, so offer the exit as
+            # its own action instead.
+            if on_warp and not recent_transition:
+                criteria["exit_building"] = ("Walk out through the door you are "
+                                             "standing on")
+
+            if not recent_transition:
+                for w in warps[:4]:
+                    cell = w.get("cell")
+                    if not cell:
+                        continue
+                    if (w.get("row"), w.get("col")) == (PLAYER_ROW, PLAYER_COL):
+                        continue          # covered by exit_building
+                    dest = w.get("dest_map_name") or f"map {w.get('dest_map')}"
+                    criteria[f"goto_{cell}"] = (
+                        f"Walk to the exit at {cell} leading to {dest}")
 
         if not criteria:
             instructions = "Nothing is possible right now. Press B."
             criteria["back_out"] = "Press B"
 
         laya_state = {
-            "map_name": (state.get("map") or {}).get("map_name", ""),
-            "x": (p.get("position") or {}).get("x"),
-            "y": (p.get("position") or {}).get("y"),
+            "map_name": cur_map,
+            "x": pos.get("x"),
+            "y": pos.get("y"),
             "facing": p.get("facing"),
             "in_battle": bool(battle.get("in_battle")),
             "text_active": bool(dlg.get("text_active")),
@@ -537,32 +567,33 @@ class HermesDriver:
             "map_ascii": col.get("ascii") or "",
             "exits": [w.get("cell") for w in warps],
             "stuck_turns": self.stuck,
+            "times_on_this_tile": self.visits.get(key, 0),
+            "tiles_seen_this_map": sum(1 for (m, _, _) in self.visits
+                                       if m == cur_map),
+            "maps_seen": len({m for (m, _, _) in self.visits}),
         }
 
-        # Oscillation guard: cycling through the same couple of positions means
-        # the candidate set is wrong for this situation, not that Laya is
-        # unlucky. Only meaningful while exploring — a static position is
-        # normal and expected in battle and during dialog.
-        exploring = not (intro or dlg.get("text_active") or battle.get("in_battle"))
+        # Oscillation guard. Do NOT clear the window on dialog turns — a text
+        # box mid-cycle is part of the cycle, and clearing means the window
+        # never fills. Only append while exploring, since a static position is
+        # normal in battle and dialog.
+        exploring = not (intro or dlg.get("text_active")
+                         or battle.get("in_battle"))
         if exploring:
-            self.recent.append((laya_state["map_name"],
-                                laya_state["x"], laya_state["y"]))
-        # Do NOT clear on dialog turns — a text box mid-cycle is part of the
-        # cycle, and clearing means the window never fills.
+            self.recent.append((cur_map, pos.get("x"), pos.get("y")))
         if len(self.recent) == self.recent.maxlen:
             maps = {m for m, _, _ in self.recent}
             cells = set(self.recent)
-            # Ping-ponging between two maps is a loop even though the cells differ.
+            # Ping-ponging between two maps is a loop even though the cells
+            # differ, so a plain cell-count test misses it.
             if len(cells) <= 3 or (len(maps) == 2 and len(cells) <= 6):
                 legal = list(_legal_dirs(passable))
                 escape = legal[self.turn % len(legal)] if legal else "press_b"
-                logger.warning("loop detected (%d maps, %d cells) — escaping via %s",
-                               len(maps), len(cells), escape)
+                logger.warning("loop detected (%d map(s), %d cell(s)) — "
+                               "escaping via %s", len(maps), len(cells), escape)
                 self.recent.clear()
                 self.act([escape] * 4)
                 return
-        else:
-            self.recent.clear()
 
         started = time.perf_counter()
         choice = self._laya_choose(laya_state, criteria, instructions)
@@ -583,25 +614,31 @@ class HermesDriver:
 
         actions: List[str] = []
         if choice == "advance_text":
-            actions = ["a_until_dialog_end"] if dlg.get("text_active") else ["press_a"]
+            actions = (["a_until_dialog_end"] if dlg.get("text_active")
+                       else ["press_a"])
         elif choice == "menu_down_a":
             actions = ["press_down", "press_a"]
         elif choice == "back_out":
             actions = ["press_b"]
         elif choice == "interact":
             actions = ["press_a"]
+        elif choice == "exit_building":
+            # House exits in Gen 1 are on the south edge, so walking down off
+            # the mat triggers the warp. Verified by hand on Red's House 1F.
+            actions = ["walk_down", "walk_down"]
         elif choice in _DIRS:
             actions = [choice]
         elif choice.startswith("goto_"):
+            # One decision, many tiles: BFS over verified walkability turns a
+            # per-tile decision loop into a per-destination one.
             label = choice[5:]
             target = next(((w["row"], w["col"]) for w in warps
                            if w.get("cell") == label), None)
-            if target == (PLAYER_ROW, PLAYER_COL):
-                actions = ["press_a"]     # already on the warp tile
-            elif target is not None:
+            if target is not None:
                 actions = _path_to(passable, target)
             if not actions:
-                logger.warning("no path to %s; taking a single step instead", label)
+                logger.warning("no path to %s; taking a single step instead",
+                               label)
                 legal = list(_legal_dirs(passable))
                 actions = [legal[0]] if legal else ["wait_30"]
         else:
@@ -609,14 +646,16 @@ class HermesDriver:
             actions = ["wait_30"]
 
         logger.info("turn %d: laya=%s (p=%.2f) in %.0fms -> %s (from %d options) "
-                    "phase=%s stuck=%d",
-                    self.turn + 1, choice, self.last_confidence, took_ms, actions,
-                    len(criteria), laya_state["phase"], self.stuck)
+                    "map=%s pos=(%s,%s) here=%d stuck=%d",
+                    self.turn + 1, choice, self.last_confidence, took_ms,
+                    actions, len(criteria), cur_map, pos.get("x"), pos.get("y"),
+                    laya_state["times_on_this_tile"], self.stuck)
 
         self.act(actions)
         self.event(type="decision",
                    text=f"[laya {took_ms:.0f}ms] {choice} → {' · '.join(actions)}")
 
+        
     # --- Hermes ------------------------------------------------------------
 
     def _hermes_turn(self, state: Dict[str, Any], intro: bool) -> None:
