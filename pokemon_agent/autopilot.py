@@ -167,6 +167,12 @@ each warp; "outside" means it leads out of the building.
 
 All POSTs need -H 'Content-Type: application/json'.
 
+COORDINATES — two different systems, do not mix them:
+  `position` (x,y) is your absolute location on the map. Larger y is SOUTH.
+  Grid cells (A1..J9) are SCREEN positions RELATIVE to you. You are ALWAYS at
+  E5. A cell like C3 means "2 columns left, 2 rows up from me". The grid is
+  always 10x9 regardless of your position. The grid is NOT misaligned.
+
 MAP:
 {map_ascii}
 
@@ -370,6 +376,8 @@ class HermesDriver:
         self.last_explore_target: Optional[tuple] = None
         self.last_explore_from: Optional[tuple] = None
         self.session_started_at: int = 0
+        self._hermes_last_pos: Optional[Any] = None
+        self.hermes_budget_max: int = 30
         
         self.laya_router: Optional[Any] = None
         if self.use_laya:
@@ -611,13 +619,25 @@ class HermesDriver:
 
         if self.mode == "hermes":
             self.mode_turns += 1
+            cur_pos = (state.get("player") or {}).get("position")
+            moved = cur_pos is not None and cur_pos != self._hermes_last_pos
+            self._hermes_last_pos = cur_pos
+
             if made_progress and self.mode_turns >= 2:
                 logger.info("hermes made progress after %d turns — back to laya",
                             self.mode_turns)
                 self._enter_mode("laya")
+            elif (moved and self.mode_turns >= self.hermes_budget - 2
+                    and self.hermes_budget < self.hermes_budget_max):
+                # Crossing a route changes no fingerprint field, so a long trek
+                # would otherwise be cut off mid-journey. Reward movement.
+                self.hermes_budget = min(self.hermes_budget + 4,
+                                         self.hermes_budget_max)
+                logger.info("hermes still moving — budget extended to %d",
+                            self.hermes_budget)
             elif self.mode_turns >= self.hermes_budget:
-                logger.warning("hermes budget (%d turns) exhausted without "
-                               "progress — back to laya", self.hermes_budget)
+                logger.warning("hermes budget (%d turns) exhausted — back to laya",
+                               self.hermes_budget)
                 self._enter_mode("laya")
             return self.mode
 
