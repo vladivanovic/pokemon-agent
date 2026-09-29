@@ -164,6 +164,8 @@ Warps (doors, stairs, exits) trigger when you WALK onto or off them — pressing
 A on a warp tile does nothing. Building exits in this game are on the SOUTH
 edge: to leave, walk DOWN off the doormat. `exits` in STATE gives the cell of
 each warp; "outside" means it leads out of the building.
+'v' is a LEDGE: you can hop DOWN over it, sometimes left or right too
+but never climb up. If a ledge blocks, your way north, walk around it — do not keep pressing up.
 
 All POSTs need -H 'Content-Type: application/json'.
 
@@ -273,12 +275,16 @@ def _legal_dirs(passable: List[List[bool]]) -> Dict[str, Tuple[int, int]]:
 
 
 def _path_to(passable: List[List[bool]], target: Tuple[int, int],
-             limit: int = 12) -> List[str]:
+             limit: int = 12,
+             ledges: Optional[List[List[bool]]] = None) -> List[str]:
     """BFS from E5 to *target*, returning walk actions.
 
     Trivially cheap on a 10x9 grid, and it converts "one LLM call per tile"
     into "one call per destination" — the single biggest speed win available
     when the decision model is the bottleneck.
+
+    A ledge can only be entered moving DOWN, so a route that would climb one
+    is rejected rather than silently walked into a wall.
     """
     start = (PLAYER_ROW, PLAYER_COL)
     if target == start:
@@ -295,7 +301,9 @@ def _path_to(passable: List[List[bool]], target: Tuple[int, int],
                 continue
             if not (0 <= nr < GRID_ROWS and 0 <= nc < GRID_COLS):
                 continue
-            if ledges and ledges[nr][nc] and name != "walk_down":
+            # A ledge is one-directional: enterable only from above.
+            if (ledges and nr < len(ledges) and nc < len(ledges[nr])
+                    and ledges[nr][nc] and name != "walk_down"):
                 continue
             # The destination itself may be a door/NPC tile that reads as
             # blocked; allow stepping onto it as the final move.
@@ -725,6 +733,7 @@ class HermesDriver:
         """
         col = state.get("collision") or {}
         passable = col.get("passable") or col.get("walkable") or []
+        ledge_grid = col.get("ledges") or None
         dlg = state.get("dialog") or {}
         battle = state.get("battle") or {}
         p = state.get("player") or {}
@@ -861,7 +870,7 @@ class HermesDriver:
                         break
                     if self.failed_targets.get((cur_map, fr, fc), 0) >= 2:
                         continue          # proven unreachable
-                    path = _path_to(passable, (fr, fc))
+                    path = _path_to(passable, (fr, fc), ledges=ledge_grid)
                     if not path:
                         continue
                     label = cell_label_local(fc, fr)
@@ -992,7 +1001,7 @@ class HermesDriver:
             try:
                 fc = COL_LABELS_LOCAL.index(label[0])
                 fr = int(label[1:]) - 1
-                actions = _path_to(passable, (fr, fc))
+                actions = _path_to(passable, (fr, fc), ledges=ledge_grid)
                 # Remember the attempt so next turn can tell whether it worked.
                 self.last_explore_target = (fr, fc)
                 self.last_explore_from = (pos.get("x"), pos.get("y"))
@@ -1008,7 +1017,7 @@ class HermesDriver:
             target = next(((w["row"], w["col"]) for w in warps
                            if w.get("cell") == label), None)
             if target is not None:
-                actions = _path_to(passable, target)
+                actions = _path_to(passable, target, ledges=ledge_grid)
             if not actions:
                 logger.warning("no path to %s; taking a single step instead",
                                label)
