@@ -601,10 +601,12 @@ class HermesDriver:
         """
         stalled_for = time.perf_counter() - self.progress_at
 
-        # Mechanical problems have mechanical solutions. Escalating "walk out of
-        # a door" to a 550B model is both slow and unreliable.
-        # Laya is driving — never yank control away from a Hermes turn mid-budget.
-        if self.mode == "laya" and (state.get("collision") or {}).get("player_on_warp"):
+        # Mechanical problems have mechanical solutions — but not if Laya has
+        # been failing at this one for a while. Don't let the shortcut become
+        # a deadlock.
+        if (self.mode == "laya"
+                and (state.get("collision") or {}).get("player_on_warp")
+                and stalled_for < self.stall_seconds * 2):
             return "laya"
 
         if self.mode == "hermes":
