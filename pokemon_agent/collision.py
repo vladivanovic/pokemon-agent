@@ -85,7 +85,8 @@ _FACING_DELTA = {"up": (0, -1), "down": (0, 1), "left": (-1, 0), "right": (1, 0)
 
 TILESET_WALKABLE: Dict[int, frozenset] = {
     0:  frozenset({0x00, 0x10, 0x1B, 0x20, 0x21, 0x23, 0x2C, 0x2D, 0x2E, 0x30,
-                   0x31, 0x33, 0x39, 0x3C, 0x3E, 0x52, 0x54, 0x58, 0x5B}),      # Overworld
+                   0x31, 0x33, 0x39, 0x3C, 0x3E, 0x52, 0x54, 0x58, 0x5B,
+                   0x40}),   # Overworld
     1:  frozenset({0x01, 0x02, 0x03, 0x11, 0x12, 0x13, 0x14, 0x1A, 0x1C}),      # RedsHouse1
     2:  frozenset({0x11, 0x1A, 0x1C, 0x3C, 0x5E}),                              # Mart
     3:  frozenset({0x1E, 0x20, 0x2E, 0x30, 0x34, 0x37, 0x39, 0x3A, 0x40, 0x51,
@@ -332,6 +333,13 @@ def build_collision_grid(emu,
     passable = [[walkable[r][c] and (r, c) not in occupied
                  for c in range(BLOCK_COLS)] for r in range(BLOCK_ROWS)]
     passable[PLAYER_ROW][PLAYER_COL] = True
+
+    # Ledges are passable DOWNWARD only. Mark the ledge cell passable so a
+    # southward path can route through it, and record the constraint so
+    # callers can avoid planning upward through one.
+    ledges = TILESET_LEDGES.get(tileset, frozenset())
+    ledge_cells = [[tile_ids[r][c] in ledges for c in range(BLOCK_COLS)]
+                   for r in range(BLOCK_ROWS)]
 
     out: Dict = {
         "valid": known and settled,
