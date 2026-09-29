@@ -510,7 +510,8 @@ def _get_state_dict() -> dict:
             player = state.get("player") or {}
             col = build_collision_grid(_reader.emu,
                                        facing=player.get("facing"),
-                                       player_pos=player.get("position"))
+                                       player_pos=player.get("position"),
+                                       include_tile_ids=True)
             for w in col.get("warps", []):
                 w["dest_map_name"] = MAP_NAMES.get(w["dest_map"],
                                                    f"Map {w['dest_map']}")
