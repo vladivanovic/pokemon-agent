@@ -237,13 +237,10 @@ def _compact_state(state: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 def _progress_fingerprint(state: Dict[str, Any]) -> tuple:
-    """State that only changes on genuine advancement.
-
-    Deliberately excludes position: wandering changes x/y every turn but is
-    not progress. Map transitions, party growth, badges and story flags are.
-    """
     flags = state.get("flags") or {}
     party = state.get("party") or []
+    battle = state.get("battle") or {}
+    enemy = battle.get("enemy") or {}
     return (
         (state.get("map") or {}).get("map_id"),
         len(party),
@@ -253,6 +250,9 @@ def _progress_fingerprint(state: Dict[str, Any]) -> tuple:
         bool(flags.get("has_oaks_parcel")),
         flags.get("pokedex_owned", 0),
         len(state.get("bag") or []),
+        # Dealing damage is progress: a gym battle can run minutes without
+        # changing anything else.
+        enemy.get("hp") if battle.get("in_battle") else None,
     )
 
 # ---------------------------------------------------------------------------
@@ -294,6 +294,8 @@ def _path_to(passable: List[List[bool]], target: Tuple[int, int],
             if (nr, nc) in seen:
                 continue
             if not (0 <= nr < GRID_ROWS and 0 <= nc < GRID_COLS):
+                continue
+            if ledges and ledges[nr][nc] and name != "walk_down":
                 continue
             # The destination itself may be a door/NPC tile that reads as
             # blocked; allow stepping onto it as the final move.
@@ -639,6 +641,10 @@ class HermesDriver:
                 logger.warning("hermes budget (%d turns) exhausted — back to laya",
                                self.hermes_budget)
                 self._enter_mode("laya")
+            return self.mode
+
+        if (state.get("battle") or {}).get("in_battle"):
+            self.progress_at = time.perf_counter()
             return self.mode
 
         self.mode_turns += 1
