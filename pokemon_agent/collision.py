@@ -125,6 +125,15 @@ TILESET_NAMES: Dict[int, str] = {
     20: "Lab", 21: "Club", 22: "Facility", 23: "Plateau",
 }
 
+# Ledge tiles: passable DOWNWARD only. The engine allows a southward hop and
+# refuses every other direction, so marking these plainly walkable would make
+# an agent try to climb them indefinitely. Kept out of TILESET_WALKABLE on
+# purpose and reported separately, so callers can render the constraint rather
+# than treat a ledge as a mystery wall.
+TILESET_LEDGES: Dict[int, frozenset] = {
+    0: frozenset({0x03}),   # Overworld — verified on Route 1; more ids likely
+}
+
 
 # ---------------------------------------------------------------------------
 # Cell labelling
@@ -349,6 +358,7 @@ def build_collision_grid(emu,
         "camera_settled": settled,
         "walkable": walkable,
         "passable": passable,
+        "ledges": ledge_cells,
         "sprites": sprites,
         "warps": warps,
         "player_cell": cell_label(PLAYER_COL, PLAYER_ROW),
@@ -392,6 +402,9 @@ def render_ascii_map(collision: Dict, legend: bool = True) -> str:
     walkable = collision["walkable"]
     npc = {(s["row"], s["col"]) for s in collision.get("sprites") or []}
     warp = {(w["row"], w["col"]) for w in collision.get("warps") or []}
+    led = collision.get("ledges") or []
+    ledge_set = {(r, c) for r in range(len(led))
+                 for c in range(len(led[r])) if led[r][c]}
 
     lines: List[str] = ["   " + " ".join(COL_LABELS)]
     for r in range(BLOCK_ROWS):
@@ -403,13 +416,16 @@ def render_ascii_map(collision: Dict, legend: bool = True) -> str:
                 cells.append("N")
             elif (r, c) in warp:
                 cells.append("D")
+            elif ledge_set and (r, c) in ledge_set:
+                cells.append("v")
             else:
                 cells.append("." if walkable[r][c] else "#")
         lines.append(f"{r + 1:>2} " + " ".join(cells))
 
     if legend:
         lines.append("")
-        lines.append("@ you (E5)  . walkable  # blocked  N person  D door/exit")
+        lines.append("@ you (E5)  . walkable  # blocked  N person  D door/exit"
+                     "  v ledge (hop DOWN only)")
         lines.append("walk_up=row-1  walk_down=row+1  "
                      "walk_left=col-1  walk_right=col+1")
         exits = collision.get("warps") or []
