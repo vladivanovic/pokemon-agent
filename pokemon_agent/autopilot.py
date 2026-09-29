@@ -337,6 +337,19 @@ def cell_label_local(col: int, row: int) -> str:
     """0-indexed (col,row) -> 'E5'. Mirrors collision.cell_label."""
     return f"{COL_LABELS_LOCAL[col]}{row + 1}"
 
+def _bearing(row: int, col: int) -> str:
+    """Compass direction of a screen cell relative to the player at E5.
+
+    Laya cannot connect "B2" to an objective that says "go north", but it can
+    connect "north" to it.
+    """
+    dr, dc = row - PLAYER_ROW, col - PLAYER_COL
+    vert = "north" if dr < 0 else ("south" if dr > 0 else "")
+    horiz = "west" if dc < 0 else ("east" if dc > 0 else "")
+    if vert and horiz:
+        return f"{vert}-{horiz}" if abs(dr) >= abs(dc) else f"{horiz}-{vert}"
+    return vert or horiz or "here"
+
 
 # ---------------------------------------------------------------------------
 # Driver
@@ -813,6 +826,8 @@ class HermesDriver:
         # ------------------------------------------------------------------
         else:
             times_here = self.visits.get(key, 0)
+            goal = self._infer_goal(state)
+            seen_maps = {m for (m, _, _) in self.visits if m}
 
             # --- C1: on-warp ---
             # Standing on a door. The tile you must step toward is the
@@ -823,6 +838,7 @@ class HermesDriver:
             # competing against six exploration choices.
             if on_warp and not recent_transition:
                 instructions = (
+                    f"OBJECTIVE: {goal}\n\n"
                     "You are STANDING ON a door or exit. To leave, step OFF it "
                     "— for a building exit that means walking DOWN, into what "
                     "the map shows as a wall. The engine moves you through. "
@@ -835,12 +851,18 @@ class HermesDriver:
                 criteria["interact"] = "Press A to talk to whoever is in front"
 
             else:
+                # The objective is the single most important thing Laya was
+                # missing: without it, "walk back into Oak's Lab" and "head
+                # north to Viridian" look equally reasonable.
                 instructions = (
+                    f"OBJECTIVE: {goal}\n\n"
                     "You are exploring Pokemon Red. The MAP shows what is "
                     "around you: '.' walkable, '#' wall, 'N' a person blocking "
-                    "you, 'D' a door or exit, '@' you. You have stood on this "
-                    f"exact tile {times_here} time(s) — prefer moves that lead "
-                    "somewhere new, and leave the building once explored.")
+                    "you, 'D' a door or exit, 'v' a ledge you can only hop "
+                    "DOWN over, '@' you. You have stood on this exact tile "
+                    f"{times_here} time(s). Choose the option that best serves "
+                    "the OBJECTIVE above — not merely the nearest unexplored "
+                    "tile.")
 
                 # Suppress the warp we just came through. Blocking only the
                 # named goto_ option is not enough: walking onto the tile
@@ -874,9 +896,27 @@ class HermesDriver:
                     if not path:
                         continue
                     label = cell_label_local(fc, fr)
+                    # Name the compass direction: "walk 7 tiles north" serves an
+                    # objective in a way that "walk 7 tiles to B2" does not.
+                    bearing = _bearing(fr, fc)
                     criteria[f"explore_{label}"] = (
-                        f"Walk {len(path)} tiles to {label}, never visited")
+                        f"Walk {len(path)} tiles {bearing} to {label}, "
+                        f"never visited")
                     added += 1
+
+                # --- C2b: travel ---
+                # Route transitions are NOT warps — you leave a town or cross a
+                # route by walking off the map edge. Without these options Laya
+                # literally cannot express "go north", so it can only shuffle
+                # within the current map.
+                for name, (dr, dc) in _DIRS.items():
+                    d = name.split("_")[1]
+                    if not _grid_open(passable, PLAYER_ROW + dr,
+                                      PLAYER_COL + dc):
+                        continue
+                    criteria[f"travel_{d}"] = (
+                        f"Head {d} for several tiles, continuing in that "
+                        f"direction to reach a new area")
 
                 # --- C3: single steps ---
                 # Always offered, not only when the frontier is empty: if every
@@ -896,9 +936,14 @@ class HermesDriver:
                         if (w.get("row"), w.get("col")) == (PLAYER_ROW, PLAYER_COL):
                             continue          # handled by C1
                         dest = w.get("dest_map_name") or f"map {w.get('dest_map')}"
+                        # A door into somewhere already explored is a trap: it is
+                        # a named, distinct option so it scores well, and it
+                        # undoes progress. Oak's Lab was being re-entered
+                        # repeatedly for exactly this reason.
+                        if dest in seen_maps:
+                            continue
                         criteria[f"goto_{cell}"] = (
-                            f"Walk to the exit at {cell} leading to {dest}")
-
+                            f"Enter the door at {cell} leading to {dest}")
         if not criteria:
             instructions = "Nothing is possible right now. Press B."
             criteria["back_out"] = "Press B"
@@ -994,6 +1039,11 @@ class HermesDriver:
             order = ["walk_down", "walk_down", "walk_up",
                      "walk_left", "walk_right"]
             actions = [order[self.turn % len(order)]] * 2
+        elif choice.startswith("travel_"):
+            # A long run in one direction — enough to cross most of a screen and
+            # trigger the map connection at the edge.
+            d = choice[7:]
+            actions = [f"walk_{d}"] * 6
         elif choice in _DIRS:
             actions = [choice]
         elif choice.startswith("explore_"):
