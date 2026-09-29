@@ -687,7 +687,16 @@ class HermesDriver:
         return choice
 
     def _laya_turn(self, state: Dict[str, Any], intro: bool) -> None:
-        """One Laya-driven turn: pick from a legal candidate set and execute."""
+        """One Laya-driven turn: pick from a legal candidate set and execute.
+
+        Branch layout (referred to by name elsewhere):
+          BRANCH A — DIALOG : a text box or the intro is on screen
+          BRANCH B — BATTLE : in a battle menu
+          BRANCH C — EXPLORE: free movement in the overworld
+            C1 — on-warp     : standing on a door; leaving takes priority
+            C2 — frontier    : multi-tile paths to unvisited cells
+            C3 — single steps: fallback when the frontier is empty
+        """
         col = state.get("collision") or {}
         passable = col.get("passable") or col.get("walkable") or []
         dlg = state.get("dialog") or {}
@@ -706,12 +715,11 @@ class HermesDriver:
         key = (cur_map, pos.get("x"), pos.get("y"))
         self.visits[key] = self.visits.get(key, 0) + 1
 
-        # If the previous turn dispatched an explore path and we did not move,
-        # that destination is unreachable — a table or NPC the collision grid
-        # thinks is walkable. Record it or Laya will offer it forever.
-        if self.last_explore_target is not None:
+        # Did the previous explore path actually arrive? If not, the target is
+        # unreachable — a table or NPC the collision grid thinks is walkable —
+        # and must be retired or Laya will offer it forever.
+        if self.last_explore_target is not None and self.last_explore_from:
             want_r, want_c = self.last_explore_target
-            # Convert the intended screen cell to world coords as of last turn.
             fx = self.last_explore_from[0] + (want_c - PLAYER_COL)
             fy = self.last_explore_from[1] + (want_r - PLAYER_ROW)
             if (pos.get("x"), pos.get("y")) != (fx, fy):
@@ -721,112 +729,140 @@ class HermesDriver:
                             self.last_explore_target, self.failed_targets[fk])
             self.last_explore_target = None
 
-        # Wall-clock, not turn count: Laya runs ~10 turns/sec, so a 6-turn
-        # window expires before the agent has taken a single step away from
-        # the door it just came through.
+        # Wall-clock, not turn count: Laya runs several turns/sec, so a turn
+        # based window expires before the agent steps away from the door.
         recent_transition = (time.perf_counter() - self.map_changed_time) < 8.0
         on_warp = bool(col.get("player_on_warp")) or any(
             (w.get("row"), w.get("col")) == (PLAYER_ROW, PLAYER_COL)
             for w in warps)
 
-        # The candidate set is built from ground truth, so an illegal move is
-        # not merely discouraged — it is never offered.
         criteria: Dict[str, str] = {}
+
+        # ------------------------------------------------------------------
+        # BRANCH A — DIALOG
+        # ------------------------------------------------------------------
         if intro or dlg.get("text_active"):
             instructions = ("A text box or menu may be on screen. Advance it, or "
                             "move if you think it has already closed.")
             criteria["advance_text"] = "Press A to advance dialog, menu or intro"
             criteria["back_out"] = "Press B to dismiss or cancel"
-            # Movement too: the dialog flag can be stale, and walking is the
+            # Movement too: the dialog flag can go stale, and walking is the
             # only way to find out. Never offer a single-option question.
             for name in _legal_dirs(passable):
                 criteria[name] = f"Move one tile {name.split('_')[1]}"
             if intro:
                 criteria["menu_down_a"] = "Move the menu cursor down, then confirm"
+
+        # ------------------------------------------------------------------
+        # BRANCH B — BATTLE
+        # ------------------------------------------------------------------
         elif battle.get("in_battle"):
             enemy = battle.get("enemy") or {}
             mine = state.get("active_mon") or {}
-            hp_frac = ((mine.get("hp") or 0) / (mine.get("max_hp") or 1))
+            hp_frac = (mine.get("hp") or 0) / (mine.get("max_hp") or 1)
             instructions = (
                 f"You are in a battle against {enemy.get('species','?')} "
                 f"Lv{enemy.get('level','?')} "
                 f"({enemy.get('hp','?')}/{enemy.get('max_hp','?')} HP). "
                 f"Your {mine.get('nickname','?')} is at "
                 f"{mine.get('hp','?')}/{mine.get('max_hp','?')} HP. "
-                "The menu is FIGHT / PKMN / ITEM / RUN with FIGHT selected by "
-                "default. Choose what to do."
+                "The menu is FIGHT / PKMN / ITEM / RUN. Choose what to do."
             )
             criteria["attack"] = "Select FIGHT and use the first move"
             if hp_frac < 0.35:
                 criteria["flee"] = "Select RUN and escape this battle"
             criteria["advance_text"] = "Press A to advance battle text"
+
+        # ------------------------------------------------------------------
+        # BRANCH C — EXPLORE
+        # ------------------------------------------------------------------
         else:
             times_here = self.visits.get(key, 0)
-            instructions = (
-                "You are exploring Pokemon Red. The MAP shows what is around you: "
-                "'.' is walkable, '#' is a wall, 'N' is a person blocking you, "
-                "'D' is a door or exit, '@' is you. You have stood on this exact "
-                f"tile {times_here} time(s) — prefer moves that lead somewhere "
-                "new, and leave the building once the room is explored.")
 
-            # Suppress the warp we just came through. Blocking only the named
-            # goto_ option is not enough: walking onto the tile triggers it too.
-            if recent_transition and warps:
-                passable = [list(r) for r in passable]   # copy before mutating
-                for w in warps:
-                    wr, wc = w.get("row"), w.get("col")
-                    if (wr is not None and wc is not None
-                            and 0 <= wr < len(passable)
-                            and 0 <= wc < len(passable[wr])):
-                        passable[wr][wc] = False
+            # --- C1: on-warp ---
+            # Standing on a door. The tile you must step toward is the
+            # building's OUTER WALL, correctly marked non-walkable, so
+            # _legal_dirs will never offer it. The engine checks warps before
+            # collision, so terrain does not apply here — offer every
+            # direction, and keep the option set small so leaving is not
+            # competing against six exploration choices.
+            if on_warp and not recent_transition:
+                instructions = (
+                    "You are STANDING ON a door or exit. To leave, step OFF it "
+                    "— for a building exit that means walking DOWN, into what "
+                    "the map shows as a wall. The engine moves you through. "
+                    "Pressing A on a door does nothing."
+                )
+                criteria["exit_building"] = (
+                    "Step DOWN off this door to leave the building")
+                for name in _DIRS:
+                    criteria[name] = f"Step one tile {name.split('_')[1]}"
+                criteria["interact"] = "Press A to talk to whoever is in front"
 
-            # Frontier exploration: offer multi-tile destinations the agent has
-            # never stood on, rather than four interchangeable single steps.
-            # Laya scores ~0.33 on symmetric directions and ~0.99 on named
-            # destinations, so distinct options are worth far more than nudges.
-            frontier = _frontier_targets(passable, self.visits, cur_map,
-                                         pos.get("x") or 0, pos.get("y") or 0)
-            # Farthest first — a neighbouring unvisited tile is barely a choice,
-            # "walk to the far corner" is a plan.
-            frontier.sort(key=lambda rc: -(abs(rc[0] - PLAYER_ROW)
-                                           + abs(rc[1] - PLAYER_COL)))
-            added = 0
-            for fr, fc in frontier:
-                if added >= 4:
-                    break
-                if self.failed_targets.get((cur_map, fr, fc), 0) >= 2:
-                    continue          # proven unreachable; stop offering it
-                path = _path_to(passable, (fr, fc))
-                if not path:
-                    continue
-                label = cell_label_local(fc, fr)
-                criteria[f"explore_{label}"] = (
-                    f"Walk {len(path)} tiles to {label}, never visited")
-                added += 1
+            else:
+                instructions = (
+                    "You are exploring Pokemon Red. The MAP shows what is "
+                    "around you: '.' walkable, '#' wall, 'N' a person blocking "
+                    "you, 'D' a door or exit, '@' you. You have stood on this "
+                    f"exact tile {times_here} time(s) — prefer moves that lead "
+                    "somewhere new, and leave the building once explored.")
 
-            # Single steps remain as a fallback: when every reachable cell has
-            # been seen, the frontier is empty and the agent still needs to move.
-            if added == 0:
+                # Suppress the warp we just came through. Blocking only the
+                # named goto_ option is not enough: walking onto the tile
+                # triggers it too.
+                if recent_transition and warps:
+                    passable = [list(r) for r in passable]   # copy before mutating
+                    for w in warps:
+                        wr, wc = w.get("row"), w.get("col")
+                        if (wr is not None and wc is not None
+                                and 0 <= wr < len(passable)
+                                and 0 <= wc < len(passable[wr])):
+                            passable[wr][wc] = False
+
+                # --- C2: frontier ---
+                # Multi-tile destinations beat interchangeable single steps:
+                # Laya scores ~0.33 on symmetric directions and ~0.99 on named
+                # destinations, and one decision covers 5-10 tiles.
+                frontier = _frontier_targets(passable, self.visits, cur_map,
+                                             pos.get("x") or 0, pos.get("y") or 0)
+                # Farthest first — a neighbouring unvisited tile is barely a
+                # choice; "walk to the far corner" is a plan.
+                frontier.sort(key=lambda rc: -(abs(rc[0] - PLAYER_ROW)
+                                               + abs(rc[1] - PLAYER_COL)))
+                added = 0
+                for fr, fc in frontier:
+                    if added >= 3:
+                        break
+                    if self.failed_targets.get((cur_map, fr, fc), 0) >= 2:
+                        continue          # proven unreachable
+                    path = _path_to(passable, (fr, fc))
+                    if not path:
+                        continue
+                    label = cell_label_local(fc, fr)
+                    criteria[f"explore_{label}"] = (
+                        f"Walk {len(path)} tiles to {label}, never visited")
+                    added += 1
+
+                # --- C3: single steps ---
+                # Always offered, not only when the frontier is empty: if every
+                # frontier path is blocked mid-route the agent still needs a way
+                # to nudge past the obstruction.
                 for name in _legal_dirs(passable):
                     criteria[name] = f"Move one tile {name.split('_')[1]}"
 
-            criteria["interact"] = "Press A to talk to or examine what you face"
-            # Standing ON a doormat: "goto" it is a no-op, so offer the exit as
-            # its own action instead.
-            if on_warp and not recent_transition:
-                criteria["exit_building"] = ("Walk out through the door you are "
-                                             "standing on")
+                criteria["interact"] = "Press A to talk to or examine what you face"
 
-            if not recent_transition:
-                for w in warps[:4]:
-                    cell = w.get("cell")
-                    if not cell:
-                        continue
-                    if (w.get("row"), w.get("col")) == (PLAYER_ROW, PLAYER_COL):
-                        continue          # covered by exit_building
-                    dest = w.get("dest_map_name") or f"map {w.get('dest_map')}"
-                    criteria[f"goto_{cell}"] = (
-                        f"Walk to the exit at {cell} leading to {dest}")
+                # Named exits elsewhere on screen (not the one underfoot).
+                if not recent_transition:
+                    for w in warps[:3]:
+                        cell = w.get("cell")
+                        if not cell:
+                            continue
+                        if (w.get("row"), w.get("col")) == (PLAYER_ROW, PLAYER_COL):
+                            continue          # handled by C1
+                        dest = w.get("dest_map_name") or f"map {w.get('dest_map')}"
+                        criteria[f"goto_{cell}"] = (
+                            f"Walk to the exit at {cell} leading to {dest}")
 
         if not criteria:
             instructions = "Nothing is possible right now. Press B."
@@ -837,6 +873,7 @@ class HermesDriver:
             "x": pos.get("x"),
             "y": pos.get("y"),
             "facing": p.get("facing"),
+            "on_door": on_warp,
             "in_battle": bool(battle.get("in_battle")),
             "text_active": bool(dlg.get("text_active")),
             "phase": (state.get("context") or {}).get("phase"),
@@ -863,6 +900,12 @@ class HermesDriver:
             # Ping-ponging between two maps is a loop even though the cells
             # differ, so a plain cell-count test misses it.
             if len(cells) <= 3 or (len(maps) == 2 and len(cells) <= 6):
+                # On a door, the escape IS the exit — try it before wandering.
+                if on_warp:
+                    logger.warning("loop detected on a door — forcing exit")
+                    self.recent.clear()
+                    self.act(["walk_down", "walk_down"])
+                    return
                 legal = list(_legal_dirs(passable))
                 escape = legal[self.turn % len(legal)] if legal else "press_b"
                 logger.warning("loop detected (%d map(s), %d cell(s)) — "
@@ -888,6 +931,9 @@ class HermesDriver:
             return
         self.consecutive_fail = 0
 
+        # ------------------------------------------------------------------
+        # DISPATCH — map the chosen key to emulator actions
+        # ------------------------------------------------------------------
         actions: List[str] = []
         if choice == "advance_text":
             actions = (["a_until_dialog_end"] if dlg.get("text_active")
@@ -899,26 +945,29 @@ class HermesDriver:
         elif choice == "interact":
             actions = ["press_a"]
         elif choice == "attack":
+            # B first: the cursor persists between turns and may be sitting in
+            # ITEM or PKMN. Up+Left drives it to FIGHT from anywhere in the 2x2
+            # menu, since cursor movement clamps at the edges.
             actions = ["press_b", "wait_30", "press_up", "press_left",
                        "press_a", "wait_30", "press_a", "wait_60"]
         elif choice == "flee":
             actions = ["press_b", "wait_30", "press_down", "press_right",
                        "press_a", "wait_60"]
         elif choice == "exit_building":
-            actions = ["walk_down", "walk_down"]
+            # South covers nearly every Gen 1 building exit. Rotate on repeat
+            # attempts so a north/side exit is eventually found.
+            order = ["walk_down", "walk_down", "walk_up",
+                     "walk_left", "walk_right"]
+            actions = [order[self.turn % len(order)]] * 2
         elif choice in _DIRS:
             actions = [choice]
-        elif choice in _DIRS:
-            actions = [choice]
-        # ---- add ----
         elif choice.startswith("explore_"):
             label = choice[8:]
             try:
                 fc = COL_LABELS_LOCAL.index(label[0])
                 fr = int(label[1:]) - 1
                 actions = _path_to(passable, (fr, fc))
-                # Remember the attempt so the next turn can tell whether it
-                # actually worked.
+                # Remember the attempt so next turn can tell whether it worked.
                 self.last_explore_target = (fr, fc)
                 self.last_explore_from = (pos.get("x"), pos.get("y"))
             except (ValueError, IndexError):
@@ -926,7 +975,6 @@ class HermesDriver:
             if not actions:
                 legal = list(_legal_dirs(passable))
                 actions = [legal[0]] if legal else ["wait_30"]
-        # ---- end ----
         elif choice.startswith("goto_"):
             # One decision, many tiles: BFS over verified walkability turns a
             # per-tile decision loop into a per-destination one.
@@ -945,10 +993,10 @@ class HermesDriver:
             actions = ["wait_30"]
 
         logger.info("turn %d: laya=%s (p=%.2f) in %.0fms -> %s (from %d options) "
-                    "map=%s pos=(%s,%s) here=%d stuck=%d",
+                    "map=%s pos=(%s,%s) door=%s here=%d stuck=%d",
                     self.turn + 1, choice, self.last_confidence, took_ms,
                     actions, len(criteria), cur_map, pos.get("x"), pos.get("y"),
-                    laya_state["times_on_this_tile"], self.stuck)
+                    on_warp, laya_state["times_on_this_tile"], self.stuck)
 
         self.act(actions)
         self.event(type="decision",
@@ -962,7 +1010,7 @@ class HermesDriver:
         """One Hermes-driven turn: build a prompt, shell out, let it act."""
         # Replaying a 1000-message history dominates latency and buys nothing:
         # the escalation goal is regenerated from live state every turn.
-        if self.session_id and (self.turn - self.session_started_at) > 30:
+        if self.session_id and (self.turn - self.session_started_at) > 10:
             logger.info("rotating hermes session (was %d turns old)",
                         self.turn - self.session_started_at)
             self.session_id = None
