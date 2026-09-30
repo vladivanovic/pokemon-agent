@@ -369,6 +369,7 @@ def build_collision_grid(emu,
         "geometry": {"block_px": BLOCK_PX,
                      "player_px": [PLAYER_PX_X, PLAYER_PX_Y],
                      "cols": BLOCK_COLS, "rows": BLOCK_ROWS},
+        "_debug_tile_in_front": emu.read_u8(ADDR_TILE_IN_FRONT),
     }
     if player_pos:
         out["player_map_pos"] = {"x": player_pos.get("x"),

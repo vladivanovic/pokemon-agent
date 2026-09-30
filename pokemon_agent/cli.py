@@ -113,6 +113,7 @@ def cmd_play(args):
         stall_seconds=getattr(args, "stall_seconds", 60.0),
         hermes_turns=getattr(args, "hermes_turns", 12),
         vision=not getattr(args, "no_vision", False),
+        replan_every=getattr(args, "replan_every", 120),
     )
 
 def cmd_play_api(args):
@@ -182,6 +183,8 @@ def main():
                         help="Model is text-only; never attach screenshots")
     play_p.add_argument("--save-every", type=int, default=200,
                         help="Autosave every N turns")
+    play_p.add_argument("--replan-every", type=int, default=120,
+                        help="Re-plan with Hermes every N Laya turns even without a stall")
 
     # --- play-api (Hermes AIAgent direct) ---
     play_api_p = sub.add_parser("play-api", help="Run the LLM autopilot using Hermes AIAgent API (direct, faster)")

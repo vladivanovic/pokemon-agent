@@ -175,6 +175,18 @@ COORDINATES — two different systems, do not mix them:
   E5. A cell like C3 means "2 columns left, 2 rows up from me". The grid is
   always 10x9 regardless of your position. The grid is NOT misaligned.
 
+BEFORE YOU FINISH, always write one line starting with PLAN: giving the next
+concrete sub-goal for the fast movement model to execute. Use compass
+directions and named places, not grid cells. Examples:
+
+  PLAN: leave this building, then head north out of Pallet Town onto Route 1
+  PLAN: follow Route 1 north, going around any ledges, until Viridian City
+  PLAN: inside the Viridian Poke Mart, walk to the counter and talk to the clerk
+
+The fast model cannot read dialog or reason about the story — it only picks
+directions. Your PLAN is the only steering it gets, so make it unambiguous.
+Write PLAN: on every turn, updating it as the situation changes.
+
 MAP:
 {map_ascii}
 
@@ -361,7 +373,7 @@ class HermesDriver:
                  turn_timeout: int = 240, use_laya: bool = False,
                  laya_narrate_every: int = 0,
                  stall_seconds: float = 60.0, hermes_turns: int = 12,
-                 vision: bool = True):
+                 vision: bool = True, replan_every: int = 120):
         self.server = server.rstrip("/")
         self.model = model
         self.provider = provider
@@ -401,6 +413,12 @@ class HermesDriver:
         self.session_started_at: int = 0
         self._hermes_last_pos: Optional[Any] = None
         self.hermes_budget_max: int = 30
+        # --- planning: Hermes sets intent, Laya executes it ---
+        self.standing_plan: str = ""
+        self.plan_set_at: int = -999
+        self.plan_from_map: str = ""
+        self.plan_ttl: int = 150
+        self.replan_every: int = replan_every
         
         self.laya_router: Optional[Any] = None
         if self.use_laya:
@@ -622,6 +640,33 @@ class HermesDriver:
         return (f"You have {badges} badge(s) and appear stuck in {map_name}. "
                 f"Work out what the game is waiting for and do it.{hint}")
 
+    def _active_plan(self, state: Dict[str, Any]) -> str:
+        """The current standing plan, or '' if it has expired.
+
+        A plan is retired when it gets old, or when the map changes enough that
+        it no longer describes the situation — "head north out of Pallet Town"
+        is actively misleading once you are in Viridian.
+        """
+        if not self.standing_plan:
+            return ""
+        if self.turn - self.plan_set_at > self.plan_ttl:
+            logger.info("plan expired after %d turns: %s",
+                        self.turn - self.plan_set_at, self.standing_plan)
+            self.standing_plan = ""
+            return ""
+        cur = (state.get("map") or {}).get("map_name", "")
+        # Two map changes past the issuing map means the plan probably
+        # succeeded and is now stale.
+        if cur != self.plan_from_map and cur not in self.standing_plan:
+            hops = len({m for (m, _, _) in self.visits
+                        if m and m != self.plan_from_map})
+            if hops >= 2:
+                logger.info("plan superseded by map change: %s",
+                            self.standing_plan)
+                self.standing_plan = ""
+                return ""
+        return self.standing_plan
+
     def _arbitrate(self, state: Dict[str, Any], made_progress: bool) -> str:
         """Decide which brain drives this turn.
 
@@ -669,15 +714,21 @@ class HermesDriver:
             return self.mode
 
         self.mode_turns += 1
-        if stalled_for > self.stall_seconds:
+        # Two reasons to escalate. A stall means Laya is wedged. A stale plan
+        # means it is executing intent formed long ago — re-planning on a timer
+        # keeps steering fresh instead of waiting for a wedge.
+        plan_age = self.turn - self.plan_set_at
+        plan_stale = (not self.standing_plan) or plan_age > self.replan_every
+        if stalled_for > self.stall_seconds or plan_stale:
+            why = "stalled" if stalled_for > self.stall_seconds else "plan stale"
             self.hermes_goal = self._infer_goal(state)
             self.hermes_budget = self.hermes_turns
-            logger.warning("no progress for %.0fs — escalating to hermes "
-                           "(budget %d turns, goal: %s)",
-                           stalled_for, self.hermes_budget, self.hermes_goal)
+            logger.warning("escalating to hermes (%s, %.0fs since progress, "
+                           "plan %d turns old, budget %d): %s",
+                           why, stalled_for, plan_age, self.hermes_budget,
+                           self.hermes_goal)
             self._enter_mode("hermes")
-            self.event(type="alert",
-                       text=f"Escalating to Hermes: {self.hermes_goal}")
+            self.event(type="alert", text=f"Escalating ({why}): {self.hermes_goal}")
         return self.mode
 
     # --- Laya --------------------------------------------------------------
@@ -826,7 +877,10 @@ class HermesDriver:
         # ------------------------------------------------------------------
         else:
             times_here = self.visits.get(key, 0)
-            goal = self._infer_goal(state)
+            # Hermes' plan beats the static hint: it was written with knowledge
+            # of what actually blocked us, and in compass terms Laya can use.
+            plan = self._active_plan(state)
+            goal = plan or self._infer_goal(state)
             seen_maps = {m for (m, _, _) in self.visits if m}
 
             # --- C1: on-warp ---
@@ -964,6 +1018,9 @@ class HermesDriver:
             "tiles_seen_this_map": sum(1 for (m, _, _) in self.visits
                                        if m == cur_map),
             "maps_seen": len({m for (m, _, _) in self.visits}),
+            "plan": self._active_plan(state) or None,
+            "plan_age": (self.turn - self.plan_set_at
+                         if self.standing_plan else None),
         }
 
         # Oscillation guard. Do NOT clear the window on dialog turns — a text
@@ -1168,6 +1225,20 @@ class HermesDriver:
                         time.perf_counter() - started, out.returncode)
             if stdout.strip():
                 logger.info("hermes: %s", stdout.strip()[:400])
+                # The plan is the handover: it is what Laya steers by for the
+                # next few hundred cheap turns, so an escalation that produces
+                # one has earned its cost even if it made no direct progress.
+                pm = re.search(r"^\s*PLAN:\s*(.+)$", stdout, re.M)
+                if pm:
+                    self.standing_plan = pm.group(1).strip()[:240]
+                    self.plan_set_at = self.turn
+                    self.plan_from_map = (state.get("map") or {}).get("map_name", "")
+                    logger.warning("NEW PLAN: %s", self.standing_plan)
+                    self.event(type="decision",
+                               text=f"[plan] {self.standing_plan}")
+                if goal and "HANDBACK" in stdout.upper():
+                    logger.info("hermes requested handback")
+                    self._enter_mode("laya")
                 if goal and "HANDBACK" in stdout.upper():
                     logger.info("hermes requested handback")
                     self._enter_mode("laya")
@@ -1347,13 +1418,14 @@ def run_autopilot(server: str = "http://localhost:8765",
                   model: Optional[str] = None,
                   turn_delay: float = 1.5,
                   turn_timeout: int = 240,
-                  save_every: int = 200,
+                  save_every: int = 20,
                   debug: bool = False,
                   use_laya: bool = False,
                   laya_narrate_every: int = 0,
                   stall_seconds: float = 60.0,
                   hermes_turns: int = 12,
-                  vision: bool = True) -> None:
+                  vision: bool = True,
+                  replan_every: int = 120) -> None:
     if debug:
         logging.getLogger("pokemon-agent").setLevel(logging.DEBUG)
         logger.info("debug logging enabled")
@@ -1365,4 +1437,5 @@ def run_autopilot(server: str = "http://localhost:8765",
                  laya_narrate_every=laya_narrate_every,
                  stall_seconds=stall_seconds,
                  hermes_turns=hermes_turns,
-                 vision=vision).run()
+                 vision=vision,
+                 replan_every=replan_every).run()
