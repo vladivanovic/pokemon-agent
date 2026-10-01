@@ -620,17 +620,20 @@ class HermesDriver:
         if not flags.get("has_pokedex"):
             if flags.get("has_oaks_parcel"):
                 return ("You are carrying Oak's Parcel. Return to Oak's Lab in "
-                        "Pallet Town (south, via Route 1) and give it to Oak to "
-                        "receive the Pokedex.")
-            return ("Go NORTH to Viridian City via Route 1, enter the Poke Mart "
-                    "(the blue-roofed shop), and talk to the clerk to collect "
-                    "Oak's Parcel.")
+                        "Pallet Town and give it to Oak to receive the Pokedex. "
+                        "Follow the walkable path shown on the MAP — do not "
+                        "assume a compass direction is open.")
+            return ("Reach Viridian City and collect Oak's Parcel from the Poke "
+                    "Mart clerk. Viridian lies beyond Route 1, north of Pallet "
+                    "Town, but the path is not a straight line: read the MAP "
+                    "and follow whichever directions are actually open, even "
+                    "if that means going west or east first.")
 
         if badges == 0:
             return ("Reach Pewter City and beat Brock at the Gym for the Boulder "
                     "Badge. Route from Viridian City: north through Viridian "
                     "Forest. Brock uses Rock types — a Grass or Water Pokemon "
-                    "helps. Train your party to about level 12 first.")
+                    "helps. Train your party to about level 12 or higher first.")
 
         # General case: no scripted hint. Tell it where it has already been so
         # it can pick somewhere new, rather than writing a walkthrough branch
