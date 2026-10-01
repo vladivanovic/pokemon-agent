@@ -252,16 +252,13 @@ def read_warp_cells(emu, player_x: int, player_y: int) -> List[Dict]:
 
 def verify_offset(emu, facing: Optional[str],
                   tile_ids: List[List[int]]) -> Optional[bool]:
-    """Cross-check our sampling against the engine's own front-tile value.
-
-    ``wTileInFrontOfPlayer`` is what the engine itself tested to decide
-    whether the last move was legal. If it disagrees with the tile we sampled
-    for the cell adjacent to E5, GRID_ROW_OFFSET is wrong and every cell
-    label is shifted.
-
-    Returns None when the check cannot be made (no facing, or the adjacent
-    cell is off-screen) — None means "unknown", not "fine".
+    """DISABLED TEMPORARILY — 0xCFC6 does not reliably hold wTileInFrontOfPlayer in this
+    build. Two samples gave contradictory results (once matching the player's
+    own tile, once matching nothing on screen), so the check cannot distinguish
+    a real misalignment from its own bug. Returning None means "unknown",
+    which suppresses the warning in render_ascii_map.
     """
+    return None # returning early 
     d = _FACING_DELTA.get((facing or "").lower())
     if d is None:
         return None
