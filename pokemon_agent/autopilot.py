@@ -219,7 +219,10 @@ def _compact_state(state: Dict[str, Any]) -> Dict[str, Any]:
             "nickname": m.get("nickname"), "species": m.get("species"),
             "level": m.get("level"), "hp": m.get("hp"), "max_hp": m.get("max_hp"),
             "status": m.get("status"), "types": m.get("types"),
-            "moves": [mv.get("name") if isinstance(mv, dict) else mv
+            # PP included so Hermes never picks a 0-PP move in battle -
+            # names alone left it blind (wedged menu-looping vs Weedle).
+            "moves": [{"name": mv.get("name"), "pp": mv.get("pp", 0)}
+                      if isinstance(mv, dict) else mv
                       for mv in m.get("moves") or []],
         })
 
@@ -835,9 +838,8 @@ class HermesDriver:
             moved = cur_pos is not None and cur_pos != self._hermes_last_pos
             self._hermes_last_pos = cur_pos
 
-            if made_progress and self.mode_turns >= 2:
-                logger.info("hermes made progress after %d turns - back to laya",
-                            self.mode_turns)
+            if made_progress and self.mode_turns >= 2 and not (state.get("battle") or {}).get("in_battle"):
+                logger.info("hermes made progress after %d turns - back to laya", self.mode_turns)
                 self._enter_mode("laya")
             elif (moved and self.mode_turns >= self.hermes_budget - 2
                     and self.hermes_budget < self.hermes_budget_max):
@@ -855,11 +857,8 @@ class HermesDriver:
 
         if (state.get("battle") or {}).get("in_battle"):
             self.progress_at = time.perf_counter()
-            # Report the true driver: an in_battle turn routes to Hermes via
-            # step()'s "hermes" dispatch WITHOUT _enter_mode, so the mode field
-            # stays "laya" and /stats misreports who is actually driving.
-            if self.mode != "hermes":
-                self._enter_mode("hermes")
+            # Ensure Hermes is driver for battle turns so stats reflect correctly
+            self._enter_mode("hermes")
             return self.mode
 
         self.mode_turns += 1
@@ -1021,19 +1020,45 @@ class HermesDriver:
             enemy = battle.get("enemy") or {}
             mine = state.get("active_mon") or {}
             hp_frac = (mine.get("hp") or 0) / (mine.get("max_hp") or 1)
+            # PP-aware move list so the AI never picks a move it cannot use.
+            # All four slots at 0 PP means the game forces STRUGGLE (typeless,
+            # 1/4 recoil) - pressing FIGHT still works, the game picks the
+            # move for us. Growl has PP but deals NO damage - it cannot win a
+            # battle alone, so when no damaging move has PP, attack anyway
+            # and let the game's STRUGGLE handle it.
+            moves = mine.get("moves", [])
+            pps = [mv.get("pp", 0) if isinstance(mv, dict) else 0
+                   for mv in moves]
+            any_pp = any(pp > 0 for pp in pps)
             instructions = (
                 f"You are in a battle against {enemy.get('species','?')} "
                 f"Lv{enemy.get('level','?')} "
                 f"({enemy.get('hp','?')}/{enemy.get('max_hp','?')} HP). "
                 f"Your {mine.get('nickname','?')} is at "
                 f"{mine.get('hp','?')}/{mine.get('max_hp','?')} HP. "
+                f"Move PP: {', '.join(f'{m.get('name', '?')}={m.get('pp', 0)}' for m in moves) if moves else 'none'}. "
                 "The menu is FIGHT / PKMN / ITEM / RUN. Choose what to do."
             )
-            criteria["attack"] = "Select FIGHT and use the first move"
+            if not any_pp:
+                # Every move slot is out of PP - selecting FIGHT makes the
+                # game use STRUGGLE automatically. This is the ONLY way to
+                # deal damage now; menu-looping between SWITCH and FIGHT
+                # achieves nothing (proven live: wedged vs Weedle).
+                criteria["attack"] = (
+                    "Select FIGHT - all moves are out of PP so the game will "
+                    "use STRUGGLE (the only remaining way to deal damage)"
+                )
+            elif pps and pps[0] > 0:
+                criteria["attack"] = "Select FIGHT and use the first move"
+            else:
+                # First move has no PP but others do - do not offer a blind
+                # first-slot attack; the AI should switch or use an item.
+                pass
             if hp_frac < 0.35:
                 criteria["flee"] = "Select RUN and escape this battle"
             criteria["advance_text"] = "Press A to advance battle text"
-
+            criteria["pkmn"] = "Select PKMN to switch Pokémon"
+            criteria["item"] = "Select ITEM to use an item"
         # ------------------------------------------------------------------
         # BRANCH C - EXPLORE
         # ------------------------------------------------------------------
