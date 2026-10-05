@@ -1051,9 +1051,17 @@ class HermesDriver:
             elif pps and pps[0] > 0:
                 criteria["attack"] = "Select FIGHT and use the first move"
             else:
-                # First move has no PP but others do - do not offer a blind
-                # first-slot attack; the AI should switch or use an item.
-                pass
+                # First move has no PP but others do - offer specific moves
+                # with PP > 0 so the AI can choose one (e.g., Growl to burn
+                # PP toward Struggle). Each move becomes its own criterion.
+                for i, mv in enumerate(moves):
+                    pp = mv.get("pp", 0) if isinstance(mv, dict) else 0
+                    if pp > 0:
+                        move_name = mv.get("name", f"move_{i}")
+                        criteria[f"move_{i}"] = (
+                            f"Select FIGHT, navigate to {move_name} (PP={pp}), "
+                            "and confirm"
+                        )
             if hp_frac < 0.35:
                 criteria["flee"] = "Select RUN and escape this battle"
             criteria["advance_text"] = "Press A to advance battle text"
@@ -1345,6 +1353,15 @@ class HermesDriver:
             # menu, since cursor movement clamps at the edges.
             actions = ["press_b", "wait_30", "press_up", "press_left",
                        "press_a", "wait_30", "press_a", "wait_60"]
+        elif choice.startswith("move_") and choice[5:].isdigit():
+            # Specific move selection (e.g. move_1 = second move in the list).
+            # FIGHT, then navigate down (i-1) entries to the move, confirm.
+            # Cursor starts at the first move after FIGHT is chosen.
+            idx = int(choice[5:])
+            actions = ["press_b", "wait_30", "press_up", "press_left",
+                       "press_a", "wait_30"]
+            actions += ["press_down"] * idx
+            actions += ["press_a", "wait_60"]
         elif choice == "flee":
             actions = ["press_b", "wait_30", "press_down", "press_right",
                        "press_a", "wait_60"]
