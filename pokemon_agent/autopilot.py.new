@@ -2,19 +2,19 @@
 
 Two brains are supported:
 
-  Hermes (default) - a real Hermes Agent session with the `pokemon-player`
+  Hermes (default) — a real Hermes Agent session with the `pokemon-player`
     skill, vision, memory and the terminal tool, driven one turn at a time via
     `hermes chat --resume`. Slow (seconds to minutes per turn on local
     hardware) but can reason, narrate, search the web and set objectives.
 
-  Laya (--laya)    - an in-process decision model. Milliseconds per turn,
+  Laya (--laya)    — an in-process decision model. Milliseconds per turn,
     returns a structured choice from a fixed candidate set, no text
     generation, no regex parsing, no hallucinated actions. Bypasses Hermes
     entirely. Cannot narrate or plan.
 
 Normal Hermes turns are TEXT ONLY. The ASCII collision map in /state is
 ground truth read from game RAM, so it beats asking a vision model to read
-pixel art - and it keeps the prompt small, which matters a lot on local
+pixel art — and it keeps the prompt small, which matters a lot on local
 hardware. Hermes can fetch a frame itself (curl /screenshot + its vision
 tool) when the map is not enough: menus, dialog text, battle screens. The
 driver only pushes an image for the intro screens, where no map exists yet,
@@ -44,7 +44,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
-# Laya decision model - optional. Import failure must be loud at use time,
+# Laya decision model — optional. Import failure must be loud at use time,
 # not silently equivalent to "feature disabled".
 try:
     from laya import Router  # type: ignore
@@ -78,7 +78,7 @@ COL_LABELS_LOCAL = "ABCDEFGHIJ"
 # at the END is significantly cheaper than a prompt that changes at the top.
 # ---------------------------------------------------------------------------
 
-INTRO_VISION_OK = "A screenshot of the current screen is attached - look at it."
+INTRO_VISION_OK = "A screenshot of the current screen is attached — look at it."
 INTRO_VISION_NONE = ("No screenshot available. Press A to advance and check "
                      "the result next turn.")
 
@@ -86,7 +86,7 @@ INTRO_NUDGE = """You are booting Pokémon Red on the Hermes Plays Pokémon dashb
 
 Server: {server}
 
-The game is NOT in play yet - it is at the title screen, Oak's intro, or a
+The game is NOT in play yet — it is at the title screen, Oak's intro, or a
 name-entry menu. Game state values are uninitialised garbage right now, so
 IGNORE them entirely. {vision}
 
@@ -99,14 +99,13 @@ Your only job this turn: advance the intro. POST one of these to
   Options screen (went too far) {{"actions":["press_b"]}}
   Unsure                        {{"actions":["press_a"]}}
 
-On the name menu do NOT press A on "NEW NAME" - that opens letter-by-letter
+On the name menu do NOT press A on "NEW NAME" — that opens letter-by-letter
 entry. Press down first to take a preset.
 
 Do not narrate, do not set objectives yet. Current phase: {phase}
 
 Reply with one short sentence saying what you pressed.
-
-If you need information about the world (e.g., what a building does), you can use the web search tool."""
+"""
 
 TURN_NUDGE = """You are playing Pokémon Red on the Hermes Plays Pokémon dashboard.
 
@@ -122,7 +121,7 @@ On a real beat (new town, badge, catch) also POST {server}/event
 
 All POSTs need -H 'Content-Type: application/json'.
 
-The MAP below is ground truth read from game memory - trust it over any image.
+The MAP below is ground truth read from game memory — trust it over any image.
 You are always at @ (cell E5). Columns A-J left to right, rows 1-9 top to
 bottom. `.` walkable, `#` blocked, `N` a person blocking you, `D` a door/exit.
 
@@ -130,15 +129,14 @@ If the map says "unavailable", or you are in a menu/battle/dialog and cannot
 tell what is on screen, you may look at the frame:
   curl -s '{server}/screenshot' -o /tmp/look.png
 then use the vision tool on /tmp/look.png. Only do this when the map and state
-are not enough - it costs an extra round trip.
+are not enough — it costs an extra round trip.
 
 MAP:
 {map_ascii}
 
 STATE:
 {state}
-
-If you need information about the world (e.g., what a building does), you can use the web search tool."""
+"""
 
 ESCALATION_NUDGE = """You are playing Pokémon Red. Laya (a fast movement model) has
 been driving, but nothing has advanced for a while, so YOU have control for the
@@ -148,30 +146,30 @@ GOAL: {goal}
 
 Server: {server}
 
-You know Pokémon Red. Laya does not - it only picks directions. Use that
+You know Pokémon Red. Laya does not — it only picks directions. Use that
 knowledge: work out what the game is waiting for, and do it.
 
 NEVER call /load or /save. NEVER load a save state. If movement seems not to
-work, it is because a text box is open or an NPC is in the way - not because
+work, it is because a text box is open or an NPC is in the way — not because
 the emulator is broken. Press B to clear text, or walk around the obstacle.
 
 Each turn:
 1. POST {server}/event {{"type":"reasoning","text":"..."}}  what is blocking us
-2. POST {server}/action {{"actions":[...]}}  up to 8 actions - you may send a
+2. POST {server}/action {{"actions":[...]}}  up to 8 actions — you may send a
    longer sequence than usual since you have the context to plan it
 3. If the blocker is cleared and only movement remains, write HANDBACK in your
    reply and Laya will resume.
 
-Warps (doors, stairs, exits) trigger when you WALK onto or off them - pressing
+Warps (doors, stairs, exits) trigger when you WALK onto or off them — pressing
 A on a warp tile does nothing. Building exits in this game are on the SOUTH
 edge: to leave, walk DOWN off the doormat. `exits` in STATE gives the cell of
 each warp; "outside" means it leads out of the building.
 'v' is a LEDGE: you can hop DOWN over it, sometimes left or right too
-but never climb up. If a ledge blocks, your way north, walk around it - do not keep pressing up.
+but never climb up. If a ledge blocks, your way north, walk around it — do not keep pressing up.
 
 All POSTs need -H 'Content-Type: application/json'.
 
-COORDINATES - two different systems, do not mix them:
+COORDINATES — two different systems, do not mix them:
   `position` (x,y) is your absolute location on the map. Larger y is SOUTH.
   Grid cells (A1..J9) are SCREEN positions RELATIVE to you. You are ALWAYS at
   E5. A cell like C3 means "2 columns left, 2 rows up from me". The grid is
@@ -185,7 +183,7 @@ directions and named places, not grid cells. Examples:
   PLAN: follow Route 1 north, going around any ledges, until Viridian City
   PLAN: inside the Viridian Poke Mart, walk to the counter and talk to the clerk
 
-The fast model cannot read dialog or reason about the story - it only picks
+The fast model cannot read dialog or reason about the story — it only picks
 directions. Your PLAN is the only steering it gets, so make it unambiguous.
 Write PLAN: on every turn, updating it as the situation changes.
 
@@ -194,8 +192,7 @@ MAP:
 
 STATE:
 {state}
-
-If you need information about the world (e.g., what a building does), you can use the web search tool."""
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +203,7 @@ def _compact_state(state: Dict[str, Any]) -> Dict[str, Any]:
     """Trim the full state dict to what a turn actually needs.
 
     The ASCII map is passed separately in the prompt body, and raw tile_ids /
-    timestamps are dropped - they burn tokens without informing a decision.
+    timestamps are dropped — they burn tokens without informing a decision.
     """
     p = state.get("player") or {}
     dialog = state.get("dialog") or {}
@@ -234,7 +231,7 @@ def _compact_state(state: Dict[str, Any]) -> Dict[str, Any]:
         "text_active": dialog.get("text_active"),
         "input_locked": dialog.get("input_locked"),
         "in_battle": battle.get("in_battle"),
-        # battle.enemy is a DICT, not a list - one active enemy at a time.
+        # battle.enemy is a DICT, not a list — one active enemy at a time.
         "enemy": ({"species": enemy.get("species"), "level": enemy.get("level"),
                    "hp": enemy.get("hp"), "max_hp": enemy.get("max_hp"),
                    "types": enemy.get("types")}
@@ -273,7 +270,7 @@ def _progress_fingerprint(state: Dict[str, Any]) -> tuple:
     )
 
 # ---------------------------------------------------------------------------
-# Grid helpers - screen-relative pathing over verified walkability
+# Grid helpers — screen-relative pathing over verified walkability
 # ---------------------------------------------------------------------------
 
 def _grid_open(passable: List[List[bool]], r: int, c: int) -> bool:
@@ -295,7 +292,7 @@ def _path_to(passable: List[List[bool]], target: Tuple[int, int],
     """BFS from E5 to *target*, returning walk actions.
 
     Trivially cheap on a 10x9 grid, and it converts "one LLM call per tile"
-    into "one call per destination" - the single biggest speed win available
+    into "one call per destination" — the single biggest speed win available
     when the decision model is the bottleneck.
 
     A ledge can only be entered moving DOWN, so a route that would climb one
@@ -331,19 +328,11 @@ def _path_to(passable: List[List[bool]], target: Tuple[int, int],
     return []
 
 def _frontier_targets(passable: List[List[bool]], visits: Dict[tuple, int],
-                      cur_map: str, px: int, py: int,
-                      union_global: Optional[set] = None,
-                      map_offset: Optional[tuple] = None) -> List[Tuple[int, int]]:
+                      cur_map: str, px: int, py: int) -> List[Tuple[int, int]]:
     """On-screen cells the agent has never stood on, reachable from E5.
 
     Screen cells map to world coords by offsetting from the player: the player
     is always at (PLAYER_ROW, PLAYER_COL) and at world (px, py).
-
-    When union_global (SB3 explored cells, global (y, x)) and map_offset
-    ((mx, my) of the current map) are provided, each candidate's local
-    (wx, wy) is converted to global (gy, gx) and checked against the union
-    set too — RL-explored terrain is treated as known and stays out of the
-    frontier.
     """
     out = []
     for r in range(GRID_ROWS):
@@ -352,17 +341,8 @@ def _frontier_targets(passable: List[List[bool]], visits: Dict[tuple, int],
                 continue
             wx = px + (c - PLAYER_COL)
             wy = py + (r - PLAYER_ROW)
-            if visits.get((cur_map, wx, wy), 0) != 0:
-                continue
-            if union_global and map_offset is not None:
-                mx, my = map_offset
-                # GLOBAL = local + map_offset + PAD(20), matching the SB3 env's
-                # local_to_global(): gy = row + map_y + 20, gx = col + map_x + 20
-                gy = wy + my + 20
-                gx = wx + mx + 20
-                if (gy, gx) in union_global:
-                    continue
-            out.append((r, c))
+            if visits.get((cur_map, wx, wy), 0) == 0:
+                out.append((r, c))
     return out
 
 def cell_label_local(col: int, row: int) -> str:
@@ -412,13 +392,6 @@ class HermesDriver:
         self.recent: deque = deque(maxlen=12)    # oscillation detection
         self.prev_map: Optional[str] = None
         self.visits: Dict[tuple, int] = {}      # (map, x, y) -> times seen
-        self.special_tiles: Dict[tuple, str] = {}   # (map, x, y) -> tile purpose
-        self.explore_union_path = os.environ.get(
-            "POKEMON_EXPLORE_UNION",
-            "/home/vlad/pokemon-agent/explore_map_union.json")
-        self.union_global: set = set()          # (gy, gx) global coords from SB3
-        self.map_offsets: Dict[str, tuple] = {}  # map_name -> (mx, my) for global conv
-        self._load_map_offsets()
         self.map_changed_at: int = -99
         self.map_changed_time: float = 0.0
         # --- brain arbitration ---
@@ -438,9 +411,6 @@ class HermesDriver:
         self.last_explore_target: Optional[tuple] = None
         self.last_explore_from: Optional[tuple] = None
         self.session_started_at: int = 0
-        self.hermes_time_total: float = 0.0      # seconds spent in Hermes mode
-        self.laya_time_total: float = 0.0       # seconds spent in Laya mode
-        self.last_mode_switch: float = time.perf_counter()
         self._hermes_last_pos: Optional[Any] = None
         self.hermes_budget_max: int = 30
         # --- planning: Hermes sets intent, Laya executes it ---
@@ -467,111 +437,8 @@ class HermesDriver:
                     "Laya could not load. Pre-download it with:\n"
                     "  rm -rf ~/.cache/huggingface/hub/models--convaiinnovations--laya\n"
                     "  HF_HUB_ENABLE_HF_TRANSFER=1 hf download convaiinnovations/laya")
-        self._load_special_tiles()
-    def _load_special_tiles(self):
-        """Load special tile knowledge from special_tiles.json if present."""
-        try:
-            with open('special_tiles.json', 'r') as f:
-                data = json.load(f)
-            # Convert nested dict to flat dict with keys (map_id, x, y)
-            for map_str, inner in data.items():
-                map_id = int(map_str)
-                for x_str, ydict in inner.items():
-                    x = int(x_str)
-                    for y_str, purpose in ydict.items():
-                        y = int(y_str)
-                        self.special_tiles[(map_id, x, y)] = purpose
-            logger.info(f"Loaded special tiles: {len(self.special_tiles)} entries")
-        except FileNotFoundError:
-            logger.info("No special_tiles.json found - continuing without semantic tile knowledge.")
-        except Exception as e:
-            logger.warning(f"Failed to load special_tiles.json: {e}")
-
-    def _load_explore_union(self):
-        """Reload union explored-cells JSON exported by the SB3 training env.
-
-        Merges into self.visits with a minimum count of 1 so the frontier
-        treats RL-explored cells as known terrain. File may not exist yet -
-        that is fine, we just keep what we have.
-
-        Union cells are GLOBAL (y, x) on the padded grid; the autopilot
-        frontier works in per-map LOCAL coords. They are stored in BOTH
-        forms: self.visits under the map=-1 sentinel (audit trail) and
-        self.union_global as a plain (y, x) set that _frontier_targets
-        checks after converting local->global via the map offset table.
-        """
-        # Per-rank files from the 12 parallel SB3 envs (plus the legacy single
-        # file). Each env writes its own map; the union is the merge of all.
-        import glob as _glob
-        paths = sorted(_glob.glob(
-            "/home/vlad/pokemon-agent/explore_map_union_rank*.json"))
-        if not paths:
-            paths = [self.explore_union_path]   # legacy fallback
-        loaded_any = False
-        max_step = 0
-        for path in paths:
-            try:
-                with open(path, "r") as f:
-                    data = json.load(f)
-            except FileNotFoundError:
-                continue
-            except Exception as e:
-                logger.warning("Failed to load %s: %s", path, e)
-                continue
-            loaded_any = True
-            max_step = max(max_step, int(data.get("updated_at_step", 0)))
-            before = len(self.union_global)
-            for y, x in data.get("cells", []):
-                # Union cells are global coords; store both forms:
-                # (-1, x, y) in visits (audit) and (y, x) in union_global
-                # (frontier check after local->global conversion).
-                self.union_global.add((int(y), int(x)))
-                key = (-1, int(x), int(y))
-                if self.visits.get(key, 0) == 0:
-                    self.visits[key] = 1
-            added_global = len(self.union_global) - before
-            if added_global:
-                logger.info("Loaded %d new cells from %s", added_global,
-                            os.path.basename(path))
-        if loaded_any:
-            logger.info("SB3 union: %d global cells total (step %s) from "
-                        "%d file(s)", len(self.union_global), max_step, len(paths))
-
-    def _load_map_offsets(self):
-        """Load map_name -> (mx, my) from the SB3 training env's map_data.json.
-
-        Needed to convert the frontier's per-map local cells to the global
-        coords the SB3 union map uses, so RL-explored terrain actually
-        suppresses Laya's frontier (previously loaded but inert).
-        """
-        try:
-            with open("/home/vlad/pokemon-agent/v2/map_data.json", "r") as f:
-                regions = json.load(f).get("regions", [])
-            for e in regions:
-                name = e.get("name")
-                coords = e.get("coordinates") or [0, 0]
-                if name:
-                    self.map_offsets[name] = (int(coords[0]), int(coords[1]))
-            logger.info("Loaded %d map offsets from map_data.json",
-                        len(self.map_offsets))
-        except Exception as e:
-            logger.warning(f"Failed to load map offsets: {e}")
 
     # --- server helpers ----------------------------------------------------
-
-
-    def _post_stats(self) -> None:
-        try:
-            self._post("/stats", {
-                "hermes_time_total": self.hermes_time_total,
-                "laya_time_total": self.laya_time_total,
-                "turn": self.turn,
-                "mode": self.mode,
-                "session_started_at": self.session_started_at,
-                "hermes_budget": self.hermes_budget,
-            })
-        except Exception:
-            pass  # best effort
 
     def _get(self, path: str):
         r = requests.get(self.server + path, timeout=15)
@@ -598,7 +465,7 @@ class HermesDriver:
 
     def act(self, actions: List[str]) -> bool:
         """Send actions to the EMULATOR. /event is narration only and moves
-        nothing - this is the endpoint that actually presses buttons."""
+        nothing — this is the endpoint that actually presses buttons."""
         if not actions:
             return False
         try:
@@ -664,7 +531,7 @@ class HermesDriver:
             r = subprocess.run(cmd, capture_output=True, text=True,
                                stdin=subprocess.DEVNULL, timeout=120)
         except subprocess.TimeoutExpired:
-            logger.error("preflight timed out - model or gateway not responding")
+            logger.error("preflight timed out — model or gateway not responding")
             return False
         blob = (r.stdout or "") + (r.stderr or "")
         bad = ("turned off", "not found", "auth failed", "Primary auth failed")
@@ -679,7 +546,7 @@ class HermesDriver:
         """Recompute objective completion from game state.
 
         Objectives are display-only, but a stale list showing a finished task
-        is worse than none - it misleads both the viewer and any LLM that
+        is worse than none — it misleads both the viewer and any LLM that
         reads the dashboard.
         """
         flags = state.get("flags") or {}
@@ -719,23 +586,15 @@ class HermesDriver:
             return False
 
     def _enter_mode(self, mode: str) -> None:
-        now = time.perf_counter()
-        elapsed = now - self.last_mode_switch
-        if self.mode == "hermes":
-            self.hermes_time_total += elapsed
-        elif self.mode == "laya":
-            self.laya_time_total += elapsed
         self.mode, self.mode_turns = mode, 0
         self.recent.clear()
-        self.progress_at = now   # grace period in the new mode
-        self.last_mode_switch = now
+        self.progress_at = time.perf_counter()   # grace period in the new mode
         self.event(type="decision", text=f"[brain] switched to {mode}")
-        self._post_stats()
 
     def _infer_goal(self, state: Dict[str, Any]) -> str:
         """A coarse objective for the escalated turns, from game state alone.
 
-        Only the current blocker is described, never the whole walkthrough -
+        Only the current blocker is described, never the whole walkthrough —
         the escalated model has limited context and a long plan dilutes the
         one thing it needs to do right now.
         """
@@ -748,7 +607,7 @@ class HermesDriver:
             if map_name == "Oak's Lab":
                 return (
                     "Take a starter Pokemon from the table in Oak's Lab. "
-                    "The three Pokeballs sit ON THE TABLE - stand so you are "
+                    "The three Pokeballs sit ON THE TABLE — stand so you are "
                     "facing a ball and press A, then confirm YES. "
                     "Your rival Gary is nearby and gives you nothing; the "
                     "`people` field in STATE shows who is where. "
@@ -762,7 +621,7 @@ class HermesDriver:
             if flags.get("has_oaks_parcel"):
                 return ("You are carrying Oak's Parcel. Return to Oak's Lab in "
                         "Pallet Town and give it to Oak to receive the Pokedex. "
-                        "Follow the walkable path shown on the MAP - do not "
+                        "Follow the walkable path shown on the MAP — do not "
                         "assume a compass direction is open.")
             return ("Reach Viridian City and collect Oak's Parcel from the Poke "
                     "Mart clerk. Viridian lies beyond Route 1, north of Pallet "
@@ -773,7 +632,7 @@ class HermesDriver:
         if badges == 0:
             return ("Reach Pewter City and beat Brock at the Gym for the Boulder "
                     "Badge. Route from Viridian City: north through Viridian "
-                    "Forest. Brock uses Rock types - a Grass or Water Pokemon "
+                    "Forest. Brock uses Rock types — a Grass or Water Pokemon "
                     "helps. Train your party to about level 12 or higher first.")
 
         # General case: no scripted hint. Tell it where it has already been so
@@ -788,7 +647,7 @@ class HermesDriver:
         """The current standing plan, or '' if it has expired.
 
         A plan is retired when it gets old, or when the map changes enough that
-        it no longer describes the situation - "head north out of Pallet Town"
+        it no longer describes the situation — "head north out of Pallet Town"
         is actively misleading once you are in Viridian.
         """
         if not self.standing_plan:
@@ -821,7 +680,7 @@ class HermesDriver:
         """
         stalled_for = time.perf_counter() - self.progress_at
 
-        # Mechanical problems have mechanical solutions - but not if Laya has
+        # Mechanical problems have mechanical solutions — but not if Laya has
         # been failing at this one for a while. Don't let the shortcut become
         # a deadlock.
         if (self.mode == "laya"
@@ -836,7 +695,7 @@ class HermesDriver:
             self._hermes_last_pos = cur_pos
 
             if made_progress and self.mode_turns >= 2:
-                logger.info("hermes made progress after %d turns - back to laya",
+                logger.info("hermes made progress after %d turns — back to laya",
                             self.mode_turns)
                 self._enter_mode("laya")
             elif (moved and self.mode_turns >= self.hermes_budget - 2
@@ -845,26 +704,21 @@ class HermesDriver:
                 # would otherwise be cut off mid-journey. Reward movement.
                 self.hermes_budget = min(self.hermes_budget + 4,
                                          self.hermes_budget_max)
-                logger.info("hermes still moving - budget extended to %d",
+                logger.info("hermes still moving — budget extended to %d",
                             self.hermes_budget)
             elif self.mode_turns >= self.hermes_budget:
-                logger.warning("hermes budget (%d turns) exhausted - back to laya",
+                logger.warning("hermes budget (%d turns) exhausted — back to laya",
                                self.hermes_budget)
                 self._enter_mode("laya")
             return self.mode
 
         if (state.get("battle") or {}).get("in_battle"):
             self.progress_at = time.perf_counter()
-            # Report the true driver: an in_battle turn routes to Hermes via
-            # step()'s "hermes" dispatch WITHOUT _enter_mode, so the mode field
-            # stays "laya" and /stats misreports who is actually driving.
-            if self.mode != "hermes":
-                self._enter_mode("hermes")
             return self.mode
 
         self.mode_turns += 1
         # Two reasons to escalate. A stall means Laya is wedged. A stale plan
-        # means it is executing intent formed long ago - re-planning on a timer
+        # means it is executing intent formed long ago — re-planning on a timer
         # keeps steering fresh instead of waiting for a wedge.
         plan_age = self.turn - self.plan_set_at
         plan_stale = self.standing_plan and plan_age > self.replan_every
@@ -906,7 +760,7 @@ class HermesDriver:
                             "criteria": criteria}},
             )
         except Exception as exc:
-            # Full traceback once, then just the message - this fires every
+            # Full traceback once, then just the message — this fires every
             # turn when the schema is wrong and drowns the log otherwise.
             if self.consecutive_fail == 0:
                 logger.exception("laya predict failed")
@@ -942,12 +796,12 @@ class HermesDriver:
         """One Laya-driven turn: pick from a legal candidate set and execute.
 
         Branch layout (referred to by name elsewhere):
-          BRANCH A - DIALOG : a text box or the intro is on screen
-          BRANCH B - BATTLE : in a battle menu
-          BRANCH C - EXPLORE: free movement in the overworld
-            C1 - on-warp     : standing on a door; leaving takes priority
-            C2 - frontier    : multi-tile paths to unvisited cells
-            C3 - single steps: fallback when the frontier is empty
+          BRANCH A — DIALOG : a text box or the intro is on screen
+          BRANCH B — BATTLE : in a battle menu
+          BRANCH C — EXPLORE: free movement in the overworld
+            C1 — on-warp     : standing on a door; leaving takes priority
+            C2 — frontier    : multi-tile paths to unvisited cells
+            C3 — single steps: fallback when the frontier is empty
         """
         col = state.get("collision") or {}
         passable = col.get("passable") or col.get("walkable") or []
@@ -956,10 +810,6 @@ class HermesDriver:
         battle = state.get("battle") or {}
         p = state.get("player") or {}
         warps = col.get("warps") or []
-        # Quest flags so Laya knows what's done and skips unnecessary buildings
-        flags = state.get("flags") or {}
-        has_parcel = bool(flags.get("has_oaks_parcel"))
-        has_dex = bool(flags.get("has_pokedex"))
 
         cur_map = (state.get("map") or {}).get("map_name", "")
         pos = p.get("position") or {}
@@ -973,7 +823,7 @@ class HermesDriver:
         self.visits[key] = self.visits.get(key, 0) + 1
 
         # Did the previous explore path actually arrive? If not, the target is
-        # unreachable - a table or NPC the collision grid thinks is walkable -
+        # unreachable — a table or NPC the collision grid thinks is walkable —
         # and must be retired or Laya will offer it forever.
         if self.last_explore_target is not None and self.last_explore_from:
             want_r, want_c = self.last_explore_target
@@ -996,27 +846,23 @@ class HermesDriver:
         criteria: Dict[str, str] = {}
 
         # ------------------------------------------------------------------
-        # BRANCH A - DIALOG
+        # BRANCH A — DIALOG
         # ------------------------------------------------------------------
         if intro or dlg.get("text_active"):
-            # Consecutive dialog-active turns: the flag can go stale while the
-            # model keeps offering movement instead of pressing A. After 2
-            # stalled turns, force advance_text and suppress everything else -
-            # walking away mid-conversation is why the mart clerk never finished.
-            self._dialog_turns = getattr(self, "_dialog_turns", 0) + 1
-            force_advance = self._dialog_turns > 2
+            instructions = ("A text box or menu may be on screen. Advance it, or "
+                            "move if you think it has already closed.")
+            criteria["advance_text"] = "Press A to advance dialog, menu or intro"
+            criteria["back_out"] = "Press B to dismiss or cancel"
+            # Movement too: the dialog flag can go stale, and walking is the
+            # only way to find out. Never offer a single-option question.
+            for name in _legal_dirs(passable):
+                criteria[name] = f"Move one tile {name.split('_')[1]}"
+            if intro:
+                criteria["menu_down_a"] = "Move the menu cursor down, then confirm"
 
-            instructions = ("A text box or menu is on screen. Press A to advance it. "
-                            "Do NOT walk away - the NPC will not finish the interaction.")
-            criteria["advance_text"] = "Press A to advance dialog"
-            if force_advance:
-                criteria["advance_text"] += " (REQUIRED - dialog is stalled)"
-            else:
-                criteria["back_out"] = "Press B to dismiss or cancel"
-                for name in _legal_dirs(passable):
-                    criteria[name] = f"Move one tile {name.split('_')[1]}"
-                if intro:
-                    criteria["menu_down_a"] = "Move the menu cursor down, then confirm"
+        # ------------------------------------------------------------------
+        # BRANCH B — BATTLE
+        # ------------------------------------------------------------------
         elif battle.get("in_battle"):
             enemy = battle.get("enemy") or {}
             mine = state.get("active_mon") or {}
@@ -1035,7 +881,7 @@ class HermesDriver:
             criteria["advance_text"] = "Press A to advance battle text"
 
         # ------------------------------------------------------------------
-        # BRANCH C - EXPLORE
+        # BRANCH C — EXPLORE
         # ------------------------------------------------------------------
         else:
             times_here = self.visits.get(key, 0)
@@ -1049,14 +895,14 @@ class HermesDriver:
             # Standing on a door. The tile you must step toward is the
             # building's OUTER WALL, correctly marked non-walkable, so
             # _legal_dirs will never offer it. The engine checks warps before
-            # collision, so terrain does not apply here - offer every
+            # collision, so terrain does not apply here — offer every
             # direction, and keep the option set small so leaving is not
             # competing against six exploration choices.
             if on_warp and not recent_transition:
                 instructions = (
                     f"OBJECTIVE: {goal}\n\n"
                     "You are STANDING ON a door or exit. To leave, step OFF it "
-                    "- for a building exit that means walking DOWN, into what "
+                    "— for a building exit that means walking DOWN, into what "
                     "the map shows as a wall. The engine moves you through. "
                     "Pressing A on a door does nothing."
                 )
@@ -1077,7 +923,7 @@ class HermesDriver:
                     "you, 'D' a door or exit, 'v' a ledge you can only hop "
                     "DOWN over, '@' you. You have stood on this exact tile "
                     f"{times_here} time(s). Choose the option that best serves "
-                    "the OBJECTIVE above - not merely the nearest unexplored "
+                    "the OBJECTIVE above — not merely the nearest unexplored "
                     "tile.")
 
                 # Suppress the warp we just came through. Blocking only the
@@ -1096,12 +942,9 @@ class HermesDriver:
                 # Multi-tile destinations beat interchangeable single steps:
                 # Laya scores ~0.33 on symmetric directions and ~0.99 on named
                 # destinations, and one decision covers 5-10 tiles.
-                frontier = _frontier_targets(
-                    passable, self.visits, cur_map,
-                    pos.get("x") or 0, pos.get("y") or 0,
-                    union_global=self.union_global or None,
-                    map_offset=self.map_offsets.get(cur_map))
-                # Farthest first - a neighbouring unvisited tile is barely a
+                frontier = _frontier_targets(passable, self.visits, cur_map,
+                                             pos.get("x") or 0, pos.get("y") or 0)
+                # Farthest first — a neighbouring unvisited tile is barely a
                 # choice; "walk to the far corner" is a plan.
                 frontier.sort(key=lambda rc: -(abs(rc[0] - PLAYER_ROW)
                                                + abs(rc[1] - PLAYER_COL)))
@@ -1124,7 +967,7 @@ class HermesDriver:
                     added += 1
 
                 # --- C2b: travel ---
-                # Route transitions are NOT warps - you leave a town or cross a
+                # Route transitions are NOT warps — you leave a town or cross a
                 # route by walking off the map edge. Without these options Laya
                 # literally cannot express "go north", so it can only shuffle
                 # within the current map.
@@ -1169,63 +1012,11 @@ class HermesDriver:
                         # repeatedly for exactly this reason.
                         if dest in seen_maps:
                             continue
-                        # Quest-aware skip: don't offer doors to buildings whose
-                        # business is already done. Carrying the parcel means the
-                        # Mart is pointless; having the Pokedex means the Lab is.
-                        # Names must match MAP_NAMES in memory/red.py exactly:
-                        if dest == "Viridian Mart" and has_parcel and not has_dex:
-                            continue   # deliver the parcel to Oak FIRST
-                        if dest == "Oak's Lab" and has_dex:
-                            continue   # lab business complete
                         criteria[f"goto_{cell}"] = (
                             f"Enter the door at {cell} leading to {dest}")
-
-                # NPC-targeted handoff: inside the lab with the parcel, the
-                # frontier treats "wander" and "approach Oak" as equal, so the
-                # agent loops in and out without ever facing him. Offer a named
-                # walk-to-Oak option aimed at the tile BESIDE the Prof. Oak
-                # sprite - standing on him is impossible (he blocks), so the
-                # target is the passable cell adjacent to his position.
-                if (cur_map == "Oak's Lab" and has_parcel
-                        and not has_dex and not on_warp):
-                    sprites = col.get("sprites") or []
-                    oak = next((s for s in sprites
-                                if s.get("who") == "Prof. Oak"), None)
-                    if oak:
-                        orow, oc = oak.get("row"), oak.get("col")
-                        # Adjacent passable cell, prefer facing-up approach
-                        # (Oak reads dialogs from the tile below him).
-                        candidates = [(orow + 1, oc), (orow, oc - 1),
-                                      (orow, oc + 1), (orow - 1, oc)]
-                        placed = False
-                        for tr, tc in candidates:
-                            if not (0 <= tr < len(passable)
-                                    and 0 <= tc < len(passable[tr] or [])):
-                                continue
-                            if not passable[tr][tc]:
-                                continue
-                            path = _path_to(passable, (tr, tc),
-                                            ledges=ledge_grid)
-                            if not path:
-                                continue
-                            label = cell_label_local(tc, tr)
-                            criteria[f"talk_oak_{label}"] = (
-                                f"Walk {len(path)} tiles to {label}, the tile "
-                                "beside Prof. Oak, then press A to hand over "
-                                "the parcel")
-                            placed = True
-                            break
-                        if placed:
-                            # The handoff outranks generic exploration: drop
-                            # explore_ options so Laya scores the Oak option
-                            # against movement only.
-                            criteria = {k: v for k, v in criteria.items()
-                                        if not k.startswith("explore_")}
         if not criteria:
             instructions = "Nothing is possible right now. Press B."
             criteria["back_out"] = "Press B"
-
-        has_badges = int((state.get("flags") or {}).get("badge_count") or 0)
 
         laya_state = {
             "map_name": cur_map,
@@ -1246,12 +1037,9 @@ class HermesDriver:
             "plan": self._active_plan(state) or None,
             "plan_age": (self.turn - self.plan_set_at
                          if self.standing_plan else None),
-            "has_oaks_parcel": has_parcel,
-            "has_pokedex": has_dex,
-            "badge_count": has_badges,
         }
 
-        # Oscillation guard. Do NOT clear the window on dialog turns - a text
+        # Oscillation guard. Do NOT clear the window on dialog turns — a text
         # box mid-cycle is part of the cycle, and clearing means the window
         # never fills. Only append while exploring, since a static position is
         # normal in battle and dialog.
@@ -1265,24 +1053,19 @@ class HermesDriver:
             # Ping-ponging between two maps is a loop even though the cells
             # differ, so a plain cell-count test misses it.
             if len(cells) <= 3 or (len(maps) == 2 and len(cells) <= 6):
-                # On a door, the escape IS the exit - try it before wandering.
+                # On a door, the escape IS the exit — try it before wandering.
                 if on_warp:
-                    logger.warning("loop detected on a door - forcing exit")
+                    logger.warning("loop detected on a door — forcing exit")
                     self.recent.clear()
                     self.act(["walk_down", "walk_down"])
                     return
                 legal = list(_legal_dirs(passable))
                 escape = legal[self.turn % len(legal)] if legal else "press_b"
-                logger.warning("loop detected (%d map(s), %d cell(s)) - "
+                logger.warning("loop detected (%d map(s), %d cell(s)) — "
                                "escaping via %s", len(maps), len(cells), escape)
                 self.recent.clear()
                 self.act([escape] * 4)
                 return
-
-        # Dialog cleared - reset the stall counter (after the whole if/elif
-        # chain so explore still runs when no dialog is active)
-        if not intro and not dlg.get("text_active") and not battle.get("in_battle"):
-            self._dialog_turns = 0
 
         started = time.perf_counter()
         choice = self._laya_choose(laya_state, criteria, instructions)
@@ -1295,19 +1078,19 @@ class HermesDriver:
                          self.consecutive_fail)
             if self.consecutive_fail >= 5:
                 raise SystemExit(
-                    "Laya failed 5 turns in a row - see the traceback above. "
+                    "Laya failed 5 turns in a row — see the traceback above. "
                     "The question schema is probably wrong.")
             time.sleep(1.0)
             return
         self.consecutive_fail = 0
 
         # ------------------------------------------------------------------
-        # DISPATCH - map the chosen key to emulator actions
+        # DISPATCH — map the chosen key to emulator actions
         # ------------------------------------------------------------------
         actions: List[str] = []
         if choice == "advance_text":
             actions = (["a_until_dialog_end"] if dlg.get("text_active")
-                       else ["press_a", "wait_30", "press_a"])
+                       else ["press_a"])
         elif choice == "menu_down_a":
             actions = ["press_down", "press_a"]
         elif choice == "back_out":
@@ -1330,7 +1113,7 @@ class HermesDriver:
                      "walk_left", "walk_right"]
             actions = [order[self.turn % len(order)]] * 2
         elif choice.startswith("travel_"):
-            # A long run in one direction - enough to cross most of a screen and
+            # A long run in one direction — enough to cross most of a screen and
             # trigger the map connection at the edge.
             d = choice[7:]
             actions = [f"walk_{d}"] * 6
@@ -1363,24 +1146,8 @@ class HermesDriver:
                                label)
                 legal = list(_legal_dirs(passable))
                 actions = [legal[0]] if legal else ["wait_30"]
-        elif choice.startswith("talk_oak_"):
-            # Walk to the tile beside Oak, then press A to hand over the
-            # parcel. The walk covers the approach; the trailing A completes
-            # the handoff in the same turn when the path is short.
-            label = choice[len("talk_oak_"):]
-            try:
-                fc = COL_LABELS_LOCAL.index(label[0])
-                fr = int(label[1:]) - 1
-                actions = _path_to(passable, (fr, fc), ledges=ledge_grid)
-            except (ValueError, IndexError):
-                actions = []
-            if actions:
-                actions = actions + ["wait_30", "press_a", "wait_30"]
-            else:
-                legal = list(_legal_dirs(passable))
-                actions = [legal[0]] if legal else ["wait_30"]
         else:
-            logger.warning("unhandled laya choice %r - waiting", choice)
+            logger.warning("unhandled laya choice %r — waiting", choice)
             actions = ["wait_30"]
 
         logger.info("turn %d: laya=%s (p=%.2f) in %.0fms -> %s (from %d options) "
@@ -1420,7 +1187,7 @@ class HermesDriver:
         if self.vision and intro:
             have_img = self._fetch_frame("/screenshot", img_path)
         elif self.vision and self.stuck >= 2:
-            logger.info("position unchanged for %d turns - attaching frame", self.stuck)
+            logger.info("position unchanged for %d turns — attaching frame", self.stuck)
             have_img = (self._fetch_frame("/screenshot/grid?scale=2", img_path)
                         or self._fetch_frame("/screenshot", img_path))
 
@@ -1488,6 +1255,9 @@ class HermesDriver:
                 if goal and "HANDBACK" in stdout.upper():
                     logger.info("hermes requested handback")
                     self._enter_mode("laya")
+                if goal and "HANDBACK" in stdout.upper():
+                    logger.info("hermes requested handback")
+                    self._enter_mode("laya")
             if stderr.strip():
                 logger.debug("hermes stderr: %s", stderr[-2000:])
         except subprocess.TimeoutExpired as exc:
@@ -1498,7 +1268,7 @@ class HermesDriver:
             logger.error("hermes timed out after %ss", self.turn_timeout)
             logger.error("last stdout: %s", _tail(exc.stdout))
             logger.error("last stderr: %s", _tail(exc.stderr))
-            self.event(type="alert", text="Turn timed out - retrying.")
+            self.event(type="alert", text="Turn timed out — retrying.")
             return
         except Exception as exc:
             logger.error("hermes invocation failed: %s", exc)
@@ -1521,7 +1291,7 @@ class HermesDriver:
                            description="Hermes session started",
                            category="milestone")
             else:
-                logger.warning("could not extract session_id - this run will have "
+                logger.warning("could not extract session_id — this run will have "
                                "NO memory across turns")
                 logger.debug("searched output: %s", combined[:800])
 
@@ -1530,7 +1300,7 @@ class HermesDriver:
     def step(self) -> None:
         emu = self.emulator_state()
         if emu != "ready":
-            logger.info("emulator %s - waiting (press START on the dashboard)", emu)
+            logger.info("emulator %s — waiting (press START on the dashboard)", emu)
             time.sleep(3)
             return
 
@@ -1542,71 +1312,15 @@ class HermesDriver:
             return
 
         if state.get("status") == "not_ready":
-            logger.info("state not ready - waiting")
+            logger.info("state not ready — waiting")
             time.sleep(2)
             return
-
-        # Transition debounce: mid-battle/mid-map-change reads return garbage -
-        # species_id 0 ("???(0)") while the game swaps Pokemon data, or dialog
-        # text like "999999999..." while the text buffer redraws. Acting on a
-        # garbage read wedges the AI on the battle-end screen. Re-read once
-        # after a short settle; keep the cleaner of the two.
-        def _state_garbage(s: Dict[str, Any]) -> bool:
-            am = s.get("active_mon") or {}
-            # species_id 0 mid-swap: a real swap rewrites the WHOLE battle
-            # struct, so level/max_hp go blank too. A live battle where only
-            # the species byte reads 0 while level/hp are real is NOT garbage
-            # - calling it one skip-loops forever (proven live: 15+ min wedged
-            # at the battle menu, /stats frozen at one turn).
-            if am and (s.get("battle") or {}).get("in_battle"):
-                if (not am.get("species_id") and not am.get("level")
-                        and not am.get("max_hp")):
-                    return True
-            elif am and am.get("species_id") == 0 and (s.get("party") or []):
-                # Party non-empty but active mon reads species 0 outside
-                # battle: transition leftover. Only trust when a party exists
-                # (pre-starter intros legitimately read 0).
-                return True
-            txt = ((s.get("dialog") or {}).get("text")) or ""
-            nonspace = txt.replace(" ", "")
-            if len(nonspace) > 10:
-                common = max(set(nonspace), key=nonspace.count)
-                if nonspace.count(common) / len(nonspace) > 0.8:
-                    return True      # buffer redraw garbage (all-9s etc.)
-            return False
-
-        if _state_garbage(state):
-            # A read that is dirty twice (1.5s apart) is normally a transition,
-            # but a STABLE dirty read would skip forever and wedge the run.
-            # Cap the skips: after 5 consecutive dirty reads, treat the state
-            # as authoritative and act on it.
-            self._dirty_skips = getattr(self, "_dirty_skips", 0) + 1
-            if self._dirty_skips > 5:
-                logger.warning("state dirty for %d consecutive reads - "
-                               "acting anyway", self._dirty_skips)
-            else:
-                time.sleep(1.5)
-                try:
-                    retry = self._get("/state").json()
-                    if not _state_garbage(retry):
-                        logger.info("garbage state read (transition) - re-read clean")
-                        state = retry
-                    else:
-                        logger.info("garbage state read (transition) - still dirty, "
-                                    "skipping this turn (%d/5)", self._dirty_skips)
-                        time.sleep(1.5)
-                        return
-                except Exception:
-                    time.sleep(1.5)
-                    return
-        else:
-            self._dirty_skips = 0
 
         ctx = state.get("context") or {}
         intro = not ctx.get("in_game", False)
 
         if self.control_state() != "running":
-            logger.info("control changed mid-turn - skipping Hermes call")
+            logger.info("control changed mid-turn — skipping Hermes call")
             return
         
         # Stuck detection: the map says we can move but the position is not
@@ -1617,7 +1331,7 @@ class HermesDriver:
         self.last_pos = pos
 
         if self.stuck >= 5:
-            logger.warning("stuck %d turns - forcing B to clear any text box",
+            logger.warning("stuck %d turns — forcing B to clear any text box",
                            self.stuck)
             self.act(["press_b", "wait_30"])
             self.stuck = 0
@@ -1642,7 +1356,6 @@ class HermesDriver:
         self.turn += 1
         if self.save_every and self.turn % self.save_every == 0:
             self.save_game()
-            self._load_explore_union()
 
     # --- main loop ---------------------------------------------------------
 
@@ -1653,7 +1366,7 @@ class HermesDriver:
         # Laya stalls, so a broken hermes is fatal even in --laya mode.
         if not self.preflight():
             self.event(type="alert",
-                       text="Hermes preflight failed - see driver log.")
+                       text="Hermes preflight failed — see driver log.")
             sys.exit(1)
 
         brain = "laya + hermes escalation" if self.use_laya else "hermes"
@@ -1664,7 +1377,7 @@ class HermesDriver:
                   f"without progress, for up to {self.hermes_turns} turns")
         print("[driver] waiting for control=running + an active game…")
         self.event(type="alert",
-                   text=f"Driver online ({brain}) - load a game, then press START.")
+                   text=f"Driver online ({brain}) — load a game, then press START.")
 
         idle_logged = False
         no_game_logged = False
@@ -1672,7 +1385,7 @@ class HermesDriver:
             st = self.control_state()
             if st == "stopped":
                 if not idle_logged:
-                    print("[driver] stopped - idling.")
+                    print("[driver] stopped — idling.")
                     idle_logged = True
                 self.last_pos, self.stuck = None, 0
                 self.recent.clear()
@@ -1686,10 +1399,10 @@ class HermesDriver:
             self.sync_active_game()
             if not self.game_id:
                 if not no_game_logged:
-                    print("[driver] running but no active game - start/load one "
+                    print("[driver] running but no active game — start/load one "
                           "on the dashboard.")
                     self.event(type="alert",
-                               text="No active game - click New Game or load one.")
+                               text="No active game — click New Game or load one.")
                     no_game_logged = True
                 time.sleep(2)
                 continue
@@ -1707,8 +1420,8 @@ class HermesDriver:
             except SystemExit:
                 raise
             except Exception:
-                logger.exception("turn failed - continuing")
-                self.event(type="alert", text="Driver error - see log.")
+                logger.exception("turn failed — continuing")
+                self.event(type="alert", text="Driver error — see log.")
                 time.sleep(3)
 
             # Laya turns are ~70ms; hermes turns are tens of seconds. Only the

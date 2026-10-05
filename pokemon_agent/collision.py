@@ -51,7 +51,7 @@ BLOCK_ROWS = 9                # on-screen walkable blocks down
 BLOCK_PX   = 16               # world block size in GB pixels
 PLAYER_COL = 4                # block the player is locked to (cell E5)
 PLAYER_ROW = 4
-GRID_ROW_OFFSET = 0           # tilemap row offset; see read_block_tile_ids()
+GRID_ROW_OFFSET = 1           # tilemap row offset; see read_block_tile_ids()
 
 # Derived — must stay below the definitions above.
 PLAYER_PX_X = PLAYER_COL * BLOCK_PX                        # 64
@@ -84,7 +84,7 @@ _FACING_DELTA = {"up": (0, -1), "down": (0, 1), "left": (-1, 0), "right": (1, 0)
 # ---------------------------------------------------------------------------
 
 TILESET_WALKABLE: Dict[int, frozenset] = {
-    0:  frozenset({0x00, 0x10, 0x1B, 0x20, 0x21, 0x23, 0x2C, 0x2D, 0x2E, 0x30,
+    0:  frozenset({0x00, 0x01, 0x10, 0x1B, 0x20, 0x21, 0x23, 0x2C, 0x2D, 0x2E, 0x30,
                    0x31, 0x33, 0x39, 0x3C, 0x3E, 0x52, 0x54, 0x58, 0x5B,
                    0x40}),   # Overworld
     1:  frozenset({0x01, 0x02, 0x03, 0x11, 0x12, 0x13, 0x14, 0x1A, 0x1C}),      # RedsHouse1

@@ -140,8 +140,7 @@ _emulator = None                       # Emulator instance (worker-owned)
 _reader = None                         # GameMemoryReader (worker-owned)
 _start_time: float = 0.0
 _loop: Optional[asyncio.AbstractEventLoop] = None
-_latest_autopilot_stats = {}
-
+_latest_autopilot_stats = {}\n
 _objectives: list = [
     {"tier": "primary", "text": "Deliver Oak's Parcel · get Pokédex", "done": False},
     {"tier": "secondary", "text": "Reach Pewter City · Boulder Badge", "done": False},
@@ -1109,21 +1108,9 @@ async def websocket_endpoint(ws: WebSocket):
         _ws_clients.discard(ws)
 
 
-# ---------------------------------------------------------------------------
+\n@app.post("/stats")\nasync def post_stats(stats: dict):\n    global _latest_autopilot_stats\n    _latest_autopilot_stats = stats\n    return {"success": True}\n\n@app.get("/stats")\nasync def get_stats():\n    global _latest_autopilot_stats\n    return _latest_autopilot_stats\n\n# ---------------------------------------------------------------------------
 # Dashboard fallback — registered only if static files are missing
 # ---------------------------------------------------------------------------
-
-@app.post("/stats")
-async def post_stats(stats: dict):
-    global _latest_autopilot_stats
-    _latest_autopilot_stats = stats
-    return {"success": True}
-
-@app.get("/stats")
-async def get_stats():
-    global _latest_autopilot_stats
-    return _latest_autopilot_stats
-
 
 def _register_dashboard_fallback():
     try:
