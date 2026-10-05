@@ -838,8 +838,8 @@ class HermesDriver:
             moved = cur_pos is not None and cur_pos != self._hermes_last_pos
             self._hermes_last_pos = cur_pos
 
-            if made_progress and self.mode_turns >= 2 and not (state.get("battle") or {}).get("in_battle"):
-                logger.info("hermes made progress after %d turns - back to laya", self.mode_turns)
+            if self.mode_turns >= 2 and not (state.get("battle") or {}).get("in_battle"):
+                logger.info("hermes yielded after %d turns (battle over) - back to laya", self.mode_turns)
                 self._enter_mode("laya")
             elif (moved and self.mode_turns >= self.hermes_budget - 2
                     and self.hermes_budget < self.hermes_budget_max):
