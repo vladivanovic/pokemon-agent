@@ -1,0 +1,2 @@
+[console_scripts]
+pokemon-agent = pokemon_agent.cli:main

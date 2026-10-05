@@ -1,36 +1,43 @@
-# Python
-__pycache__/
+# Pokemon Red Agent .gitignore
+
+# SB3 checkpoints and logs
+*.zip
+v2/runs/
+explore_map_union*.json
+action.json
+reasoning.json
+special_tiles.json
+init.state
+
+# Backup files
+*.backup
+*.bak
+*.orig
+*.tmp
+*.working
+*_fix*
+*_before_*
+*_after_*
+*.patch
+*.live*
+
+# Python cache
+__pycache__
 *.py[cod]
 *$py.class
-*.so
-*.egg-info/
-dist/
+
+# Distribution / build
+.pokemon_agent.egg-info/
 build/
-*.egg
+dist/
 
-# Virtual environments
-.venv/
-venv/
-env/
+# Hermes agent data (optional)
+# .hermes/
 
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
+# ROM files
+*.gb
+*.gbc
 
 # OS
 .DS_Store
 Thumbs.db
-
-# Project
-*.gba
-*.gb
-*.gbc
-*.sav
-*.ss*
-saves/
-.pokemon-agent/
-
-# Environment
-.env
