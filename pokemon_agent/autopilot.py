@@ -1584,6 +1584,13 @@ class HermesDriver:
             cmd += ["-m", self.model]
         if self.provider:
             cmd += ["--provider", self.provider]
+        # Thinking models (Qwen3.5 etc.) can loop on  forever and fill the
+        # whole 65k context ("n_tokens = 65535, truncated = 1" - proven live).
+        # --reasoning none disables the loop; $POKEMON_HERMES_REASONING
+        # overrides (e.g. "low" if you want bounded thinking).
+        reasoning = os.environ.get("POKEMON_HERMES_REASONING", "none")
+        if reasoning and reasoning != "default":
+            cmd += ["--reasoning", reasoning]
         if have_img:
             cmd += ["--image", img_path]
         cmd += ["-q", prompt]
