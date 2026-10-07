@@ -1570,8 +1570,12 @@ class HermesDriver:
         # vision tool = a retry loop: vision_analyze 500s ("image input is not
         # supported"), the model retries, each retry is an extra API call, and
         # the turn blows its timeout (proven live: 18 API calls x 3s + errors).
+        # Small local models (Qwen-2B) also over-search: 10+ web_search calls x
+        # 2.5s each + API latency > 120s. A $POKEMON_HERMES_TOOLS override can
+        # narrow the toolset further (e.g. "terminal" to drop web).
         toolset = ("terminal,web,vision" if self.vision_capable
                    else "terminal,web")
+        toolset = os.environ.get("POKEMON_HERMES_TOOLS", toolset)
         cmd = ["hermes", "chat", "-Q", "--yolo", "--pass-session-id",
                 "-s", "pokemon-player", "-t", toolset]
         if self.session_id and not goal:
