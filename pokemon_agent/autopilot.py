@@ -458,6 +458,10 @@ class HermesDriver:
                                   or os.environ.get("POKEMON_SCORER", "laya"))
                                  .lower())
         self.scorer: Optional[Any] = None       # lazy-init on first use
+        # Vision-capable models get the vision toolset; text-only models (e.g.
+        # Qwen GGUF) must not - vision_analyze 500s and the retry loop blows
+        # the turn timeout.
+        self.vision_capable: bool = vision
         # --- planning: Hermes sets intent, Laya executes it ---
         self.standing_plan: str = ""
         self.plan_set_at: int = -999
@@ -1562,8 +1566,14 @@ class HermesDriver:
 
         #cmd = ["hermes", "chat", "-Q", "--yolo", "--pass-session-id",
         #       "-s", "pokemon-player", "-t", "file,terminal,web,vision"]
+        # Vision toolset only for vision-capable models. A text-only model +
+        # vision tool = a retry loop: vision_analyze 500s ("image input is not
+        # supported"), the model retries, each retry is an extra API call, and
+        # the turn blows its timeout (proven live: 18 API calls x 3s + errors).
+        toolset = ("terminal,web,vision" if self.vision_capable
+                   else "terminal,web")
         cmd = ["hermes", "chat", "-Q", "--yolo", "--pass-session-id",
-                "-s", "pokemon-player", "-t", "terminal,web,vision"]
+                "-s", "pokemon-player", "-t", toolset]
         if self.session_id and not goal:
             cmd += ["--resume", self.session_id]
         if self.model:
