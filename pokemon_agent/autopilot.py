@@ -44,6 +44,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
+from pokemon_agent.scorer import get_scorer  # pluggable low-level scorer
+
 # Laya decision model - optional. Import failure must be loud at use time,
 # not silently equivalent to "feature disabled".
 try:
@@ -396,7 +398,8 @@ class HermesDriver:
                  turn_timeout: int = 240, use_laya: bool = False,
                  laya_narrate_every: int = 0,
                  stall_seconds: float = 60.0, hermes_turns: int = 12,
-                 vision: bool = True, replan_every: int = 120):
+                 vision: bool = True, replan_every: int = 120,
+                 scorer: Optional[str] = None):
         self.server = server.rstrip("/")
         self.model = model
         self.provider = provider
@@ -412,7 +415,7 @@ class HermesDriver:
         self.stuck = 0
         self.consecutive_fail = 0               # consecutive laya failures
         self.last_confidence = 0
-        self.recent: deque = deque(maxlen=12)    # oscillation detection
+        self.recent: deque = deque(maxlen=8)     # oscillation detection
         self.prev_map: Optional[str] = None
         self.visits: Dict[tuple, int] = {}      # (map, x, y) -> times seen
         self.special_tiles: Dict[tuple, str] = {}   # (map, x, y) -> tile purpose
@@ -446,6 +449,15 @@ class HermesDriver:
         self.last_mode_switch: float = time.perf_counter()
         self._hermes_last_pos: Optional[Any] = None
         self.hermes_budget_max: int = 30
+        # --- low-level scorer: laya | von | expert[:base] ----------------
+        # Selectable via --scorer, $POKEMON_SCORER, or config. The scorer
+        # replaces Laya's raw router for pick-one-of-N decisions; "expert"
+        # wraps the base scorer with a frequency table learned from the
+        # agent's own decision log.
+        self.scorer_name: str = ((scorer
+                                  or os.environ.get("POKEMON_SCORER", "laya"))
+                                 .lower())
+        self.scorer: Optional[Any] = None       # lazy-init on first use
         # --- planning: Hermes sets intent, Laya executes it ---
         self.standing_plan: str = ""
         self.plan_set_at: int = -999
@@ -888,15 +900,54 @@ class HermesDriver:
     def _laya_choose(self, laya_state: Dict[str, Any],
                      criteria: Dict[str, str],
                      instructions: str) -> Optional[str]:
-        """Ask Laya to pick one key from *criteria*. Returns the key or None.
+        """Ask the configured scorer (Laya or Von) to pick one key from
+        *criteria*. Returns the key or None.
 
-        ASSUMED API:
+        Laya API:
             router.predict(state: dict, questions: dict) -> dict
             questions = {"action": {"type": "choice",
                                     "instructions": str,
                                     "criteria": {key: description}}}
             result["action"]["choice"] == one of the criteria keys
+
+        Von API:
+            client.choice(prompt: str, options: List[str]) ->
+                {"choice": int, "scores": List[float]}
         """
+        scorer_name = self.scorer_name
+        if scorer_name == "laya":
+            return self._laya_router_choose(laya_state, criteria,
+                                            instructions)
+        # Von or expert - both take a flat prompt + option list.
+        if self.scorer is None:
+            self.scorer = get_scorer(scorer_name)
+            logger.info("scorer initialized: %s", scorer_name)
+        prompt = json.dumps(laya_state, sort_keys=True) + "||" + instructions
+        options = sorted(criteria)
+        try:
+            result = self.scorer.choice(prompt, options)
+        except Exception as exc:
+            if self.consecutive_fail == 0:
+                logger.exception("scorer %s failed", scorer_name)
+            else:
+                logger.error("scorer %s failed: %s", scorer_name, exc)
+            return None
+        idx = result.get("choice")
+        try:
+            choice = options[int(idx)]
+        except (TypeError, ValueError, IndexError):
+            logger.warning("scorer %s returned bad index %r",
+                           scorer_name, idx)
+            return None
+        scores = result.get("scores") or []
+        if scores and 0 <= int(idx) < len(scores):
+            total = sum(s for s in scores if s > 0) or 1.0
+            self.last_confidence = float(scores[int(idx)]) / total
+        return choice
+
+    def _laya_router_choose(self, laya_state: Dict[str, Any],
+                            criteria: Dict[str, str],
+                            instructions: str) -> Optional[str]:
         try:
             result = self.laya_router.predict(  # type: ignore[union-attr]
                 laya_state,
@@ -1312,6 +1363,24 @@ class HermesDriver:
                 self.act([escape] * 4)
                 return
 
+        # Interact spam guard. Von/Laya rate "interact" highest whenever the
+        # option set is small, so the agent stands on one tile pressing A 40+
+        # turns in a row (proven live: here=54 on Route 2). When we have been
+        # on this tile for a while and NOT on a door/exit, interacting again
+        # cannot be right - take a step instead and demote interact.
+        if (exploring and not on_warp
+                and laya_state["times_on_this_tile"] >= 6):
+            logger.warning("interact spam (%d turns on this tile) - "
+                           "suppressing interact, adding travel",
+                           laya_state["times_on_this_tile"])
+            criteria.pop("interact", None)
+            for name, (dr, dc) in _DIRS.items():
+                d = name.split("_")[1]
+                if _grid_open(passable, PLAYER_ROW + dr, PLAYER_COL + dc):
+                    criteria[f"travel_{d}"] = (
+                        f"Head {d} for several tiles - you have stood here "
+                        "too long, move on")
+
         # Dialog cleared - reset the stall counter (after the whole if/elif
         # chain so explore still runs when no dialog is active)
         if not intro and not dlg.get("text_active") and not battle.get("in_battle"):
@@ -1425,15 +1494,21 @@ class HermesDriver:
             logger.warning("unhandled laya choice %r - waiting", choice)
             actions = ["wait_30"]
 
-        logger.info("turn %d: laya=%s (p=%.2f) in %.0fms -> %s (from %d options) "
+        logger.info("turn %d: %s=%s (p=%.2f) in %.0fms -> %s (from %d options) "
                     "map=%s pos=(%s,%s) door=%s here=%d stuck=%d",
-                    self.turn + 1, choice, self.last_confidence, took_ms,
+                    self.turn + 1, self.scorer_name, choice,
+                    self.last_confidence, took_ms,
                     actions, len(criteria), cur_map, pos.get("x"), pos.get("y"),
                     on_warp, laya_state["times_on_this_tile"], self.stuck)
 
         self.act(actions)
         self.event(type="decision",
-                   text=f"[laya {took_ms:.0f}ms] {choice} → {' · '.join(actions)}")
+                   text=f"[{self.scorer_name} {took_ms:.0f}ms] "
+                        f"{choice} → {' · '.join(actions)}")
+        # Feed the decision trace so an expert scorer can learn from it.
+        scorer_obj = getattr(self, "scorer", None)
+        if scorer_obj is not None and hasattr(scorer_obj, "record"):
+            scorer_obj.record(laya_state, choice)
 
         
     # --- Hermes ------------------------------------------------------------
@@ -1770,7 +1845,8 @@ def run_autopilot(server: str = "http://localhost:8765",
                   stall_seconds: float = 60.0,
                   hermes_turns: int = 12,
                   vision: bool = True,
-                  replan_every: int = 120) -> None:
+                  replan_every: int = 120,
+                  scorer: Optional[str] = None) -> None:
     if debug:
         logging.getLogger("pokemon-agent").setLevel(logging.DEBUG)
         logger.info("debug logging enabled")
@@ -1783,4 +1859,5 @@ def run_autopilot(server: str = "http://localhost:8765",
                  stall_seconds=stall_seconds,
                  hermes_turns=hermes_turns,
                  vision=vision,
-                 replan_every=replan_every).run()
+                 replan_every=replan_every,
+                 scorer=scorer).run()

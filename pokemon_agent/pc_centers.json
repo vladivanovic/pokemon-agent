@@ -1,0 +1,39 @@
+{
+  "Viridian City": {
+    "door_x": 23,
+    "door_y": 25
+  },
+  "Pewter City": {
+    "door_x": 13,
+    "door_y": 25
+  },
+  "Cerulean City": {
+    "door_x": 19,
+    "door_y": 17
+  },
+  "Vermilion City": {
+    "door_x": 11,
+    "door_y": 3
+  },
+  "Celadon City": {
+    "door_x": 41,
+    "door_y": 9
+  },
+  "Fuchsia City": {
+    "door_x": 19,
+    "door_y": 27
+  },
+  "Cinnabar Island": {
+    "door_x": 11,
+    "door_y": 11
+  },
+  "Lavender Town": {
+    "door_x": 3,
+    "door_y": 5
+  },
+  "Indigo Plateau": {
+    "door_x": 9,
+    "door_y": 5
+  },
+  "_comment": "Door tiles from pret/pokered data/maps/objects warp_event lines. x=column, y=row."
+}
