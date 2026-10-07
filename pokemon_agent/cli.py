@@ -114,6 +114,7 @@ def cmd_play(args):
         hermes_turns=getattr(args, "hermes_turns", 12),
         vision=not getattr(args, "no_vision", False),
         replan_every=getattr(args, "replan_every", 120),
+        scorer=getattr(args, "scorer", None),
     )
 
 def cmd_play_api(args):
@@ -175,6 +176,8 @@ def main():
                         help="Seconds per Hermes turn (default: 240)")
     play_p.add_argument("--debug", action="store_true", help="Enable debug logging")
     play_p.add_argument("--laya", action="store_true", default=False, help="Use Laya decision model instead of Hermes CLI")
+    play_p.add_argument("--scorer", default=None,
+                        help="Low-level scorer backend: laya, von, or expert[:base] (e.g. expert:von). Default: $POKEMON_SCORER or laya")
     play_p.add_argument("--stall-seconds", type=float, default=60.0,
                         help="Seconds without progress before escalating to Hermes")
     play_p.add_argument("--hermes-turns", type=int, default=12,
