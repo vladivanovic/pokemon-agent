@@ -1215,6 +1215,15 @@ class HermesDriver:
             self.map_changed_at = self.turn
             self.map_changed_time = time.perf_counter()
             self.recent.clear()          # a real transition is not a loop
+            # Re-arm edge conclusions for the map we just entered. A node can
+            # be reached from more than one side - Route 2 is split by Viridian
+            # Forest, and the south edge to Pewter City is a fake adjacency
+            # while the north one is real. Without this the blacklist earned
+            # on the south segment would suppress the real north edge too.
+            entered = self.map_graph.resolve(cur_map) if self.map_graph else None
+            if entered:
+                for k in [k for k in self.edge_fails if k[0] == entered]:
+                    self.edge_fails.pop(k, None)
         key = (cur_map, pos.get("x"), pos.get("y"))
         self.visits[key] = self.visits.get(key, 0) + 1
 
