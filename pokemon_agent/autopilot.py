@@ -1609,6 +1609,11 @@ class HermesDriver:
         reasoning = os.environ.get("POKEMON_HERMES_REASONING", "none")
         if reasoning and reasoning != "default":
             cmd += ["--reasoning", reasoning]
+        # Small models loop on tool_search when a wanted tool is missing
+        # (proven live: 95 tool_search calls x 2.4s = 228s > timeout). Cap
+        # the tool-calling iterations and the wall clock per turn.
+        cmd += ["--max-turns", "12",
+                "--run-budget", str(max(self.turn_timeout - 30, 60))]
         if have_img:
             cmd += ["--image", img_path]
         cmd += ["-q", prompt]
