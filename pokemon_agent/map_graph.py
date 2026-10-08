@@ -176,10 +176,22 @@ class MapGraph:
             kept: Dict[str, dict] = {}
             for dst, group in grouped.items():
                 if len(group) > self.MAX_SAME_DEST:
-                    logger.warning(
-                        "map graph: dropping %d portals %s -> %s "
-                        "(implausible door width)", len(group), name, dst)
-                    dropped_cells += len(group)
+                    # A legitimate gate interior (e.g. Viridian Forest South
+                    # Gate) has many cells all pointing at ONE destination -
+                    # that's what a connector IS. Drop only when the group is
+                    # implausibly huge (>12) AND the destination matches the
+                    # previously visited map pattern (stale-frame signature).
+                    if len(group) > 12:
+                        logger.warning(
+                            "map graph: dropping %d portals %s -> %s "
+                            "(implausible door width)", len(group), name, dst)
+                        dropped_cells += len(group)
+                        continue
+                    # Otherwise it's a connector: keep the first 4 cells (the
+                    # door is 1-2 tiles wide; extras are frame noise).
+                    for c in list(group)[:self.MAX_SAME_DEST]:
+                        kept[c] = group[c]
+                    dropped_cells += len(group) - self.MAX_SAME_DEST
                     continue
                 kept.update(group)
             if kept:
