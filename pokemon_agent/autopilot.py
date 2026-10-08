@@ -964,14 +964,17 @@ class HermesDriver:
                 break
         else:
             d = self.map_graph.first_hop_direction(cur_map, dest)
-            # Skip an edge we have empirically proven does not open. Returning
-            # an empty set drops route_active, which restores goto_/explore_
-            # so the agent can find a gate instead of pressing a fake seam.
-            if d and self.edge_fails.get((cur_key, d), 0) >= 4:
-                logger.info("route %s->%s via %s is a proven dead edge - "
-                            "falling back to local navigation",
-                            cur_key, dest, d)
-                d = None
+            # Skip an edge we have empirically proven does not open. The
+            # blacklist is keyed by WALK direction (up/down/left/right) - the
+            # handler records it that way - while first_hop_direction speaks
+            # compass, so translate before the lookup.
+            if d:
+                d_walk = COMPASS_TO_WALK.get(d)
+                if d_walk and self.edge_fails.get((cur_key, d_walk), 0) >= 4:
+                    logger.info(
+                        "route %s->%s via %s is a proven dead edge - falling "
+                        "back to local navigation", cur_key, dest, d)
+                    d = None
             if d:
                 out[f"route_toward_{d}"] = (
                     f"Head {d}, walking off the edge of {cur_map} to reach "
