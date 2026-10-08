@@ -524,6 +524,11 @@ class HermesDriver:
         self.last_mode_switch: float = time.perf_counter()
         self._hermes_last_pos: Optional[Any] = None
         self.hermes_budget_max: int = 30
+        # Battle fallback: (enemy_species, hp, menu_index) + how many Hermes
+        # turns have passed without it changing. See _arbitrate.
+        self._battle_fp: Optional[tuple] = None
+        self._battle_hermes_turns: int = 0
+        self._battle_owner: str = ""     # "" | "laya" (battle handed off)
         # --- low-level scorer: laya | von | expert[:base] ----------------
         # Selectable via --scorer, $POKEMON_SCORER, or config. The scorer
         # replaces Laya's raw router for pick-one-of-N decisions; "expert"
@@ -1030,9 +1035,43 @@ class HermesDriver:
 
         if (state.get("battle") or {}).get("in_battle"):
             self.progress_at = time.perf_counter()
+            # Once a battle has been handed to the local scorer, keep it there
+            # until the battle ends - bouncing back to a failing Hermes every
+            # few turns would starve Laya of the turns it needs to finish.
+            if self._battle_owner == "laya":
+                return "laya"
+            # Hermes gets first crack at a battle, but a small local model can
+            # fail every battle turn (Qwen-2B loops 12x looking for HTTP tools
+            # and gives up), which wedges the game forever: battle -> hermes ->
+            # fail -> laya -> battle -> hermes ... with Laya getting no real
+            # turn. Track enemy HP across Hermes' battle turns; if nothing has
+            # changed, hand the battle to the local scorer so it resolves.
+            b = state.get("battle") or {}
+            e = b.get("enemy") or {}
+            fp = (e.get("species"), e.get("hp"), b.get("menu_index"))
+            if fp != self._battle_fp:
+                self._battle_fp = fp
+                self._battle_hermes_turns = 0
+            self._battle_hermes_turns += 1
+            # This branch only runs on a Laya turn, i.e. Hermes already had a
+            # full budget in this battle and did not finish it. A second such
+            # turn (fingerprint unchanged) means Hermes cannot win it.
+            if self._battle_hermes_turns >= 2:
+                logger.warning("hermes made no battle progress in %d rounds "
+                               "- handing battle to the local scorer",
+                               self._battle_hermes_turns)
+                self._battle_owner = "laya"
+                self._enter_mode("laya")
+                return "laya"
             # Ensure Hermes is driver for battle turns so stats reflect correctly
             self._enter_mode("hermes")
             return self.mode
+
+        # Not in a battle: any battle hand-off is finished.
+        if self._battle_owner:
+            self._battle_owner = ""
+            self._battle_fp = None
+            self._battle_hermes_turns = 0
 
         self.mode_turns += 1
         # Two reasons to escalate. A stall means Laya is wedged. A stale plan
