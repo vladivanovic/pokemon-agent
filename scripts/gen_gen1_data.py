@@ -33,6 +33,12 @@ MAP_ALIASES = {
     "BLUES_HOUSE": "Blue's House",
     "MUSEUM_1F": "Pewter Museum 1F",
     "MUSEUM_2F": "Pewter Museum 2F",
+    # Viridian Forest South Gate (id 50) is named 'Viridian Forest South Gate'
+    # by MAP_NAMES but 'Route 2 Gate Viridian' in map_data.json. They are the
+    # same physical map. The geographic graph uses the map_data.json name, so
+    # we alias the MAP_NAMES spelling to the map_data.json spelling so the
+    # portal and region key spaces unify.
+    "VIRIDIAN_FOREST_SOUTH_GATE": "Route 2 Gate Viridian",
 }
 
 # db WATER, FIRE, SUPER_EFFECTIVE
@@ -187,7 +193,7 @@ def main():
     assert maps.get(0) == "Pallet Town", maps.get(0)
     assert maps.get(1) == "Viridian City", maps.get(1)
     assert maps.get(13) == "Route 2", maps.get(13)
-    assert maps.get(50) == "Viridian Forest South Gate", maps.get(50)
+    assert maps.get(50) == "Route 2 Gate Viridian", maps.get(50)
     assert maps.get(51) == "Viridian Forest", maps.get(51)
     assert maps.get(52) == "Pewter Museum 1F", maps.get(52)
     assert maps.get(54) == "Pewter Gym", maps.get(54)

@@ -862,6 +862,29 @@ class HermesDriver:
         compass = self.map_graph.first_hop_direction(cur_map, city)
         if not compass or compass not in COMPASS_TO_WALK:
             return {}
+        # Respect the empirical edge blacklist. A direction we have proven
+        # does not open (e.g. Forest/south, the fake edge) must not be
+        # re-offered forever - the heal route would just repeat it.
+        cur_key = self.map_graph.resolve(cur_map) or cur_map
+        walk = COMPASS_TO_WALK.get(compass)
+        if self.edge_fails.get((cur_key, walk), 0) >= 4:
+            logger.info("heal route %s->%s via %s is a proven dead edge - "
+                        "trying an alternative", cur_key, city, compass)
+            # Find another route that starts in a different direction.
+            for city2 in PC_CENTERS:
+                if city2 == city or not self.map_graph.resolve(city2):
+                    continue
+                r2 = self.map_graph.route(cur_map, city2)
+                if not r2 or len(r2) < 2:
+                    continue
+                c2 = self.map_graph.first_hop_direction(cur_map, city2)
+                w2 = COMPASS_TO_WALK.get(c2) if c2 else None
+                if (c2 and w2 and self.edge_fails.get((cur_key, w2), 0) < 4):
+                    best = (city2, r2)
+                    compass, walk = c2, w2
+                    break
+            else:
+                return {}
         return {f"heal_route_{compass}":
                 f"HEAL - {reason}. There is no Pokecenter on {cur_map}: head "
                 f"{compass} toward {city} to heal. Route: {' -> '.join(chain)}."}
@@ -1751,7 +1774,11 @@ class HermesDriver:
                     if back in criteria and others:
                         criteria.pop(back, None)
 
-                criteria["interact"] = "Press A to talk to or examine what you face"
+                # Do not offer interact when a named route or heal route is active.
+                # The heal route already includes the full walk sequence; pressing A
+                # on a trainer is never correct when we're fleeing to heal.
+                if not directed:
+                    criteria["interact"] = "Press A to talk to or examine what you face"
 
                 # Named exits elsewhere on screen (not the one underfoot).
                 # Suppressed while a map-graph route is active: doors into
@@ -1886,18 +1913,23 @@ class HermesDriver:
         # turns in a row (proven live: here=54 on Route 2). When we have been
         # on this tile for a while and NOT on a door/exit, interacting again
         # cannot be right - take a step instead and demote interact.
-        if (exploring and not on_warp
-                and laya_state["times_on_this_tile"] >= 6):
+        # Run regardless of exploring state or directed state - trainer NPCs
+        # trigger dialog cycles that reset exploring, but the spam is still real.
+        # The key insight: ALWAYS suppress interact after 6 turns, but only
+        # ADD travel options when not directed (so heal route isn't competed with).
+        if (not on_warp and laya_state["times_on_this_tile"] >= 6):
             logger.warning("interact spam (%d turns on this tile) - "
-                           "suppressing interact, adding travel",
+                           "suppressing interact",
                            laya_state["times_on_this_tile"])
             criteria.pop("interact", None)
-            for name, (dr, dc) in _DIRS.items():
-                d = name.split("_")[1]
-                if _grid_open(passable, PLAYER_ROW + dr, PLAYER_COL + dc):
-                    criteria[f"travel_{d}"] = (
-                        f"Head {d} for several tiles - you have stood here "
-                        "too long, move on")
+            # Only add travel options if we're not following a route/heal
+            if not directed:
+                for name, (dr, dc) in _DIRS.items():
+                    d = name.split("_")[1]
+                    if _grid_open(passable, PLAYER_ROW + dr, PLAYER_COL + dc):
+                        criteria[f"travel_{d}"] = (
+                            f"Head {d} for several tiles - you have stood here "
+                            "too long, move on")
 
         # Dialog cleared - reset the stall counter (after the whole if/elif
         # chain so explore still runs when no dialog is active)
