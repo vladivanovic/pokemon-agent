@@ -75,6 +75,13 @@ _DIRS: Dict[str, Tuple[int, int]] = {
 _REVERSE: Dict[str, str] = {
     "up": "down", "down": "up", "left": "right", "right": "left",
 }
+# The map graph speaks compass (north/south/east/west); the button actions
+# speak up/down/left/right. Translating here is the difference between a
+# working route hop and a handler that silently falls through to "any legal
+# direction" (which is what made the agent alternate on the spot).
+COMPASS_TO_WALK: Dict[str, str] = {
+    "north": "up", "south": "down", "east": "right", "west": "left",
+}
 COL_LABELS_LOCAL = "ABCDEFGHIJ"
 
 
@@ -1681,8 +1688,11 @@ class HermesDriver:
             # Map-graph edge hop: follow a path to the far side of the screen
             # in that compass direction, routing around door tiles. A blind
             # walk x8 run steps straight into any building on the way.
-            d = choice[len("route_toward_"):]
-            if d in {n.split("_")[1] for n in _DIRS}:
+            # "route_toward_north" -> walk_up; without this translation the
+            # handler fell through to an arbitrary legal direction and the
+            # agent alternated walk_up/walk_down on the spot.
+            d = COMPASS_TO_WALK.get(choice[len("route_toward_"):])
+            if d:
                 avoid = {(w.get("row"), w.get("col")) for w in warps
                          if w.get("row") is not None}
                 path = _path_toward_edge(passable, d, avoid=avoid,
