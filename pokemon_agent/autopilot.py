@@ -1197,7 +1197,11 @@ class HermesDriver:
         dlg = state.get("dialog") or {}
         battle = state.get("battle") or {}
         p = state.get("player") or {}
-        warps = col.get("warps") or []
+        # Only trust the warp list on a frame the collision layer vouches for.
+        # An invalid frame (mid-transition, battle, dialog) carries a stale
+        # warp table, so `goto_`/`leave_building` would path to a phantom door
+        # and never arrive - the agent kept re-entering buildings this way.
+        warps = (col.get("warps") or []) if col.get("valid") else []
         # Quest flags so Laya knows what's done and skips unnecessary buildings
         flags = state.get("flags") or {}
         has_parcel = bool(flags.get("has_oaks_parcel"))
@@ -1242,16 +1246,11 @@ class HermesDriver:
             self._route_pending = None
 
         # --- global map graph: learn portals as we read them ---------------
-        # Only learn from a frame the collision layer vouches for. During a
-        # map transition (and in battle/dialog) wNumberOfWarps holds stale or
-        # uninitialised bytes, so a read yields 25-35 bogus cells that all
-        # decode to a neighbouring map id. Those resolve to real names, so a
-        # name check alone does not catch them - they poisoned the portal
-        # table and made every tile on Viridian Forest look like a warp to
-        # Pewter Museum, which is exactly the bounce the agent was stuck in.
-        col_valid = bool(col.get("valid"))
-        warp_read_ok = col_valid and len(warps) <= 12
-        if self.map_graph is not None and warps and warp_read_ok:
+        # `warps` is already empty on an invalid frame (see above), so this
+        # only sees trustworthy reads. The length cap is a second guard: a
+        # 10x9 screen cannot show more than a handful of doors, so a longer
+        # list means the read is still suspect.
+        if self.map_graph is not None and warps and len(warps) <= 12:
             learned = False
             for w in warps:
                 if self.map_graph.record_warp(cur_map, w):
