@@ -47,6 +47,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 
 from pokemon_agent.scorer import get_scorer  # pluggable low-level scorer
+from pokemon_agent.map_graph import MapGraph    # global map graph + portals
 
 # Laya decision model - optional. Import failure must be loud at use time,
 # not silently equivalent to "feature disabled".
@@ -427,6 +428,15 @@ class HermesDriver:
         self.union_global: set = set()          # (gy, gx) global coords from SB3
         self.map_offsets: Dict[str, tuple] = {}  # map_name -> (mx, my) for global conv
         self._load_map_offsets()
+        # --- global map graph: which way is <city>, through which maps -----
+        # Adjacency from map_data.json; portals recorded from RAM warps and
+        # persisted. Gives Laya a map-level goal ("head north toward Pewter")
+        # the local 10x9 grid can never express.
+        try:
+            self.map_graph: Optional[MapGraph] = MapGraph()
+        except Exception:
+            logger.exception("map graph init failed - continuing without it")
+            self.map_graph = None
         self.map_changed_at: int = -99
         self.map_changed_time: float = 0.0
         # --- brain arbitration ---
@@ -811,6 +821,82 @@ class HermesDriver:
         return (f"You have {badges} badge(s) and appear stuck in {map_name}. "
                 f"Work out what the game is waiting for and do it.{hint}")
 
+    def _graph_destination(self, goal: str) -> Optional[str]:
+        """Extract the map a goal names, using the map graph's own keys.
+
+        'Reach Pewter City' -> 'Pewter City'; 'Walk to Oak's Lab in Pallet
+        Town' -> 'Pallet Town'. When a goal names several maps - the badge
+        hint says "Route from Viridian City: north through Viridian Forest to
+        Pewter" - the one right after a goal verb (reach/to/at/enter/...) is
+        the destination; the others are waypoints and must not win.
+        """
+        if not goal or self.map_graph is None:
+            return None
+        low = goal.lower()
+        hits = [n for n in self.map_graph.maps if n and n.lower() in low]
+        if not hits:
+            return None
+
+        # A map whose name is preceded by a goal-intent word is the target.
+        intent = re.compile(
+            r"(?:reach|reaching|to|toward|towards|at|enter|visit|arrive|"
+            r"arrive at|head to|walk to|get to|go to|return to)\s+$")
+        best: Optional[str] = None
+        best_pos = -1
+        for n in hits:
+            idx = low.find(n.lower())
+            prefix = low[:idx]
+            if intent.search(prefix) and idx > best_pos:
+                best, best_pos = n, idx
+        if best is not None:
+            return best
+        return max(hits, key=len)
+
+    def _graph_travel_options(self, cur_map: str, goal: str,
+                              passable: List[List[bool]],
+                              ledge_grid: Optional[List[List[bool]]]) -> Dict[str, str]:
+        """Map-level travel candidates for the current map.
+
+        Two flavours, both named so the scorer sees a clear goal rather than
+        an anonymous direction:
+          - route edge : the next map is a neighbour you leave by walking off
+            the map boundary in a compass direction ("head north out of Pallet
+            Town toward Pewter City").
+          - portal     : the next map is reached through a door on this map;
+            the candidate points at that door's cell.
+        The full remaining route is spelled out so the model can keep going
+        after each transition instead of re-deciding from scratch.
+        """
+        out: Dict[str, str] = {}
+        if not cur_map or self.map_graph is None:
+            return out
+        dest = self._graph_destination(goal)
+        cur_key = self.map_graph.resolve(cur_map) or cur_map
+        if not dest or dest == cur_key:
+            return out
+        route = self.map_graph.route(cur_map, dest)
+        if not route or len(route) < 2:
+            return out
+        nxt = route[1]
+        chain = " -> ".join(route)
+        # Prefer a door if one exists: stepping onto a known warp cell is
+        # deterministic, whereas walking off an edge can miss the seam.
+        for cell, portal in (self.map_graph.portals.get(cur_key) or {}).items():
+            if (self.map_graph.resolve(portal.get("dest_map_name")) or
+                    portal.get("dest_map_name")) == nxt:
+                out[f"route_{cell}"] = (
+                    f"Walk to the door at {cell} on the MAP, step onto it to "
+                    f"enter {nxt}. Route: {chain}.")
+                break
+        else:
+            d = self.map_graph.first_hop_direction(cur_map, dest)
+            if d:
+                out[f"route_toward_{d}"] = (
+                    f"Head {d}, walking off the edge of {cur_map} to reach "
+                    f"{nxt}. Route: {chain}. Keep moving {d} - do not turn "
+                    f"back into {cur_map}.")
+        return out
+
     def _active_plan(self, state: Dict[str, Any]) -> str:
         """The current standing plan, or '' if it has expired.
 
@@ -1034,6 +1120,18 @@ class HermesDriver:
         key = (cur_map, pos.get("x"), pos.get("y"))
         self.visits[key] = self.visits.get(key, 0) + 1
 
+        # --- global map graph: learn portals as we read them ---------------
+        # Each warp read from RAM is a durable edge in the map graph. Persist
+        # when something new shows up so a restart keeps what we learned.
+        if self.map_graph is not None and warps:
+            learned = False
+            for w in warps:
+                if self.map_graph.record_warp(cur_map, w):
+                    learned = True
+            if learned:
+                self.map_graph.save_portals()
+                self._graph_dirty = False
+
         # Did the previous explore path actually arrive? If not, the target is
         # unreachable - a table or NPC the collision grid thinks is walkable -
         # and must be retired or Laya will offer it forever.
@@ -1232,6 +1330,18 @@ class HermesDriver:
                     criteria[f"travel_{d}"] = (
                         f"Head {d} for several tiles, continuing in that "
                         f"direction to reach a new area")
+
+                # --- C2c: map-graph route ---
+                # A named, multi-map goal ("head north toward Pewter City,
+                # route Pallet -> Route 1 -> Viridian -> Route 2 -> Pewter")
+                # outranks anonymous local wandering. This is the one thing
+                # the local grid cannot express, and the reason Laya/Von
+                # circled town instead of leaving it.
+                try:
+                    criteria.update(self._graph_travel_options(
+                        cur_map, goal, passable, ledge_grid))
+                except Exception:
+                    logger.exception("graph travel options failed")
 
                 # --- C3: single steps ---
                 # Always offered, not only when the frontier is empty: if every
@@ -1452,6 +1562,28 @@ class HermesDriver:
             order = ["walk_down", "walk_down", "walk_up",
                      "walk_left", "walk_right"]
             actions = [order[self.turn % len(order)]] * 2
+        elif choice.startswith("route_toward_"):
+            # Map-graph edge hop: a long run in one compass direction, enough
+            # to cross the screen and trigger the map seam at the boundary.
+            d = choice[len("route_toward_"):]
+            if d in {n.split("_")[1] for n in _DIRS}:
+                actions = [f"walk_{d}"] * 8
+            else:
+                legal = list(_legal_dirs(passable))
+                actions = [legal[0]] if legal else ["wait_30"]
+        elif choice.startswith("route_"):
+            # Map-graph portal hop: walk to the named door cell and step on it.
+            label = choice[len("route_"):]
+            target = next(((w["row"], w["col"]) for w in warps
+                           if w.get("cell") == label), None)
+            if target is not None:
+                actions = _path_to(passable, target, ledges=ledge_grid)
+                if actions:
+                    actions = actions + ["walk_down"]   # step onto the door
+            if not actions:
+                logger.warning("no path to route door %s; single step", label)
+                legal = list(_legal_dirs(passable))
+                actions = [legal[0]] if legal else ["wait_30"]
         elif choice.startswith("travel_"):
             # A long run in one direction - enough to cross most of a screen and
             # trigger the map connection at the edge.

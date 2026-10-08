@@ -43,6 +43,16 @@ def _rect(coord: Tuple[int, int], size: Tuple[int, int]) -> Tuple[int, int, int,
     return x, y, x + w, y + h
 
 
+def _canon(name: str) -> str:
+    """Normalize a map name for cross-source matching.
+
+    Lowercase plus whitespace collapse so "Cinnabar Island" (MAP_NAMES) and
+    "Cinnabar island" (map_data.json) resolve to the same key. Punctuation is
+    left alone - apostrophes in "Oak's Lab" are meaningful.
+    """
+    return " ".join(str(name).lower().split())
+
+
 def _touch(a: Tuple[int, int, int, int],
            b: Tuple[int, int, int, int]) -> Optional[Tuple[int, int]]:
     """Compass direction from rect *a* to rect *b* if they share an edge.
@@ -101,7 +111,20 @@ class MapGraph:
                 "size": (int(size[0]), int(size[1])),
                 "id": e.get("id"),
             }
+        # Case/spacing-insensitive index: MAP_NAMES says "Cinnabar Island"
+        # while map_data.json says "Cinnabar island". Without this the two
+        # name spaces silently fail every lookup.
+        self._index: Dict[str, str] = {_canon(n): n for n in self.maps}
         logger.info("map graph: %d maps loaded", len(self.maps))
+
+    def resolve(self, name: Optional[str]) -> Optional[str]:
+        """Canonical graph key for a map name, ignoring case and spacing."""
+        if not name:
+            return None
+        if name in self.maps:
+            return name
+        return self._index.get(_canon(name))
+
 
     def _build_adjacency(self) -> None:
         rects = {n: _rect(m["coord"], m["size"]) for n, m in self.maps.items()}
@@ -141,6 +164,10 @@ class MapGraph:
         """
         if not cur_map or not isinstance(warp, dict):
             return False
+        # Store under the canonical graph name so portal lookups and the
+        # geography adjacency share one key space (MAP_NAMES vs map_data.json
+        # differ in case for e.g. Cinnabar Island).
+        cur_map = self.resolve(cur_map) or cur_map
         dest_id = warp.get("dest_map")
         if dest_id is None:
             return False
@@ -151,6 +178,7 @@ class MapGraph:
                 dest_name = MAP_NAMES.get(int(dest_id))
             except Exception:
                 dest_name = None
+        dest_name = self.resolve(dest_name) or dest_name
         cell = warp.get("cell")
         if not cell:
             return False
@@ -180,10 +208,11 @@ class MapGraph:
 
     def neighbors(self, name: str) -> Dict[str, Tuple[int, int]]:
         """Adjacent maps merged from geography and recorded portals."""
+        name = self.resolve(name) or name
         out = dict(self.adj.get(name) or {})
         for cell, p in (self.portals.get(name) or {}).items():
-            dst = p.get("dest_map_name")
-            if dst and dst in self.maps and dst not in out:
+            dst = self.resolve(p.get("dest_map_name"))
+            if dst and dst not in out:
                 # Derive a compass direction from global coordinates.
                 d = self._direction_between(name, dst)
                 if d is not None:
@@ -191,6 +220,8 @@ class MapGraph:
         return out
 
     def _direction_between(self, a: str, b: str) -> Optional[Tuple[int, int]]:
+        a = self.resolve(a) or a
+        b = self.resolve(b) or b
         if a not in self.maps or b not in self.maps:
             return None
         d = _touch(_rect(self.maps[a]["coord"], self.maps[a]["size"]),
@@ -208,6 +239,8 @@ class MapGraph:
     def route(self, start: str, goal: str,
               max_hops: int = 12) -> Optional[List[str]]:
         """Shortest list of maps from *start* to *goal* (inclusive), or None."""
+        start = self.resolve(start) or start
+        goal = self.resolve(goal) or goal
         if start == goal:
             return [start]
         if start not in self.maps or goal not in self.maps:
