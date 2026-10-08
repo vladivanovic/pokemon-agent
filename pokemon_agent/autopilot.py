@@ -1619,9 +1619,6 @@ class HermesDriver:
                 # route - Von's probabilities are flat, so leaving "explore B2"
                 # in the set is what makes it wander instead of leaving.
                 heal_opts = self._heal_options(state, cur_map)
-                if heal_opts:
-                    criteria.update(heal_opts)
-                    logger.info("heal active: %s", list(heal_opts))
 
                 try:
                     route_opts = self._graph_travel_options(
@@ -1630,7 +1627,14 @@ class HermesDriver:
                     logger.exception("graph travel options failed")
                     route_opts = {}
                 route_active = bool(route_opts)
-                if route_active:
+                # Heal outranks route: if we need to heal, we do NOT offer the
+                # normal route. The route handler would just send us toward the
+                # goal with a crippled party. Instead we ONLY offer the heal
+                # route, which includes the full chain to the nearest center.
+                if heal_opts:
+                    criteria.update(heal_opts)
+                    logger.info("heal active: %s", list(heal_opts))
+                elif route_active:
                     criteria.update(route_opts)
                     logger.info("route active: %s", list(route_opts))
                 # Either a named route or an errand to heal means the local
