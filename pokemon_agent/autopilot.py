@@ -72,6 +72,9 @@ _DIRS: Dict[str, Tuple[int, int]] = {
     "walk_up": (-1, 0), "walk_down": (1, 0),
     "walk_left": (0, -1), "walk_right": (0, 1),
 }
+_REVERSE: Dict[str, str] = {
+    "up": "down", "down": "up", "left": "right", "right": "left",
+}
 COL_LABELS_LOCAL = "ABCDEFGHIJ"
 
 
@@ -352,6 +355,7 @@ def _path_toward_edge(passable: List[List[bool]], direction: str,
     Returns walk actions, or [] when no progress can be made.
     """
     dr, dc = _DIRS[f"walk_{direction}"]
+    back = f"walk_{_REVERSE[direction]}"
     avoid = avoid or set()
     start = (PLAYER_ROW, PLAYER_COL)
     seen: set = {start}
@@ -366,6 +370,11 @@ def _path_toward_edge(passable: List[List[bool]], direction: str,
         if len(path) >= limit:
             continue
         for name, (ddr, ddc) in _DIRS.items():
+            if name == back:
+                # Never expand backwards. Recomputing each turn then yields a
+                # monotonic path; allowing the reverse is what made the agent
+                # alternate walk_up/walk_down on the spot forever.
+                continue
             nr, nc = r + ddr, c + ddc
             if (nr, nc) in seen:
                 continue
