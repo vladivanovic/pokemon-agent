@@ -678,6 +678,12 @@ class HermesDriver:
             cmd += ["-m", self.model]
         if self.provider:
             cmd += ["--provider", self.provider]
+        # Same reasoning flag as the turn cmd: a thinking model (Qwen3.5)
+        # loops on <think> forever and fills the 65k context, which kills the
+        # preflight and the whole autopilot before the first turn.
+        reasoning = os.environ.get("POKEMON_HERMES_REASONING", "none")
+        if reasoning and reasoning != "default":
+            cmd += ["--reasoning", reasoning]
         cmd += ["-q", "Reply with exactly: OK"]
         try:
             r = subprocess.run(cmd, capture_output=True, text=True,
