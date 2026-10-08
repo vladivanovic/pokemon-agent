@@ -1218,11 +1218,18 @@ class HermesDriver:
         # after enough tries _graph_travel_options stops offering it, which
         # restores goto_/explore_ so the agent can find a gate instead.
         if self._route_pending:
-            rmap, rdir = self._route_pending
+            rmap, rdir, rnext = self._route_pending
             moved_since = (pos.get("x"), pos.get("y")) != self._route_last_pos
-            if cur_map != rmap:
+            if rnext is not None and cur_map == rnext:
+                # The hop worked: this edge is real and any count clears.
                 self.edge_fails.pop((rmap, rdir), None)
-            elif not moved_since:
+            elif cur_map != rmap and cur_map != rnext:
+                # Transitioned somewhere else (e.g. wandered back into the
+                # previous town). That neither proves nor disproves the edge,
+                # so keep the count - resetting here is what let the blacklist
+                # clear itself on every Viridian City round trip.
+                pass
+            elif cur_map == rmap and not moved_since:
                 n = self.edge_fails.get((rmap, rdir), 0) + 1
                 self.edge_fails[(rmap, rdir)] = n
                 if n == 4:
@@ -1774,7 +1781,16 @@ class HermesDriver:
                 # edge actually opens (see the empirical edge check).
                 rkey = (self.map_graph.resolve(cur_map) or cur_map
                         if self.map_graph else cur_map)
-                self._route_pending = (rkey, d)
+                # rnext: the map this hop is supposed to reach. The edge check
+                # only clears a failure count when we actually land there, not
+                # when we wander off somewhere else.
+                rnext = None
+                if self.map_graph:
+                    compass = {v: k for k, v in COMPASS_TO_WALK.items()}.get(d)
+                    if compass:
+                        rnext = self.map_graph.neighbor_in_direction(
+                            cur_map, compass)
+                self._route_pending = (rkey, d, rnext)
                 self._route_last_pos = (pos.get("x"), pos.get("y"))
             else:
                 legal = list(_legal_dirs(passable))
