@@ -48,6 +48,7 @@ import requests
 
 from pokemon_agent.scorer import get_scorer  # pluggable low-level scorer
 from pokemon_agent.map_graph import MapGraph    # global map graph + portals
+from pokemon_agent import gen1_battle           # deterministic Gen 1 battle policy
 
 # Laya decision model - optional. Import failure must be loud at use time,
 # not silently equivalent to "feature disabled".
@@ -524,11 +525,6 @@ class HermesDriver:
         self.last_mode_switch: float = time.perf_counter()
         self._hermes_last_pos: Optional[Any] = None
         self.hermes_budget_max: int = 30
-        # Battle fallback: (enemy_species, hp, menu_index) + how many Hermes
-        # turns have passed without it changing. See _arbitrate.
-        self._battle_fp: Optional[tuple] = None
-        self._battle_hermes_turns: int = 0
-        self._battle_owner: str = ""     # "" | "laya" (battle handed off)
         # --- low-level scorer: laya | von | expert[:base] ----------------
         # Selectable via --scorer, $POKEMON_SCORER, or config. The scorer
         # replaces Laya's raw router for pick-one-of-N decisions; "expert"
@@ -1034,44 +1030,19 @@ class HermesDriver:
             return self.mode
 
         if (state.get("battle") or {}).get("in_battle"):
+            # Battles are resolved by the deterministic Gen 1 policy
+            # (gen1_battle) behind the scorer: exact RAM state + exact
+            # pokered type chart, ~0ms. A language model adds ~60s per turn
+            # and cannot beat a correct lookup table here, so battles no
+            # longer escalate to Hermes - it stalls out on tool calls and
+            # wedges the game. If Hermes was driving, hand back. progress_at
+            # is refreshed because being in a battle is not a stall.
             self.progress_at = time.perf_counter()
-            # Once a battle has been handed to the local scorer, keep it there
-            # until the battle ends - bouncing back to a failing Hermes every
-            # few turns would starve Laya of the turns it needs to finish.
-            if self._battle_owner == "laya":
-                return "laya"
-            # Hermes gets first crack at a battle, but a small local model can
-            # fail every battle turn (Qwen-2B loops 12x looking for HTTP tools
-            # and gives up), which wedges the game forever: battle -> hermes ->
-            # fail -> laya -> battle -> hermes ... with Laya getting no real
-            # turn. Track enemy HP across Hermes' battle turns; if nothing has
-            # changed, hand the battle to the local scorer so it resolves.
-            b = state.get("battle") or {}
-            e = b.get("enemy") or {}
-            fp = (e.get("species"), e.get("hp"), b.get("menu_index"))
-            if fp != self._battle_fp:
-                self._battle_fp = fp
-                self._battle_hermes_turns = 0
-            self._battle_hermes_turns += 1
-            # This branch only runs on a Laya turn, i.e. Hermes already had a
-            # full budget in this battle and did not finish it. A second such
-            # turn (fingerprint unchanged) means Hermes cannot win it.
-            if self._battle_hermes_turns >= 2:
-                logger.warning("hermes made no battle progress in %d rounds "
-                               "- handing battle to the local scorer",
-                               self._battle_hermes_turns)
-                self._battle_owner = "laya"
+            if self.mode == "hermes":
+                logger.info("battle started - handing control back to the "
+                            "local scorer (Gen 1 policy)")
                 self._enter_mode("laya")
-                return "laya"
-            # Ensure Hermes is driver for battle turns so stats reflect correctly
-            self._enter_mode("hermes")
-            return self.mode
-
-        # Not in a battle: any battle hand-off is finished.
-        if self._battle_owner:
-            self._battle_owner = ""
-            self._battle_fp = None
-            self._battle_hermes_turns = 0
+            return "laya"
 
         self.mode_turns += 1
         # Two reasons to escalate. A stall means Laya is wedged. A stale plan
@@ -1311,12 +1282,12 @@ class HermesDriver:
                     "Select FIGHT - all moves are out of PP so the game will "
                     "use STRUGGLE (the only remaining way to deal damage)"
                 )
-            elif pps and pps[0] > 0:
-                criteria["attack"] = "Select FIGHT and use the first move"
             else:
-                # First move has no PP but others do - offer specific moves
-                # with PP > 0 so the AI can choose one (e.g., Growl to burn
-                # PP toward Struggle). Each move becomes its own criterion.
+                # Offer EVERY move with PP, not just slot 0: the Gen 1 battle
+                # policy picks on merit (type effectiveness + STAB + power),
+                # and a fallback scorer needs the set to choose from. Slot
+                # index is the displayed-menu position - the reader compacts
+                # empty slots and so does the game's move list.
                 for i, mv in enumerate(moves):
                     pp = mv.get("pp", 0) if isinstance(mv, dict) else 0
                     if pp > 0:
@@ -1657,9 +1628,33 @@ class HermesDriver:
         if not intro and not dlg.get("text_active") and not battle.get("in_battle"):
             self._dialog_turns = 0
 
+        # Gen 1 battle policy: a deterministic move-selection rule beats any
+        # model here (exact RAM state, exact pokered type chart). It runs
+        # BEFORE the scorer so battles cost ~0ms and never need escalation.
+        # When it declines (no damaging move, no PP) the scorer decides.
+        policy_choice: Optional[str] = None
+        if battle.get("in_battle"):
+            try:
+                policy_choice = gen1_battle.choose(state)
+            except Exception:
+                logger.exception("battle policy failed - deferring to scorer")
+                policy_choice = None
+            if policy_choice is not None and policy_choice not in criteria:
+                logger.warning("battle policy picked %r which is not offered "
+                               "(%s) - deferring", policy_choice,
+                               list(criteria))
+                policy_choice = None
+
         started = time.perf_counter()
-        choice = self._laya_choose(laya_state, criteria, instructions)
+        if policy_choice is not None:
+            choice = policy_choice
+            self.last_confidence = 1.0
+        else:
+            choice = self._laya_choose(laya_state, criteria, instructions)
         took_ms = (time.perf_counter() - started) * 1000.0
+        if policy_choice is not None:
+            logger.info("battle policy=%s (from %d options) took=%.1fms",
+                        policy_choice, len(criteria), took_ms)
 
         # A failed decision must not consume a turn, and must not loop forever.
         if choice is None:
