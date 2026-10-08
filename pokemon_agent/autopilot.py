@@ -95,6 +95,10 @@ _DELTA_TO_WALK: Dict[Tuple[int, int], str] = {
 _DELTA_TO_COMPASS: Dict[Tuple[int, int], str] = {
     (-1, 0): "north", (1, 0): "south", (0, -1): "west", (0, 1): "east",
 }
+# Bare direction -> the one that undoes it.
+_OPPOSITE_WALK: Dict[str, str] = {
+    "up": "down", "down": "up", "left": "right", "right": "left",
+}
 COL_LABELS_LOCAL = "ABCDEFGHIJ"
 
 
@@ -496,6 +500,10 @@ class HermesDriver:
         self.last_confidence = 0
         self.recent: deque = deque(maxlen=8)     # oscillation detection
         self.prev_map: Optional[str] = None
+        # Bare direction ("up"/"down"/"left"/"right") we walked to get into the
+        # current map. Its reverse is suppressed briefly after arrival so the
+        # agent cannot walk straight back through the boundary it just crossed.
+        self.arrived_from: Optional[str] = None
         self.visits: Dict[tuple, int] = {}      # (map, x, y) -> times seen
         self.special_tiles: Dict[tuple, str] = {}   # (map, x, y) -> tile purpose
         self.explore_union_path = os.environ.get(
@@ -1372,6 +1380,16 @@ class HermesDriver:
         pos = p.get("position") or {}
         if cur_map != self.prev_map:
             logger.info("map changed: %s -> %s", self.prev_map, cur_map)
+            # Which way did we come in? The hop that landed us here recorded the
+            # bare direction it walked; its reverse is the boundary we just
+            # crossed. Used to stop an immediate walk back out (see the
+            # selection below). _route_pending is cleared later in this turn, so
+            # it still holds the PREVIOUS turn's hop here.
+            self.arrived_from = None
+            if self._route_pending:
+                _, rdir, rnext = self._route_pending
+                if rnext is None or rnext == cur_map:
+                    self.arrived_from = rdir
             self.prev_map = cur_map
             self.map_changed_at = self.turn
             self.map_changed_time = time.perf_counter()
@@ -1713,6 +1731,18 @@ class HermesDriver:
                     if dr < 0 and 0 <= nr < 9 and 0 <= nc < 10 and ledge_grid[nr][nc]:
                         continue  # skip moving up through a ledge
                     criteria[name] = f"Move one tile {name.split('_')[1]}"
+
+                # Do not offer the boundary we just crossed. In a map we have
+                # to TRAVERSE (Viridian Forest) the reverse walk was exactly
+                # what the agent kept choosing - it entered and fell straight
+                # back out, forever, which is the "shy" behaviour. Bounded by
+                # the recent_transition window so a real dead end is not a
+                # trap, and skipped if it is the only legal move left.
+                if recent_transition and self.arrived_from:
+                    back = "walk_" + _OPPOSITE_WALK.get(self.arrived_from, "")
+                    others = [k for k in criteria if k in _DIRS and k != back]
+                    if back in criteria and others:
+                        criteria.pop(back, None)
 
                 criteria["interact"] = "Press A to talk to or examine what you face"
 
