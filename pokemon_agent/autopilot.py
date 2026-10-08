@@ -1242,16 +1242,22 @@ class HermesDriver:
             self._route_pending = None
 
         # --- global map graph: learn portals as we read them ---------------
-        # Each warp read from RAM is a durable edge in the map graph. Persist
-        # when something new shows up so a restart keeps what we learned.
-        if self.map_graph is not None and warps:
+        # Only learn from a frame the collision layer vouches for. During a
+        # map transition (and in battle/dialog) wNumberOfWarps holds stale or
+        # uninitialised bytes, so a read yields 25-35 bogus cells that all
+        # decode to a neighbouring map id. Those resolve to real names, so a
+        # name check alone does not catch them - they poisoned the portal
+        # table and made every tile on Viridian Forest look like a warp to
+        # Pewter Museum, which is exactly the bounce the agent was stuck in.
+        col_valid = bool(col.get("valid"))
+        warp_read_ok = col_valid and len(warps) <= 12
+        if self.map_graph is not None and warps and warp_read_ok:
             learned = False
             for w in warps:
                 if self.map_graph.record_warp(cur_map, w):
                     learned = True
             if learned:
                 self.map_graph.save_portals()
-                self._graph_dirty = False
 
         # Did the previous explore path actually arrive? If not, the target is
         # unreachable - a table or NPC the collision grid thinks is walkable -
