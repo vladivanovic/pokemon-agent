@@ -90,6 +90,7 @@ class MapGraph:
         self.adj: Dict[str, Dict[str, Tuple[int, int]]] = {}   # name -> {neighbor: dir}
         # Portals discovered from RAM: name -> {cell: {dest_map, dest_map_name, row, col}}
         self.portals: Dict[str, Dict[str, dict]] = {}
+        self._portal_index: Dict[str, str] = {}
         self._load_maps()
         self._build_adjacency()
         self.load_portals()
@@ -120,13 +121,32 @@ class MapGraph:
         self._index: Dict[str, str] = {_canon(n): n for n in self.maps}
         logger.info("map graph: %d maps loaded", len(self.maps))
 
+    def _reindex_portals(self) -> None:
+        """Case-insensitive index for the portal key space.
+
+        Portals name maps that are NOT regions in map_data.json - gate
+        interiors, building floors. They are still valid graph nodes, and
+        resolve() must know them or every edge touching one is dropped.
+        """
+        self._portal_index: Dict[str, str] = {_canon(n): n for n in self.portals}
+
     def resolve(self, name: Optional[str]) -> Optional[str]:
-        """Canonical graph key for a map name, ignoring case and spacing."""
+        """Canonical graph key for a map name, ignoring case and spacing.
+
+        Consults BOTH key spaces. map_data.json regions are what geometry
+        knows; the portal table adds interiors that are never regions. When
+        resolve() knew only the regions, 'Viridian Forest South Gate' came back
+        None, which silently dropped the gate's edges in both directions - the
+        forest lost its only real exit to the rest of the world.
+        """
         if not name:
             return None
         if name in self.maps:
             return name
-        return self._index.get(_canon(name))
+        got = self._index.get(_canon(name))
+        if got:
+            return got
+        return getattr(self, "_portal_index", {}).get(_canon(name))
 
 
     def _build_adjacency(self) -> None:
@@ -199,6 +219,7 @@ class MapGraph:
             else:
                 dropped_maps += 1
         self.portals = clean
+        self._reindex_portals()
         if dropped_cells or dropped_maps:
             self.save_portals()
         n = sum(len(v) for v in self.portals.values())
@@ -253,6 +274,7 @@ class MapGraph:
         if bucket.get(cell) == entry:
             return False
         bucket[cell] = entry
+        self._reindex_portals()      # a new source map name must be resolvable
         return True
 
     def save_portals(self) -> None:
@@ -292,6 +314,17 @@ class MapGraph:
             for entry in cells.values():
                 if self.resolve(entry.get("dest_map_name")) == name:
                     d = self._direction_between(name, src)
+                    if d is None:
+                        # src may not be a region in map_data.json at all -
+                        # gate interiors are not - so geometry cannot help and
+                        # the edge would be lost. Fall back to the reverse of
+                        # src's OWN door direction: the South Gate's door to the
+                        # forest reads north, so from the forest the gate is
+                        # south. Without this, Viridian Forest has no useful
+                        # neighbour and nothing can route out of it.
+                        back = self._portal_direction(src, name)
+                        if back is not None:
+                            d = (-back[0], -back[1])
                     if d is not None:
                         out[src] = d
                     break
