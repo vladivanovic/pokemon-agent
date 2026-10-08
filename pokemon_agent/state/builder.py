@@ -87,20 +87,25 @@ def annotate_nearest_pokecenter(state: Dict[str, Any],
     build_game_state and read `read_map_info()["collision"]`, which does not
     exist - so it silently returned None on every map.
     """
-    # Already inside a Pokecenter: nothing to walk to.
-    map_name = (state.get("map") or {}).get("map_name") or ""
-    if "pokecenter" in map_name.lower():
-        state["nearest_pokecenter_dist"] = 0
-        state["nearest_pokecenter_dir"] = (0, 0)
-        state["nearest_pokecenter_src"] = "inside"
-        return
-
+    # Nurse FIRST, even inside a Pokecenter: knowing we are inside is not
+    # enough to walk to the counter, and the nurse is usually on screen once
+    # you are in the door. The "inside" early-return used to swallow that and
+    # reported dist 0 / dir (0,0), which gave the caller nothing to act on.
     nurse = _nurse_on_screen(collision) if collision.get("valid") else None
     if nurse is not None:
         dx, dy, dist = nurse
         state["nearest_pokecenter_dist"] = dist
         state["nearest_pokecenter_dir"] = (dx, dy)
         state["nearest_pokecenter_src"] = "nurse"
+        return
+
+    # Inside a Pokecenter but no nurse visible (looking at the door, or a
+    # frame the collision layer rejected): distance 0 means "you have arrived".
+    map_name = (state.get("map") or {}).get("map_name") or ""
+    if "pokecenter" in map_name.lower():
+        state["nearest_pokecenter_dist"] = 0
+        state["nearest_pokecenter_dir"] = (0, 0)
+        state["nearest_pokecenter_src"] = "inside"
         return
 
     door = _nearest_pokecenter_door(state)
