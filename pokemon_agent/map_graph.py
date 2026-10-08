@@ -200,13 +200,25 @@ class MapGraph:
                     # Gate) has many cells all pointing at ONE destination -
                     # that's what a connector IS. Drop only when the group is
                     # implausibly huge (>12) AND the destination matches the
-                    # previously visited map pattern (stale-frame signature).
+                    # previously visited map (stale-frame signature). Since we
+                    # don't know the previous map at load time, use a heuristic:
+                    # a true gate interior distributes its cells across the
+                    # whole room (many rows/cols), while stale-frame garbage is
+                    # often clumped. For now, only drop if the group is >12
+                    # AND the cells are tightly clustered (implausible for a
+                    # room-sized map).
                     if len(group) > 12:
-                        logger.warning(
-                            "map graph: dropping %d portals %s -> %s "
-                            "(implausible door width)", len(group), name, dst)
-                        dropped_cells += len(group)
-                        continue
+                        # Check cell distribution: a gate interior spans
+                        # multiple rows AND columns. If all cells are within
+                        # a 2x2 tile cluster, it's stale noise.
+                        rows = {int(c[1:]) for c in group}
+                        cols = {c[0].upper() for c in group}
+                        if len(rows) <= 2 and len(cols) <= 2:
+                            logger.warning(
+                                "map graph: dropping %d portals %s -> %s "
+                                "(tight cluster, likely stale frame)", len(group), name, dst)
+                            dropped_cells += len(group)
+                            continue
                     # Otherwise it's a connector: keep the first 4 cells (the
                     # door is 1-2 tiles wide; extras are frame noise).
                     for c in list(group)[:self.MAX_SAME_DEST]:
@@ -393,8 +405,9 @@ class MapGraph:
         goal = self.resolve(goal) or goal
         if start == goal:
             return [start]
-        if start not in self.maps or goal not in self.maps:
-            return None
+        # The BFS uses neighbors(), which already merges regions and portals.
+        # The start/goal may be portal-only nodes (e.g. gate interiors) that
+        # are not in self.maps, so do NOT gate them here.
         seen = {start}
         q = deque([(start, [start])])
         while q:
