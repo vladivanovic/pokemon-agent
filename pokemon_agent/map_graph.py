@@ -27,6 +27,9 @@ import os
 from collections import deque
 from typing import Dict, List, Optional, Tuple
 
+from pokemon_agent.collision import (PLAYER_ROW, PLAYER_COL,
+                                     COL_LABELS as _CELL_COLS)
+
 logger = logging.getLogger("pokemon-agent.map_graph")
 
 DEFAULT_MAP_DATA = "/home/vlad/pokemon-agent/v2/map_data.json"
@@ -282,9 +285,48 @@ class MapGraph:
                     break
         return out
 
+    def _portal_direction(self, owner: str, dest: str) -> Optional[Tuple[int, int]]:
+        """Direction to walk on *owner* to leave for *dest*, from door cells.
+
+        A recorded portal cell is where the door sits ON owner's screen, so its
+        offset from the player IS the direction to walk. This beats rectangle
+        geometry whenever both exist: on Route 2 the door to Viridian Forest
+        sits at cells D2/E4, i.e. NORTH, while the rectangles put the forest to
+        the EAST - and that error is what made the agent loop
+        Route 2 <-> Viridian Forest instead of progressing.
+        """
+        owner = self.resolve(owner) or owner
+        dest = self.resolve(dest) or dest
+        votes: Dict[Tuple[int, int], int] = {}
+        for cell, entry in ((self.portals or {}).get(owner) or {}).items():
+            if self.resolve(entry.get("dest_map_name")) != dest:
+                continue
+            try:
+                col = _CELL_COLS.index(cell[0].upper())
+                row = int(cell[1:]) - 1
+            except (ValueError, IndexError):
+                continue
+            dr, dc = row - PLAYER_ROW, col - PLAYER_COL
+            if dr == 0 and dc == 0:
+                continue
+            if abs(dr) >= abs(dc):
+                key = (-1, 0) if dr < 0 else (1, 0)
+            else:
+                key = (0, -1) if dc < 0 else (0, 1)
+            votes[key] = votes.get(key, 0) + 1
+        if not votes:
+            return None
+        return max(votes.items(), key=lambda kv: kv[1])[0]
+
     def _direction_between(self, a: str, b: str) -> Optional[Tuple[int, int]]:
         a = self.resolve(a) or a
         b = self.resolve(b) or b
+        # A door we have actually seen on `a` outranks the rectangle guess.
+        # Only the owner side is used: the reverse would be an assumption about
+        # relative layout, which is the very thing that is unreliable here.
+        d = self._portal_direction(a, b)
+        if d is not None:
+            return d
         if a not in self.maps or b not in self.maps:
             return None
         d = _touch(_rect(self.maps[a]["coord"], self.maps[a]["size"]),
