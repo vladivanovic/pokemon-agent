@@ -140,18 +140,56 @@ class MapGraph:
         edges = sum(len(v) for v in self.adj.values()) // 2
         logger.info("map graph: %d adjacency edges", edges)
 
+    # A real Gen 1 door is one or two tiles wide, so a map never has more
+    # than a couple of cells leading to the same destination. Count alone is
+    # too blunt (a city legitimately has many doors); a big group pointing at
+    # ONE map is the signature of a stale-frame read, where the garbage warp
+    # table decodes to whichever map the agent just came from.
+    MAX_SAME_DEST = 4
+
     def load_portals(self) -> None:
         try:
             with open(self.portals_path, "r") as f:
-                self.portals = json.load(f)
-            n = sum(len(v) for v in self.portals.values())
-            logger.info("map graph: %d recorded portals from %s", n,
-                        self.portals_path)
+                raw = json.load(f)
         except FileNotFoundError:
             self.portals = {}
+            return
         except Exception as e:
             logger.warning("map graph: bad portals file: %s", e)
             self.portals = {}
+            return
+        clean: Dict[str, Dict[str, dict]] = {}
+        dropped_maps = 0
+        dropped_cells = 0
+        for name, cells in (raw or {}).items():
+            if not isinstance(cells, dict):
+                continue
+            grouped: Dict[str, Dict[str, dict]] = {}
+            for cell, entry in cells.items():
+                if not isinstance(entry, dict) or not entry.get("dest_map_name"):
+                    dropped_cells += 1
+                    continue        # unnamed: never routable, see record_warp
+                grouped.setdefault(entry["dest_map_name"], {})[cell] = entry
+            kept: Dict[str, dict] = {}
+            for dst, group in grouped.items():
+                if len(group) > self.MAX_SAME_DEST:
+                    logger.warning(
+                        "map graph: dropping %d portals %s -> %s "
+                        "(implausible door width)", len(group), name, dst)
+                    dropped_cells += len(group)
+                    continue
+                kept.update(group)
+            if kept:
+                clean[name] = kept
+            else:
+                dropped_maps += 1
+        self.portals = clean
+        if dropped_cells or dropped_maps:
+            self.save_portals()
+        n = sum(len(v) for v in self.portals.values())
+        logger.info("map graph: %d recorded portals from %s "
+                    "(%d cells / %d maps dropped as implausible)",
+                    n, self.portals_path, dropped_cells, dropped_maps)
 
     # --- record -------------------------------------------------------------
 
