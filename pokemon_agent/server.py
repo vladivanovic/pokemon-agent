@@ -23,7 +23,9 @@ import concurrent.futures
 import io
 import json
 import logging
+import os
 import queue
+import tempfile
 import threading
 import time
 from collections import deque
@@ -33,13 +35,16 @@ from typing import Callable, Optional, Set
 
 from fastapi import (
     FastAPI,
+    File,
+    Form,
     HTTPException,
     Path as PathParam,
+    UploadFile,
     WebSocket,
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
 
 logging.basicConfig(level=logging.INFO,
@@ -276,6 +281,56 @@ def _publish_frame(force_render: bool = False) -> None:
     _publish({"type": "screenshot", "frame": _frame_no,
               "data": {"image": base64.b64encode(png).decode("ascii"),
                        "format": "png"}})
+
+
+# ---------------------------------------------------------------------------
+# Screen recording — capture the framebuffer to MP4 via /screenrecord
+# ---------------------------------------------------------------------------
+
+_recording = threading.Event()          # one recording at a time
+_recording_lock = threading.Lock()
+
+
+def _record_frames(emu, duration: float, fps: int,
+                   scale: int) -> str:
+    """Capture the framebuffer for *duration* seconds, encode to MP4.
+
+    Runs ON THE EMULATOR OWNER THREAD (via emu_call), so the single-owner
+    invariant holds. Each frame: render, read, sleep 1/fps. GameBoy frames
+    are 160x144; scale upsizes for readability (nearest-neighbour).
+    """
+    import numpy as np
+
+    out_path = os.path.join(
+        tempfile.gettempdir(),
+        f"pokemon_record_{int(time.time())}.mp4")
+
+    try:
+        import imageio.v3 as iio
+    except ImportError:
+        raise RuntimeError("imageio not installed - pip install imageio[ffmpeg]")
+
+    frame_period = 1.0 / max(fps, 1)
+    total = max(int(duration * fps), 1)
+    frames = []
+
+    for i in range(total):
+        emu.tick(1, render_last=True)   # render so the frame is fresh
+        # get_screen() returns a copied RGB PIL Image (160x144).
+        arr = np.asarray(emu.get_screen())
+        if scale > 1:
+            arr = np.repeat(np.repeat(arr, scale, axis=0), scale, axis=1)
+        frames.append(arr)
+        # Keep emulation time ~real: sleeping here on the owner thread pauses
+        # the game for duration seconds, which is the POINT of a recording.
+        time.sleep(frame_period)
+
+    iio.imwrite(out_path, np.stack(frames), fps=fps, codec="libx264",
+                macro_block_size=None)
+    logger.info("recorded %d frames (%.0fs @ %dfps) -> %s (%s)",
+                len(frames), duration, fps, out_path,
+                f"{os.path.getsize(out_path) // 1024}KB")
+    return out_path
 
 
 def _emulator_worker() -> None:
@@ -749,6 +804,56 @@ async def screenshot_grid(scale: int = 4):
         logger.exception("grid screenshot failed")
         raise HTTPException(status_code=500,
                             detail=f"{type(exc).__name__}: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Screen recording
+# ---------------------------------------------------------------------------
+
+class RecordRequest(BaseModel):
+    duration: float = 30.0             # seconds of gameplay to capture
+    fps: int = 20                      # capture rate (game runs at 60)
+    scale: int = 2                     # upscale factor for readability
+
+
+@app.post("/screenrecord")
+async def screenrecord(req: RecordRequest):
+    """Record *duration* seconds of gameplay to an MP4, then return the file.
+
+    Captures the framebuffer on the emulator owner thread — the game pauses
+    for the recording (real-time capture of a headless emulator). One
+    recording at a time; a second concurrent request returns 409.
+    """
+    if not 1 <= req.duration <= 300:
+        raise HTTPException(status_code=400, detail="duration must be 1..300s")
+    if not 1 <= req.fps <= 60:
+        raise HTTPException(status_code=400, detail="fps must be 1..60")
+    if not 1 <= req.scale <= 4:
+        raise HTTPException(status_code=400, detail="scale must be 1..4")
+    _ensure_emulator()
+
+    with _recording_lock:
+        if _recording.is_set():
+            raise HTTPException(status_code=409,
+                                detail="A recording is already in progress")
+        _recording.set()
+    try:
+        # emu_call runs _record_frames on the owner thread; the timeout must
+        # cover capture + encode with headroom.
+        est = req.duration + 30 + req.duration * req.fps * 0.02
+        out_path = await emu_call(_record_frames, req.duration, req.fps,
+                                  req.scale, timeout=max(est, 90.0))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("screenrecord failed")
+        raise HTTPException(status_code=500,
+                            detail=f"{type(exc).__name__}: {exc}")
+    finally:
+        _recording.clear()
+    return FileResponse(out_path, media_type="video/mp4",
+                        filename=Path(out_path).name,
+                        headers={"X-Frame-Count": str(int(req.duration * req.fps))})
 
 
 # ---------------------------------------------------------------------------
