@@ -256,6 +256,7 @@ class MapGraph:
         """Adjacent maps merged from geography and recorded portals."""
         name = self.resolve(name) or name
         out = dict(self.adj.get(name) or {})
+        # Outgoing portals: a warp we read on *name* tells us where its doors go.
         for cell, p in (self.portals.get(name) or {}).items():
             dst = self.resolve(p.get("dest_map_name"))
             if dst and dst not in out:
@@ -263,6 +264,22 @@ class MapGraph:
                 d = self._direction_between(name, dst)
                 if d is not None:
                     out[dst] = d
+        # Incoming portals, treated as bidirectional. A portal is recorded
+        # against the map that OWNS the warp, so this edge is otherwise
+        # one-way: Route 2 -> Viridian Forest gets learned, Viridian Forest ->
+        # Route 2 does not, and routing out of the forest fails even though
+        # the agent has walked it repeatedly. Doors and map connections are
+        # two-way in this game; the rare one-way warp is not worth losing the
+        # whole connection over.
+        for src, cells in (self.portals or {}).items():
+            if src == name or src in out:
+                continue
+            for entry in cells.values():
+                if self.resolve(entry.get("dest_map_name")) == name:
+                    d = self._direction_between(name, src)
+                    if d is not None:
+                        out[src] = d
+                    break
         return out
 
     def _direction_between(self, a: str, b: str) -> Optional[Tuple[int, int]]:

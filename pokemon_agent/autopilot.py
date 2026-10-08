@@ -48,6 +48,7 @@ import requests
 
 from pokemon_agent.scorer import get_scorer  # pluggable low-level scorer
 from pokemon_agent.map_graph import MapGraph    # global map graph + portals
+from pokemon_agent.state.builder import PC_CENTERS   # cities with a Pokecenter
 from pokemon_agent import gen1_battle           # deterministic Gen 1 battle policy
 
 # Laya decision model - optional. Import failure must be loud at use time,
@@ -792,41 +793,66 @@ class HermesDriver:
                 return "no damaging move has PP left"
         return ""
 
-    def _heal_options(self, state: Dict[str, Any]) -> Dict[str, str]:
+    def _heal_options(self, state: Dict[str, Any],
+                      cur_map: Optional[str] = None) -> Dict[str, str]:
         """Criteria entry for going to heal, or {} when not warranted.
 
         Only offered when there is a real reason, so it cannot crowd out normal
-        play, and only when the state located a center on THIS map. The three
-        sources come from annotate_nearest_pokecenter: the nurse sprite
-        (screen-relative), the pc_centers.json door coordinate (map-relative,
-        works off-screen), or "inside" meaning we have already arrived.
+        play. Two shapes:
+
+        * a center on THIS map -> ``heal_center``, walk to it and talk to the
+          nurse (sources come from annotate_nearest_pokecenter: the nurse
+          sprite is screen-relative, the pc_centers.json door is map-relative
+          and works off-screen, "inside" means we have already arrived);
+        * otherwise ``heal_route_<compass>``, heading for the nearest city that
+          has one. Without this a low-HP party in Viridian Forest has nowhere
+          to go and simply wanders until it blacks out.
         """
         reason = self._needs_heal(state)
         if not reason:
             return {}
         src = state.get("nearest_pokecenter_src")
         dist = state.get("nearest_pokecenter_dist")
-        if src is None or dist is None:
-            return {}
-        d = state.get("nearest_pokecenter_dir") or [0, 0]
-        try:
-            dx, dy = int(d[0]), int(d[1])
-        except (TypeError, ValueError, IndexError):
-            dx, dy = 0, 0
 
-        where = {"nurse": "the nurse is on screen",
-                 "door": "a Pokecenter door is known on this map",
-                 "inside": "you are already inside a Pokecenter"}.get(src, src)
-        if dist <= 0:
+        if src is not None and dist is not None:
+            d = state.get("nearest_pokecenter_dir") or [0, 0]
+            try:
+                dx, dy = int(d[0]), int(d[1])
+            except (TypeError, ValueError, IndexError):
+                dx, dy = 0, 0
+            where = {"nurse": "the nurse is on screen",
+                     "door": "a Pokecenter door is known on this map",
+                     "inside": "you are already inside a Pokecenter"}.get(src, src)
+            if dist <= 0:
+                return {"heal_center":
+                        f"HEAL - {reason}. {where}: step up to the counter and "
+                        f"press A to talk to the nurse, then accept the heal."}
+            walk = _DELTA_TO_WALK.get((dx, dy))
+            if walk is None:
+                return {}
             return {"heal_center":
-                    f"HEAL - {reason}. {where}: step up to the counter and "
-                    f"press A to talk to the nurse, then accept the heal."}
-        walk = _DELTA_TO_WALK.get((dx, dy))
-        if walk is None:
+                    f"HEAL - {reason}. {where}, about {dist} tiles away. Walk "
+                    f"{walk.split('_')[1]} toward it and press A at the nurse."}
+
+        # No center on this map - head for the nearest city that has one.
+        if not (self.map_graph and cur_map):
             return {}
-        return {"heal_center":
-                f"HEAL - {reason}. {where}, about {dist} tiles away. Walk "
-                f"{walk.split('_')[1]} toward it and press A at the nurse."}
+        best = None
+        for city in PC_CENTERS:
+            if not self.map_graph.resolve(city):
+                continue
+            r = self.map_graph.route(cur_map, city)
+            if r and (best is None or len(r) < len(best[1])):
+                best = (city, r)
+        if not best:
+            return {}
+        city, chain = best
+        compass = self.map_graph.first_hop_direction(cur_map, city)
+        if not compass or compass not in COMPASS_TO_WALK:
+            return {}
+        return {f"heal_route_{compass}":
+                f"HEAL - {reason}. There is no Pokecenter on {cur_map}: head "
+                f"{compass} toward {city} to heal. Route: {' -> '.join(chain)}."}
 
     def event(self, **kw) -> None:
         """Push narration to the dashboard. Never affects the game."""
@@ -1553,7 +1579,7 @@ class HermesDriver:
                 # options below get suppressed exactly as they are for a named
                 # route - Von's probabilities are flat, so leaving "explore B2"
                 # in the set is what makes it wander instead of leaving.
-                heal_opts = self._heal_options(state)
+                heal_opts = self._heal_options(state, cur_map)
                 if heal_opts:
                     criteria.update(heal_opts)
                     logger.info("heal active: %s", list(heal_opts))
@@ -1865,6 +1891,12 @@ class HermesDriver:
         # DISPATCH - map the chosen key to emulator actions
         # ------------------------------------------------------------------
         actions: List[str] = []
+        # A heal route IS an ordinary map-graph edge hop - normalise it into
+        # route_toward_ so it reuses that handler's door-avoiding path and
+        # edge-failure tracking instead of duplicating both.
+        if choice.startswith("heal_route_"):
+            choice = "route_toward_" + choice[len("heal_route_"):]
+
         if choice == "advance_text":
             actions = (["a_until_dialog_end"] if dlg.get("text_active")
                        else ["press_a", "wait_30", "press_a"])
