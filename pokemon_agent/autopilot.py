@@ -83,6 +83,13 @@ _REVERSE: Dict[str, str] = {
 COMPASS_TO_WALK: Dict[str, str] = {
     "north": "up", "south": "down", "east": "right", "west": "left",
 }
+# (dx, dy) -> walk action. Note _DIRS above is ordered (dy, dx); the Pokecenter
+# fields are (dx, dy) like every other delta in the state. Keeping a separate
+# map is deliberate - using one for the other silently mirrors the step.
+_DELTA_TO_WALK: Dict[Tuple[int, int], str] = {
+    (0, -1): "walk_up", (0, 1): "walk_down",
+    (-1, 0): "walk_left", (1, 0): "walk_right",
+}
 COL_LABELS_LOCAL = "ABCDEFGHIJ"
 
 
@@ -765,6 +772,61 @@ class HermesDriver:
 
         logger.warning("move select: gave up on slot %d of %d", idx, len(moves))
         return False
+
+    def _needs_heal(self, state: Dict[str, Any]) -> str:
+        """Why we should go to a Pokecenter, or "" when the party is fine."""
+        for p in (state.get("party") or []):
+            if isinstance(p, dict) and (p.get("hp") or 0) <= 0:
+                return "a party member has fainted"
+        am = state.get("active_mon") or {}
+        hp, mx = am.get("hp"), am.get("max_hp")
+        if hp is not None and mx and (hp / mx) < 0.35:
+            return f"HP is low ({hp}/{mx})"
+        if am.get("moves"):
+            # Reuse the battle policy's own ranking: if it finds no damaging
+            # move with PP, the party cannot win a fight and 15 turns of Growl
+            # is not a strategy. (A blackout would "fix" this for free, but it
+            # costs money and warps the agent backwards.)
+            ranked = gen1_battle.score_moves(state)
+            if not any(entry[1] > 0 for entry in ranked):
+                return "no damaging move has PP left"
+        return ""
+
+    def _heal_options(self, state: Dict[str, Any]) -> Dict[str, str]:
+        """Criteria entry for going to heal, or {} when not warranted.
+
+        Only offered when there is a real reason, so it cannot crowd out normal
+        play, and only when the state located a center on THIS map. The three
+        sources come from annotate_nearest_pokecenter: the nurse sprite
+        (screen-relative), the pc_centers.json door coordinate (map-relative,
+        works off-screen), or "inside" meaning we have already arrived.
+        """
+        reason = self._needs_heal(state)
+        if not reason:
+            return {}
+        src = state.get("nearest_pokecenter_src")
+        dist = state.get("nearest_pokecenter_dist")
+        if src is None or dist is None:
+            return {}
+        d = state.get("nearest_pokecenter_dir") or [0, 0]
+        try:
+            dx, dy = int(d[0]), int(d[1])
+        except (TypeError, ValueError, IndexError):
+            dx, dy = 0, 0
+
+        where = {"nurse": "the nurse is on screen",
+                 "door": "a Pokecenter door is known on this map",
+                 "inside": "you are already inside a Pokecenter"}.get(src, src)
+        if dist <= 0:
+            return {"heal_center":
+                    f"HEAL - {reason}. {where}: step up to the counter and "
+                    f"press A to talk to the nurse, then accept the heal."}
+        walk = _DELTA_TO_WALK.get((dx, dy))
+        if walk is None:
+            return {}
+        return {"heal_center":
+                f"HEAL - {reason}. {where}, about {dist} tiles away. Walk "
+                f"{walk.split('_')[1]} toward it and press A at the nurse."}
 
     def event(self, **kw) -> None:
         """Push narration to the dashboard. Never affects the game."""
@@ -1483,6 +1545,19 @@ class HermesDriver:
                 # probabilities are flat (~0.15 across 11 choices), so
                 # leaving "explore B2" / "enter Blue's House" in the set is
                 # what makes it wander into buildings instead of leaving.
+                # --- C2h: heal (outranks the route) ---
+                # A crippled party cannot finish the route, so going to heal
+                # beats making progress toward the goal. Offered only when
+                # _needs_heal finds a reason and the state located a center on
+                # THIS map. Sets `directed` so the interchangeable local
+                # options below get suppressed exactly as they are for a named
+                # route - Von's probabilities are flat, so leaving "explore B2"
+                # in the set is what makes it wander instead of leaving.
+                heal_opts = self._heal_options(state)
+                if heal_opts:
+                    criteria.update(heal_opts)
+                    logger.info("heal active: %s", list(heal_opts))
+
                 try:
                     route_opts = self._graph_travel_options(
                         cur_map, goal, passable, ledge_grid)
@@ -1493,6 +1568,9 @@ class HermesDriver:
                 if route_active:
                     criteria.update(route_opts)
                     logger.info("route active: %s", list(route_opts))
+                # Either a named route or an errand to heal means the local
+                # wandering options are noise, not choices.
+                directed = route_active or bool(heal_opts)
 
                 # --- C2: frontier ---
                 # Multi-tile destinations beat interchangeable single steps:
@@ -1509,7 +1587,7 @@ class HermesDriver:
                                                + abs(rc[1] - PLAYER_COL)))
                 added = 0
                 for fr, fc in frontier:
-                    if route_active:
+                    if directed:
                         break             # route supersedes local wandering
                     if added >= 3:
                         break
@@ -1533,7 +1611,7 @@ class HermesDriver:
                 # literally cannot express "go north", so it can only shuffle
                 # within the current map.
                 for name, (dr, dc) in _DIRS.items():
-                    if route_active:
+                    if directed:
                         break             # the named route replaces these
                     d = name.split("_")[1]
                     if not _grid_open(passable, PLAYER_ROW + dr,
@@ -1555,7 +1633,7 @@ class HermesDriver:
                 # leaving would abandon the errand (Oak's Lab / the parcel).
                 goal_here = bool(cur_map and goal
                                  and cur_map.lower() in goal.lower())
-                if (not route_active and not on_warp and warps
+                if (not directed and not on_warp and warps
                         and not in_graph and not goal_here):
                     best = None
                     for w in warps:
@@ -1595,7 +1673,7 @@ class HermesDriver:
                 # Suppressed while a map-graph route is active: doors into
                 # buildings are the exact distraction that made the agent
                 # wander (and its own named route may already be a door).
-                if not recent_transition and not route_active:
+                if not recent_transition and not directed:
                     for w in warps[:3]:
                         cell = w.get("cell")
                         if not cell:
@@ -1812,6 +1890,31 @@ class HermesDriver:
             idx = int(choice[5:])
             self._select_move(idx, mine.get("moves") or [])
             actions = []
+        elif choice == "heal_center":
+            # Walk toward the Pokecenter and talk to the nurse. The direction
+            # is read from /state each turn rather than baked into the action
+            # list, so it stays correct as the agent moves and re-aims.
+            d = state.get("nearest_pokecenter_dir") or [0, 0]
+            try:
+                dx, dy = int(d[0]), int(d[1])
+            except (TypeError, ValueError, IndexError):
+                dx, dy = 0, 0
+            dist = state.get("nearest_pokecenter_dist") or 0
+            walk = _DELTA_TO_WALK.get((dx, dy))
+            if walk is None:
+                # Inside a center with the nurse off screen. She stands at the
+                # counter, which is north of the entrance in every Gen 1
+                # Pokecenter, so close in and talk.
+                actions = ["walk_up", "press_a", "wait_60"]
+            elif dist <= 1:
+                actions = ["press_a", "wait_60"]        # already beside her
+            else:
+                # Stop short of the tile - the counter is blocked, so the
+                # useful move is to stand adjacent and press A. Capped at 3
+                # steps because this is a straight-line guess: the next turn
+                # recomputes the direction from the new position.
+                actions = [walk] * min(dist - 1, 3)
+                actions += ["press_a", "wait_60"]
         elif choice == "flee":
             actions = ["press_b", "wait_30", "press_down", "press_right",
                        "press_a", "wait_60"]
