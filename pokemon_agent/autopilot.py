@@ -717,44 +717,54 @@ class HermesDriver:
     def _select_move(self, idx: int, moves: List[Any]) -> bool:
         """Open the move menu and select slot *idx* (0-based in ``moves``).
 
-        The Gen 1 move menu opens on the PREVIOUSLY SELECTED slot and the
-        cursor WRAPS, so a fixed "press down * idx" from an unknown start
-        cannot land correctly. That is exactly what wedged the agent for
-        370+ turns: it re-selected a 0-PP Vine Whip and looped on
-        "No PP left for this move!".
+        Gen 1's move menu opens on the PREVIOUSLY SELECTED slot and the cursor
+        WRAPS, so a fixed "press down * idx" from an unknown start cannot land
+        correctly - that wedged the agent on a 0-PP Vine Whip, looping on
+        "No PP left for this move!" for 370+ turns.
 
-        Fix: press down ONE step at a time and re-read the cursor after each
-        press. From any starting slot, n presses visit every slot, so the
-        target is always reached within n steps - no modulo arithmetic and no
-        assumption about how the wraparound is represented internally.
+        It is also not safe to assume the game is on any particular screen when
+        we start: a "No PP" dialog from the previous attempt may be showing, or
+        the move menu may already be open. So drive it off the observed screen
+        text - the loop reads the state, decides what screen we are on, and
+        takes one step. Every path is bounded, so it always terminates.
         """
-        n = max(1, len(moves))
+        names = {str((m or {}).get("name", "")).upper()
+                 for m in moves if isinstance(m, dict)}
+        names.discard("")
         target = idx + 1                     # move menu positions are 1-based
 
-        # B returns to the FIGHT/PKMN/ITEM/RUN menu and clears a stale
-        # "No PP left" dialog; up+left clamps onto FIGHT; A opens the moves.
-        if not self.act(["press_b", "wait_30", "press_up", "press_left",
-                         "press_a", "wait_30"]):
-            return False
-
-        reached = False
-        for _ in range(n + 1):
+        for _ in range(12):
             try:
-                b = (self._get("/state").json().get("battle") or {})
+                st = self._get("/state").json()
             except Exception:
                 return False
+            b = st.get("battle") or {}
+            if not b.get("in_battle"):
+                return False
+            text = str((st.get("dialog") or {}).get("text") or "").upper()
             cur = b.get("menu_index")
-            if not isinstance(cur, int):
+
+            if "NO PP" in text:
+                # A failed selection left this dialog up; it eats one press.
+                if not self.act(["press_a", "wait_20"]):
+                    return False
+                continue
+
+            on_move_menu = bool(names) and any(n in text for n in names)
+            if on_move_menu:
+                if cur == target:
+                    return self.act(["press_a", "wait_60"])   # confirm
+                if not self.act(["press_down", "wait_20"]):
+                    return False
+                continue
+
+            # Not on the move menu: get to FIGHT and open it.
+            if not self.act(["press_b", "wait_30", "press_up", "press_left",
+                             "press_a", "wait_30"]):
                 return False
-            if cur == target:
-                reached = True
-                break
-            if not self.act(["press_down", "wait_20"]):
-                return False
-        if not reached:
-            logger.warning("move select: slot %d unreachable after %d steps "
-                           "(menu of %d)", idx, n + 1, n)
-        return self.act(["press_a", "wait_60"])
+
+        logger.warning("move select: gave up on slot %d of %d", idx, len(moves))
+        return False
 
     def event(self, **kw) -> None:
         """Push narration to the dashboard. Never affects the game."""
