@@ -21,7 +21,19 @@ logger = logging.getLogger("gen-gen1-data")
 MOVES_SRC = "/tmp/pokered_moves.asm"
 TYPES_SRC = "/tmp/pokered_types.asm"
 SPRITES_SRC = "/tmp/pokered_sprites.asm"
+MAPS_SRC = "/tmp/pokered_maps.asm"
 OUT = "/home/vlad/pokemon-agent/pokemon_agent/gen1_data.py"
+
+# ROM constant -> the display spelling the rest of the codebase matches on.
+# Everything else is Title Cased from the constant. Keys here are the ones
+# referenced by name elsewhere (goal text, pc_centers.json, the autopilot),
+# so changing one silently breaks a lookup.
+MAP_ALIASES = {
+    "OAKS_LAB": "Oak's Lab",
+    "BLUES_HOUSE": "Blue's House",
+    "MUSEUM_1F": "Pewter Museum 1F",
+    "MUSEUM_2F": "Pewter Museum 2F",
+}
 
 # db WATER, FIRE, SUPER_EFFECTIVE
 EFFECT_MULT = {
@@ -64,6 +76,37 @@ def parse_sprites(path):
                                name, val, ordinal)
             ordinal = val
         out[ordinal] = name.replace("_", " ").title()
+        ordinal += 1
+    return out
+
+
+def parse_maps(path):
+    """constants/map_constants.asm -> {id: display name}.
+
+    The map table is one flat ``const_def`` run, so the ordinal IS the ROM map
+    id. red.py's hand-maintained MAP_NAMES was missing the Viridian Forest
+    South Gate entry, which shifted every id from 50 up by one - so map 51
+    (the real Viridian Forest) was reported as "Pewter Museum 1F" and the
+    agent believed it had reached Pewter City, while map 50 (a 5x4 gate with
+    no encounters) was reported as "Viridian Forest". Compiling removes that
+    whole class of error.
+    """
+    out = {}
+    started = False
+    ordinal = 0
+    for line in open(path):
+        if "const_def" in line and not line.strip().startswith(";"):
+            started = True
+            ordinal = 0
+            continue
+        if not started:
+            continue
+        m = re.match(r"\s*map_const\s+([A-Z0-9_]+)\s*,", line)
+        if not m:
+            continue
+        const = m.group(1)
+        # Display spellings the rest of the codebase already matches on.
+        out[ordinal] = MAP_ALIASES.get(const, const.replace("_", " ").title())
         ordinal += 1
     return out
 
@@ -127,8 +170,10 @@ def main():
     moves, effects = parse_moves(MOVES_SRC)
     types = parse_types(TYPES_SRC)
     sprites = parse_sprites(SPRITES_SRC)
+    maps = parse_maps(MAPS_SRC)
     print(f"parsed {len(moves)} moves, {len(effects)} effects, "
-          f"{len(types)} type matchups, {len(sprites)} sprites")
+          f"{len(types)} type matchups, {len(sprites)} sprites, "
+          f"{len(maps)} maps")
 
     # Assert the facts the policy depends on. A silent drift here is what
     # broke nurse detection before, so fail loudly instead.
@@ -138,6 +183,15 @@ def main():
     assert types[("bug", "poison")] == 2.0, "Gen 1 Bug vs Poison must be 2x"
     assert sprites.get(0x29) == "Nurse", sprites.get(0x29)
     assert sprites.get(0x1B) == "Silph Worker F", sprites.get(0x1B)
+    # The ids that were mislabelled by the old off-by-one table.
+    assert maps.get(0) == "Pallet Town", maps.get(0)
+    assert maps.get(1) == "Viridian City", maps.get(1)
+    assert maps.get(13) == "Route 2", maps.get(13)
+    assert maps.get(50) == "Viridian Forest South Gate", maps.get(50)
+    assert maps.get(51) == "Viridian Forest", maps.get(51)
+    assert maps.get(52) == "Pewter Museum 1F", maps.get(52)
+    assert maps.get(54) == "Pewter Gym", maps.get(54)
+    assert maps.get(58) == "Pewter Pokecenter", maps.get(58)
 
     lines = [
         '"""Gen 1 move + type data, compiled from the pokered disassembly.',
@@ -176,6 +230,15 @@ def main():
     lines.append("SPRITE_NURSE = 0x29      # Pokecenter nurse - talk to heal")
     lines.append("SPRITE_CLERK = 0x26      # Mart clerk")
     lines.append("SPRITE_LINK_RECEPTIONIST = 0x2A")
+    lines.append("")
+    lines.append("# ROM map id -> display name. The ordinal position in")
+    lines.append("# constants/map_constants.asm IS the map id used by wCurMap.")
+    lines.append("# A hand-maintained version was off by one from id 50 up, which")
+    lines.append("# reported the real Viridian Forest (51) as Pewter Museum 1F.")
+    lines.append("MAP_NAMES: dict = {")
+    for mid in sorted(maps):
+        lines.append(f"    0x{mid:02X}: {maps[mid]!r},")
+    lines.append("}")
     lines.append("")
 
     with open(OUT, "w") as f:
