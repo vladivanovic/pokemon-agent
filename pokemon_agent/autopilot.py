@@ -1721,16 +1721,19 @@ class HermesDriver:
                 # Always offered, not only when the frontier is empty: if every
                 # frontier path is blocked mid-route the agent still needs a way
                 # to nudge past the obstruction.
-                # Exclude upward ledge crossing: ledges are passable DOWNWARD only.
-                ledge_grid = col.get("ledges") or [[False]*10 for _ in range(9)]
-                for name in _legal_dirs(passable):
-                    dr, dc = _DIRS[name]
-                    # Going up (north) through a ledge is blocked; going down (south)
-                    # through a ledge is allowed (engine handles the wrap-through).
-                    nr, nc = PLAYER_ROW + dr, PLAYER_COL + dc
-                    if dr < 0 and 0 <= nr < 9 and 0 <= nc < 10 and ledge_grid[nr][nc]:
-                        continue  # skip moving up through a ledge
-                    criteria[name] = f"Move one tile {name.split('_')[1]}"
+                # EXCEPTION: when a named route or heal route is active, single
+                # steps are noise that lets Von pick walk_down over the route.
+                # The route handler already emits the full walk sequence.
+                if not directed:
+                    ledge_grid = col.get("ledges") or [[False]*10 for _ in range(9)]
+                    for name in _legal_dirs(passable):
+                        dr, dc = _DIRS[name]
+                        # Going up (north) through a ledge is blocked; going down (south)
+                        # through a ledge is allowed (engine handles the wrap-through).
+                        nr, nc = PLAYER_ROW + dr, PLAYER_COL + dc
+                        if dr < 0 and 0 <= nr < 9 and 0 <= nc < 10 and ledge_grid[nr][nc]:
+                            continue  # skip moving up through a ledge
+                        criteria[name] = f"Move one tile {name.split('_')[1]}"
 
                 # Do not offer the boundary we just crossed. In a map we have
                 # to TRAVERSE (Viridian Forest) the reverse walk was exactly
