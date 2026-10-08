@@ -717,23 +717,44 @@ class HermesDriver:
     def _select_move(self, idx: int, moves: List[Any]) -> bool:
         """Open the move menu and select slot *idx* (0-based in ``moves``).
 
-        The Gen 1 move menu does NOT open with the cursor on move 0 - it
-        remembers the previous selection - and the cursor WRAPS. So the old
-        "press down idx times" could not reach a target from an unknown
-        start; proven live when it landed on a 0-PP Vine Whip and wedged on
+        The Gen 1 move menu opens on the previously selected slot and WRAPS,
+        so a fixed "press down * idx" from an unknown start never worked.
+        Proven live when it landed on a 0-PP Vine Whip and wedged on
         "No PP left for this move!" for 370+ turns.
 
-        Instead: open the menu, read the real cursor, then press the shortest
-        number of times to reach the target. A "No PP" message can already be
-        on screen from a previous attempt, so the A press is retried while the
-        cursor refuses to move.
+        Also: a stale "No PP" message can be on screen when the menu opens.
+        That message consumes the first A press (it just dismisses the dialog),
+        leaving the cursor unmoved. We loop the A press until the cursor
+        actually advances.
         """
         n = max(1, len(moves))
-        target = idx + 1                     # move menu positions are 1-based
+        target = idx + 1                     # menu positions are 1-based
         if not self.act(["press_b", "wait_30", "press_up", "press_left",
                          "press_a", "wait_30"]):
             return False
 
+        # Dismiss any stale "No PP" message and ensure the move menu is open.
+        # The first A after FIGHT opens the move menu; if a "No PP" dialog
+        # was already showing, that A just dismisses it and the cursor stays.
+        # Keep pressing A until the cursor actually changes from its initial
+        # value or we time out.
+        initial_cur = None
+        for _ in range(8):
+            try:
+                b = (self._get("/state").json().get("battle") or {})
+            except Exception:
+                return False
+            cur = b.get("menu_index")
+            if not isinstance(cur, int):
+                return False
+            if initial_cur is None:
+                initial_cur = cur
+            if cur != initial_cur:
+                break
+            if not self.act(["press_a", "wait_20"]):
+                return False
+
+        # Now navigate from wherever the cursor actually is.
         cur = None
         for _ in range(4):
             try:
@@ -748,6 +769,7 @@ class HermesDriver:
                 break
             if not self.act(["press_down"] * delta + ["wait_20"]):
                 return False
+
         if cur != target:
             logger.warning("move select: could not reach slot %d (cursor %s "
                            "of %d)", idx, cur, n)
