@@ -3,9 +3,11 @@
 Two brains are supported:
 
   Hermes (default) - a real Hermes Agent session with the `pokemon-player`
-    skill, vision, memory and the terminal tool, driven one turn at a time via
+    skill, terminal tool, memory, driven one turn at a time via
     `hermes chat --resume`. Slow (seconds to minutes per turn on local
-    hardware) but can reason, narrate, search the web and set objectives.
+    hardware) but can reason, narrate and set objectives. The web toolset is
+    DISABLED - prompts never mention web search and the model does not loop
+    on tool_search looking for removed tools.
 
   Laya (--laya)    - an in-process decision model. Milliseconds per turn,
     returns a structured choice from a fixed candidate set, no text
@@ -108,8 +110,8 @@ Do not narrate, do not set objectives yet. Current phase: {phase}
 
 Reply with one short sentence saying what you pressed.
 
-If you need information about the world (e.g., what a building does), you can use the web search tool."""
-
+If you need information about the world, read the MAP - it is ground truth
+read from game RAM. Do not search the web; the web toolset is disabled."""
 TURN_NUDGE = """You are playing Pokémon Red on the Hermes Plays Pokémon dashboard.
 
 Server: {server}
@@ -140,8 +142,8 @@ MAP:
 STATE:
 {state}
 
-If you need information about the world (e.g., what a building does), you can use the web search tool."""
-
+If you need information about the world, read the MAP - it is ground truth
+read from game RAM. Do not search the web; the web toolset is disabled."""
 ESCALATION_NUDGE = """You are playing Pokémon Red. Laya (a fast movement model) has
 been driving, but nothing has advanced for a while, so YOU have control for the
 next {budget} turns. This is turn {n} of {budget}.
@@ -197,8 +199,8 @@ MAP:
 STATE:
 {state}
 
-If you need information about the world (e.g., what a building does), you can use the web search tool."""
-
+If you need information about the world, read the MAP - it is ground truth
+read from game RAM. Do not search the web; the web toolset is disabled."""
 
 # ---------------------------------------------------------------------------
 # State trimming
