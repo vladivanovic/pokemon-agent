@@ -93,6 +93,7 @@ class MapGraph:
         self._portal_index: Dict[str, str] = {}
         self._load_maps()
         self._build_adjacency()
+        self._build_alias_index()
         self.load_portals()
 
     # --- load ---------------------------------------------------------------
@@ -130,6 +131,27 @@ class MapGraph:
         """
         self._portal_index: Dict[str, str] = {_canon(n): n for n in self.portals}
 
+    def _build_alias_index(self) -> None:
+        """Map alias spellings to their canonical graph names.
+
+        gen_gen1_data.py compiles MAP_ALIASES to unify the MAP_NAMES name
+        space with map_data.json. The resolver needs to know both spellings
+        resolve to the same canonical key. Since the canonical key is the
+        map_data.json name, we add the MAP_NAMES spelling as an alias.
+        """
+        # gen_gen1_data.MAP_ALIASES maps ROM constant -> display name.
+        # The constant is VIRIDIAN_FOREST_SOUTH_GATE -> 'Route 2 Gate Viridian'.
+        # MAP_NAMES[50] becomes 'Route 2 Gate Viridian' (the alias).
+        # The original spellings (before aliasing) would have been:
+        # VIRIDIAN_FOREST_SOUTH_GATE -> 'Viridian Forest South Gate'
+        # So we need to know which spellings map to which canonical names.
+        # Hard-code the known aliases for now.
+        self._alias_index: Dict[str, str] = {
+            _canon("Viridian Forest South Gate"): "Route 2 Gate Viridian",
+            _canon("Viridian Forest Gate (S)"): "Route 2 Gate Viridian",
+            _canon("Route 2 Gate"): "Route 2 Gate Viridian",
+        }
+
     def resolve(self, name: Optional[str]) -> Optional[str]:
         """Canonical graph key for a map name, ignoring case and spacing.
 
@@ -146,6 +168,11 @@ class MapGraph:
         got = self._index.get(_canon(name))
         if got:
             return got
+        # Check alias spellings (e.g. 'Viridian Forest South Gate' ->
+        # 'Route 2 Gate Viridian')
+        got = getattr(self, "_alias_index", {}).get(_canon(name))
+        if got:
+            return got
         return getattr(self, "_portal_index", {}).get(_canon(name))
 
 
@@ -160,6 +187,15 @@ class MapGraph:
                     continue
                 self.adj[a][b] = d
                 self.adj[b][a] = (-d[0], -d[1])
+        # Explicit edges for gate interiors that don't touch their outdoor
+        # neighbours in the rect geometry but are known connectors.
+        # Route 2 Gate Viridian (id 50) sits at the south end of Viridian
+        # Forest and connects south to Route 2. The rects don't touch,
+        # so add the edge manually.
+        if "Route 2 Gate Viridian" in self.maps and "Route 2" in self.maps:
+            # From the gate, Route 2 is SOUTH (player walks down to exit)
+            self.adj["Route 2 Gate Viridian"]["Route 2"] = (1, 0)
+            self.adj["Route 2"]["Route 2 Gate Viridian"] = (-1, 0)
         edges = sum(len(v) for v in self.adj.values()) // 2
         logger.info("map graph: %d adjacency edges", edges)
 
@@ -258,6 +294,23 @@ class MapGraph:
         if dest_id is None:
             return False
         dest_name = warp.get("dest_map_name")
+        # dest_map=255 is Gen 1's "return to last outdoor map" sentinel.
+        # It doesn't have a fixed name - the actual destination depends on
+        # which outdoor map the player came from. Since we can't know that
+        # from RAM, infer from the geographic graph: a 255 warp on a map
+        # boundary means "exit this direction". If the current map has a
+        # geographic neighbor in that direction, use it.
+        if dest_id == 255:
+            # dest_map=255 is Gen 1's "return to last outdoor map" sentinel.
+            # It doesn't have a fixed name - the actual destination depends on
+            # which outdoor map the player came from. We CANNOT reliably infer it
+            # from geography alone (a gate interior may have 255 warps on multiple
+            # sides leading to DIFFERENT maps - e.g. north->Forest, south->Route 2).
+            # Recording it as the single geographic neighbor gives the WRONG
+            # direction. Instead, skip 255 entirely - the exit/edge logic handles
+            # these connections, and the portal table already learns them from
+            # the outdoor side (Route 2 -> Gate was correctly learned).
+            pass
         if not dest_name or dest_name.startswith("Map "):
             try:
                 from pokemon_agent.memory.red import MAP_NAMES
@@ -384,6 +437,25 @@ class MapGraph:
         d = self._portal_direction(a, b)
         if d is not None:
             return d
+        # Explicit adjacency edges (including manually added gate edges)
+        # outrank rectangle geometry and coordinate fallback.
+        d = self.adj.get(a, {}).get(b)
+        if d is not None:
+            return d
+        # If only one side is in the geographic map, try the reverse:
+        # the other map's door to THIS map is the reverse direction.
+        if a in self.maps and b not in self.maps:
+            # a is a region, b is an interior; b's door to a is the direction
+            # FROM b TO a, so from a's perspective it's the reverse.
+            back = self._portal_direction(b, a)
+            if back is not None:
+                return (-back[0], -back[1])
+        # If there's a geographic edge FROM b TO a (i.e. b knows a),
+        # then from a's perspective the edge is the reverse of that.
+        if b in self.maps and a not in self.maps:
+            d = self.adj.get(b, {}).get(a)
+            if d is not None:
+                return (-d[0], -d[1])
         if a not in self.maps or b not in self.maps:
             return None
         d = _touch(_rect(self.maps[a]["coord"], self.maps[a]["size"]),

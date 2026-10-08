@@ -565,7 +565,7 @@ MAP_NAMES: dict = {
     0x2F: 'Viridian Forest North Gate',
     0x30: 'Route 2 Trade House',
     0x31: 'Route 2 Gate',
-    0x32: 'Viridian Forest South Gate',
+    0x32: 'Route 2 Gate Viridian',
     0x33: 'Viridian Forest',
     0x34: 'Pewter Museum 1F',
     0x35: 'Pewter Museum 2F',
