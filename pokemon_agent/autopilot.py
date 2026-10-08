@@ -714,6 +714,45 @@ class HermesDriver:
             logger.warning("action %s failed: %s %s", actions, exc, body[:200])
             return False
 
+    def _select_move(self, idx: int, moves: List[Any]) -> bool:
+        """Open the move menu and select slot *idx* (0-based in ``moves``).
+
+        The Gen 1 move menu does NOT open with the cursor on move 0 - it
+        remembers the previous selection - and the cursor WRAPS. So the old
+        "press down idx times" could not reach a target from an unknown
+        start; proven live when it landed on a 0-PP Vine Whip and wedged on
+        "No PP left for this move!" for 370+ turns.
+
+        Instead: open the menu, read the real cursor, then press the shortest
+        number of times to reach the target. A "No PP" message can already be
+        on screen from a previous attempt, so the A press is retried while the
+        cursor refuses to move.
+        """
+        n = max(1, len(moves))
+        target = idx + 1                     # move menu positions are 1-based
+        if not self.act(["press_b", "wait_30", "press_up", "press_left",
+                         "press_a", "wait_30"]):
+            return False
+
+        cur = None
+        for _ in range(4):
+            try:
+                b = (self._get("/state").json().get("battle") or {})
+            except Exception:
+                return False
+            cur = b.get("menu_index")
+            if not isinstance(cur, int):
+                return False
+            delta = (target - cur) % n
+            if delta == 0:
+                break
+            if not self.act(["press_down"] * delta + ["wait_20"]):
+                return False
+        if cur != target:
+            logger.warning("move select: could not reach slot %d (cursor %s "
+                           "of %d)", idx, cur, n)
+        return self.act(["press_a", "wait_60"])
+
     def event(self, **kw) -> None:
         """Push narration to the dashboard. Never affects the game."""
         try:
@@ -1752,13 +1791,14 @@ class HermesDriver:
                        "press_a", "wait_30", "press_a", "wait_60"]
         elif choice.startswith("move_") and choice[5:].isdigit():
             # Specific move selection (e.g. move_1 = second move in the list).
-            # FIGHT, then navigate down (i-1) entries to the move, confirm.
-            # Cursor starts at the first move after FIGHT is chosen.
+            # This one cannot be expressed as a fixed action list: the move
+            # menu opens on the previously selected slot and wraps, so the
+            # right number of presses depends on where the cursor actually is.
+            # _select_move opens the menu, reads the cursor and navigates, so
+            # it runs the buttons itself and leaves `actions` empty.
             idx = int(choice[5:])
-            actions = ["press_b", "wait_30", "press_up", "press_left",
-                       "press_a", "wait_30"]
-            actions += ["press_down"] * idx
-            actions += ["press_a", "wait_60"]
+            self._select_move(idx, mine.get("moves") or [])
+            actions = []
         elif choice == "flee":
             actions = ["press_b", "wait_30", "press_down", "press_right",
                        "press_a", "wait_60"]
