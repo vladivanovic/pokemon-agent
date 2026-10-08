@@ -1356,6 +1356,37 @@ class HermesDriver:
                         f"Head {d} for several tiles, continuing in that "
                         f"direction to reach a new area")
 
+                # --- C2d: leave building ---
+                # An interior (not in the map graph) where the goal does not
+                # live is a dead end, but the seen_maps guard below suppresses
+                # its exit door, so the agent wanders room-to-room until it
+                # stumbles onto the warp. Offer the exit explicitly: path to
+                # the nearest warp cell and step onto it.
+                in_graph = bool(self.map_graph and
+                                self.map_graph.resolve(cur_map))
+                # If the goal names THIS building, its business is here -
+                # leaving would abandon the errand (Oak's Lab / the parcel).
+                goal_here = bool(cur_map and goal
+                                 and cur_map.lower() in goal.lower())
+                if (not route_active and not on_warp and warps
+                        and not in_graph and not goal_here):
+                    best = None
+                    for w in warps:
+                        wr, wc = w.get("row"), w.get("col")
+                        if wr is None or wc is None:
+                            continue
+                        path = _path_to(passable, (wr, wc), ledges=ledge_grid)
+                        if path and (best is None or len(path) < len(best[1])):
+                            best = (w, path)
+                    if best is not None:
+                        w, path = best
+                        dest = (w.get("dest_map_name") or
+                                f"map {w.get('dest_map')}")
+                        criteria[f"leave_building_{w.get('cell')}"] = (
+                            f"Walk to the exit at {w.get('cell')} and step "
+                            f"onto it to return to {dest} - this building "
+                            f"has nothing you need for the objective")
+
                 # --- C3: single steps ---
                 # Always offered, not only when the frontier is empty: if every
                 # frontier path is blocked mid-route the agent still needs a way
@@ -1578,6 +1609,18 @@ class HermesDriver:
             order = ["walk_down", "walk_down", "walk_up",
                      "walk_left", "walk_right"]
             actions = [order[self.turn % len(order)]] * 2
+        elif choice.startswith("leave_building_"):
+            # Interior with no business here: walk to the exit and step on it.
+            label = choice[len("leave_building_"):]
+            target = next(((w["row"], w["col"]) for w in warps
+                           if w.get("cell") == label), None)
+            if target is not None:
+                actions = _path_to(passable, target, ledges=ledge_grid)
+                if actions:
+                    actions = actions + ["walk_down"]
+            if not actions:
+                legal = list(_legal_dirs(passable))
+                actions = [legal[0]] if legal else ["wait_30"]
         elif choice.startswith("route_toward_"):
             # Map-graph edge hop: a long run in one compass direction, enough
             # to cross the screen and trigger the map seam at the boundary.
