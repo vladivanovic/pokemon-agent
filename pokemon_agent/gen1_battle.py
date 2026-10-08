@@ -177,12 +177,16 @@ def choose(state: Dict[str, Any]) -> Optional[str]:
                     detail.get("mult"), detail.get("stab"))
         return f"move_{slot}"
 
-    # No damaging move with PP. If we are also hurt, a status move loses the
-    # war of attrition - leave instead. Only in a wild battle: RUN fails
-    # against a trainer and would waste the turn.
+    # No damaging move with PP. A status move cannot reduce the enemy's HP, so
+    # a wild battle is now unwinnable by attrition - leave, whatever our OWN HP
+    # is. Requiring hp_frac < 0.35 here was a real wedge: a full-HP Ivysaur with
+    # Tackle/Leech Seed/Vine Whip all at 0 PP sat in a Growl loop until the
+    # stall timer fired and escalated to Hermes. Only in a wild battle: RUN
+    # fails against a trainer and would just waste the turn.
     btype = str(battle.get("type") or "").lower()
-    if hp_frac < 0.35 and btype != "trainer":
-        logger.info("battle policy: no damaging PP and hp %.0f%% - fleeing",
+    if btype != "trainer":
+        logger.info("battle policy: no damaging PP (hp %.0f%%) - fleeing this "
+                    "wild battle, we cannot reduce its HP",
                     hp_frac * 100)
         return "flee"
 
