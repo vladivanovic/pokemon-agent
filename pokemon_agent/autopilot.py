@@ -1494,6 +1494,18 @@ class HermesDriver:
             else:
                 legal = list(_legal_dirs(passable))
                 actions = [legal[0]] if legal else ["wait_30"]
+        elif choice == "pkmn" or choice == "item":
+            # PKMN/ITEM submenu selection. B first (cursor may be in a
+            # different menu quadrant), then the submenu position:
+            # FIGHT=up+left, PKMN=up+right, ITEM=down+left, RUN=down+right.
+            # From anywhere in the 2x2 menu, cursor movement clamps at the
+            # edges - so drive to the submenu's corner, then confirm.
+            if choice == "pkmn":
+                actions = ["press_b", "wait_30", "press_up", "press_right",
+                           "press_a", "wait_60"]
+            else:
+                actions = ["press_b", "wait_30", "press_down", "press_left",
+                           "press_a", "wait_60"]
         else:
             logger.warning("unhandled laya choice %r - waiting", choice)
             actions = ["wait_30"]
