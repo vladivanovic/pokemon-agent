@@ -179,6 +179,14 @@ class MapGraph:
             except Exception:
                 dest_name = None
         dest_name = self.resolve(dest_name) or dest_name
+        # Drop warps we cannot name. During a map transition wNumberOfWarps
+        # briefly reads garbage and the table yields dozens of phantom cells
+        # (all dest_map=255, no name); persisting them marks half the screen
+        # as "doors", which then blocks route paths and misleads
+        # leave_building. 255 is Gen 1's "return to the last outdoor map"
+        # sentinel and is handled by the exit logic, not by name routing.
+        if not dest_name:
+            return False
         cell = warp.get("cell")
         if not cell:
             return False
