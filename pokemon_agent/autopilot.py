@@ -525,6 +525,16 @@ class HermesDriver:
         self.last_mode_switch: float = time.perf_counter()
         self._hermes_last_pos: Optional[Any] = None
         self.hermes_budget_max: int = 30
+        # --- empirical edge verification ------------------------------------
+        # map_data.json adjacency is geometric, not gameplay truth: Route 2's
+        # rectangle touches Pewter City's, but in-game Viridian Forest sits
+        # between them (the gates are drawn a tile off Route 2, so the real
+        # gate edges never appear). Rather than hand-patch one case, track
+        # route hops that never produce a transition and stop offering them -
+        # which drops route_active and lets local navigation find the gate.
+        self.edge_fails: Dict[tuple, int] = {}
+        self._route_pending: Optional[tuple] = None
+        self._route_last_pos: Optional[tuple] = None
         # --- low-level scorer: laya | von | expert[:base] ----------------
         # Selectable via --scorer, $POKEMON_SCORER, or config. The scorer
         # replaces Laya's raw router for pick-one-of-N decisions; "expert"
@@ -954,6 +964,14 @@ class HermesDriver:
                 break
         else:
             d = self.map_graph.first_hop_direction(cur_map, dest)
+            # Skip an edge we have empirically proven does not open. Returning
+            # an empty set drops route_active, which restores goto_/explore_
+            # so the agent can find a gate instead of pressing a fake seam.
+            if d and self.edge_fails.get((cur_key, d), 0) >= 4:
+                logger.info("route %s->%s via %s is a proven dead edge - "
+                            "falling back to local navigation",
+                            cur_key, dest, d)
+                d = None
             if d:
                 out[f"route_toward_{d}"] = (
                     f"Head {d}, walking off the edge of {cur_map} to reach "
@@ -1192,6 +1210,26 @@ class HermesDriver:
             self.recent.clear()          # a real transition is not a loop
         key = (cur_map, pos.get("x"), pos.get("y"))
         self.visits[key] = self.visits.get(key, 0) + 1
+
+        # --- empirical edge verification -----------------------------------
+        # Resolve the last route hop: if the map changed the edge is real and
+        # any failure count resets. If we neither transitioned nor moved, we
+        # are pressed against a boundary that does not open - count it, and
+        # after enough tries _graph_travel_options stops offering it, which
+        # restores goto_/explore_ so the agent can find a gate instead.
+        if self._route_pending:
+            rmap, rdir = self._route_pending
+            moved_since = (pos.get("x"), pos.get("y")) != self._route_last_pos
+            if cur_map != rmap:
+                self.edge_fails.pop((rmap, rdir), None)
+            elif not moved_since:
+                n = self.edge_fails.get((rmap, rdir), 0) + 1
+                self.edge_fails[(rmap, rdir)] = n
+                if n == 4:
+                    logger.warning(
+                        "edge %s/%s never transitions (%d tries) - treating "
+                        "as a fake adjacency", rmap, rdir, n)
+            self._route_pending = None
 
         # --- global map graph: learn portals as we read them ---------------
         # Each warp read from RAM is a durable edge in the map graph. Persist
@@ -1732,6 +1770,12 @@ class HermesDriver:
                 path = _path_toward_edge(passable, d, avoid=avoid,
                                          ledges=ledge_grid)
                 actions = path or [f"walk_{d}"] * 8
+                # Remember the hop so the next turn can tell whether this
+                # edge actually opens (see the empirical edge check).
+                rkey = (self.map_graph.resolve(cur_map) or cur_map
+                        if self.map_graph else cur_map)
+                self._route_pending = (rkey, d)
+                self._route_last_pos = (pos.get("x"), pos.get("y"))
             else:
                 legal = list(_legal_dirs(passable))
                 actions = [legal[0]] if legal else ["wait_30"]
