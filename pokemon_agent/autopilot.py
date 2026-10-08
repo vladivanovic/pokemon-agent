@@ -91,6 +91,10 @@ _DELTA_TO_WALK: Dict[Tuple[int, int], str] = {
     (0, -1): "walk_up", (0, 1): "walk_down",
     (-1, 0): "walk_left", (1, 0): "walk_right",
 }
+# (dy, dx) map-tile delta -> compass, for the geographic fallback below.
+_DELTA_TO_COMPASS: Dict[Tuple[int, int], str] = {
+    (-1, 0): "north", (1, 0): "south", (0, -1): "west", (0, 1): "east",
+}
 COL_LABELS_LOCAL = "ABCDEFGHIJ"
 
 
@@ -1090,6 +1094,23 @@ class HermesDriver:
             return out
         route = self.map_graph.route(cur_map, dest)
         if not route or len(route) < 2:
+            # No graph path. The map may still be reachable in game but
+            # disconnected in the graph: Viridian Forest's only known
+            # neighbours are two dead-end gates, and its real exits are edge
+            # connections with no warp cells to learn from. Fall back to
+            # geography - head in the compass direction of the destination and
+            # let the empirical edge check retire a direction that never opens.
+            if not dest or dest not in self.map_graph.maps:
+                return out
+            geo = self.map_graph._direction_between(cur_key, dest)
+            compass = (_DELTA_TO_COMPASS.get((geo[0], geo[1]))
+                       if geo else None)
+            walk = COMPASS_TO_WALK.get(compass) if compass else None
+            if compass and walk and self.edge_fails.get((cur_key, walk), 0) < 4:
+                out[f"route_toward_{compass}"] = (
+                    f"Head {compass} toward {dest}. No mapped route exists from "
+                    f"{cur_map} (its only known links are dead ends), but "
+                    f"{dest} lies {compass} of here - keep going {compass}.")
             return out
         nxt = route[1]
         chain = " -> ".join(route)
