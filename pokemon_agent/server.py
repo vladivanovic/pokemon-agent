@@ -581,6 +581,18 @@ def _get_state_dict() -> dict:
     except Exception as exc:  # noqa: BLE001
         state["collision"] = {"valid": False,
                               "reason": f"{type(exc).__name__}: {exc}"}
+
+    # Pokecenter detection needs the collision grid (nurse sprites), so it can
+    # only run now. It used to sit inside build_game_state where that grid did
+    # not exist yet, which silently produced None on every map.
+    try:
+        from pokemon_agent.state.builder import annotate_nearest_pokecenter
+        annotate_nearest_pokecenter(state, state.get("collision") or {})
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("pokecenter annotation failed", exc_info=True)
+        state["nearest_pokecenter_dist"] = None
+        state["nearest_pokecenter_dir"] = None
+        state["nearest_pokecenter_src"] = f"error: {exc}"
     return state
 
 
