@@ -160,10 +160,15 @@ def _choose_status(state: Dict[str, Any]) -> Optional[str]:
 def choose(state: Dict[str, Any]) -> Optional[str]:
     """Best battle option for this turn, or None to defer to the scorer.
 
-    Returns ``move_<i>`` naming the move menu slot, which the autopilot's
-    dispatch already understands. Damaging moves win on merit; if none is
-    usable, the best status move is chosen instead of deferring.
+    Returns ``move_<i>`` (a move menu slot the autopilot's dispatch already
+    understands) or ``flee``. Damaging moves win on merit; with none usable
+    a status move is chosen - except when we are hurt, where a status move
+    just burns turns while the enemy attacks, so leaving is better.
     """
+    mine = state.get("active_mon") or {}
+    battle = state.get("battle") or {}
+    hp_frac = (mine.get("hp") or 0) / (mine.get("max_hp") or 1)
+
     ranked = score_moves(state)
     if ranked and ranked[0][1] > 0:
         slot, score, detail = ranked[0]
@@ -171,6 +176,14 @@ def choose(state: Dict[str, Any]) -> Optional[str]:
                     slot, detail.get("name"), detail.get("power"),
                     detail.get("mult"), detail.get("stab"))
         return f"move_{slot}"
-    # No damaging move with PP. A status move still beats handing the turn
-    # to a scorer that has no type awareness.
+
+    # No damaging move with PP. If we are also hurt, a status move loses the
+    # war of attrition - leave instead. Only in a wild battle: RUN fails
+    # against a trainer and would waste the turn.
+    btype = str(battle.get("type") or "").lower()
+    if hp_frac < 0.35 and btype != "trainer":
+        logger.info("battle policy: no damaging PP and hp %.0f%% - fleeing",
+                    hp_frac * 100)
+        return "flee"
+
     return _choose_status(state)
