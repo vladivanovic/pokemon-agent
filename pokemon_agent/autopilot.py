@@ -338,6 +338,53 @@ def _path_to(passable: List[List[bool]], target: Tuple[int, int],
             q.append(((nr, nc), path + [name]))
     return []
 
+def _path_toward_edge(passable: List[List[bool]], direction: str,
+                      avoid: Optional[set] = None,
+                      ledges: Optional[List[List[bool]]] = None,
+                      limit: int = 14) -> List[str]:
+    """BFS to the reachable cell furthest along *direction* from E5.
+
+    A blind ``walk_up`` x8 run is what walked the agent into Blue's House on
+    the way out of Pallet Town: the door sits on the route to the north edge
+    and stepping onto it triggers the warp. Following a path lets us route
+    around door tiles (``avoid``) while still heading the right way.
+
+    Returns walk actions, or [] when no progress can be made.
+    """
+    dr, dc = _DIRS[f"walk_{direction}"]
+    avoid = avoid or set()
+    start = (PLAYER_ROW, PLAYER_COL)
+    seen: set = {start}
+    q: deque = deque([(start, [])])
+    best: Tuple[int, List[str]] = (0, [])   # (projection, path)
+    while q:
+        (r, c), path = q.popleft()
+        # Projection along the travel axis: how far in *direction* we got.
+        proj = (r - PLAYER_ROW) * dr + (c - PLAYER_COL) * dc
+        if proj > best[0]:
+            best = (proj, path)
+        if len(path) >= limit:
+            continue
+        for name, (ddr, ddc) in _DIRS.items():
+            nr, nc = r + ddr, c + ddc
+            if (nr, nc) in seen:
+                continue
+            if not (0 <= nr < GRID_ROWS and 0 <= nc < GRID_COLS):
+                continue
+            if ledges and nr < len(ledges) and nc < len(ledges[nr]) \
+                    and ledges[nr][nc] and name != "walk_down":
+                continue
+            if not _grid_open(passable, nr, nc):
+                continue
+            if (nr, nc) in avoid:
+                # Never step on a door: route_toward_ means walk off the map
+                # edge, so any warp tile is a wrong turn.
+                continue
+            seen.add((nr, nc))
+            q.append(((nr, nc), path + [name]))
+    return best[1]
+
+
 def _frontier_targets(passable: List[List[bool]], visits: Dict[tuple, int],
                       cur_map: str, px: int, py: int,
                       union_global: Optional[set] = None,
@@ -1622,11 +1669,16 @@ class HermesDriver:
                 legal = list(_legal_dirs(passable))
                 actions = [legal[0]] if legal else ["wait_30"]
         elif choice.startswith("route_toward_"):
-            # Map-graph edge hop: a long run in one compass direction, enough
-            # to cross the screen and trigger the map seam at the boundary.
+            # Map-graph edge hop: follow a path to the far side of the screen
+            # in that compass direction, routing around door tiles. A blind
+            # walk x8 run steps straight into any building on the way.
             d = choice[len("route_toward_"):]
             if d in {n.split("_")[1] for n in _DIRS}:
-                actions = [f"walk_{d}"] * 8
+                avoid = {(w.get("row"), w.get("col")) for w in warps
+                         if w.get("row") is not None}
+                path = _path_toward_edge(passable, d, avoid=avoid,
+                                         ledges=ledge_grid)
+                actions = path or [f"walk_{d}"] * 8
             else:
                 legal = list(_legal_dirs(passable))
                 actions = [legal[0]] if legal else ["wait_30"]
