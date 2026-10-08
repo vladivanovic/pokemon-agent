@@ -9,6 +9,7 @@ pokemon_agent/emulator.py
 pokemon_agent/hermes_api_driver.py
 pokemon_agent/overlay.py
 pokemon_agent/pathfinding.py
+pokemon_agent/scorer.py
 pokemon_agent/server.py
 pokemon_agent/sessions.py
 pokemon_agent.egg-info/PKG-INFO
