@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-from pokemon_agent.gen1_data import MOVE_TYPE_POWER, TYPE_CHART
+from pokemon_agent.gen1_data import MOVE_TYPE_POWER, MOVE_EFFECT, TYPE_CHART
 
 logger = logging.getLogger("pokemon-agent.gen1_battle")
 
@@ -34,6 +34,37 @@ logger = logging.getLogger("pokemon-agent.gen1_battle")
 SPECIAL_TYPES = frozenset({
     "fire", "water", "grass", "electric", "psychic", "ice", "dragon",
 })
+
+# Ranking for the no-damaging-move case, keyed by the game's own effect
+# constant (compiled from pokered, so it cannot drift from the ROM).
+# (category, tier) - higher tier is the better use of a turn.
+EFFECT_RANK: Dict[str, Tuple[str, int]] = {
+    "SLEEP_EFFECT":       ("inflict", 90),
+    "HEAL_EFFECT":        ("heal",    85),
+    "PARALYZE_EFFECT":    ("inflict", 70),
+    "CONFUSION_EFFECT":   ("inflict", 60),
+    "POISON_EFFECT":      ("inflict", 55),
+    "LEECH_SEED_EFFECT":  ("drain",   50),
+    "ATTACK_UP2_EFFECT":  ("boost",   40),
+    "DEFENSE_UP2_EFFECT": ("boost",   40),
+    "SPECIAL_UP2_EFFECT": ("boost",   40),
+    "SPEED_UP2_EFFECT":   ("boost",   38),
+    "EVASION_UP1_EFFECT": ("boost",   35),
+    "ATTACK_DOWN1_EFFECT":    ("drop", 20),
+    "DEFENSE_DOWN1_EFFECT":   ("drop", 20),
+    "SPEED_DOWN1_EFFECT":     ("drop", 18),
+    "SPECIAL_DOWN1_EFFECT":   ("drop", 20),
+    "ACCURACY_DOWN1_EFFECT":  ("drop", 22),
+}
+
+# Which condition each inflicting effect sets, matching the status byte
+# decoded by memory/red.py _decode_status (so we never re-apply one).
+EFFECT_STATUS: Dict[str, Optional[str]] = {
+    "SLEEP_EFFECT": "SLP",
+    "PARALYZE_EFFECT": "PAR",
+    "POISON_EFFECT": "PSN",
+    "CONFUSION_EFFECT": None,   # volatile; not in the status byte
+}
 
 
 def _type_multiplier(atk_type: str, defenders: List[str]) -> float:
@@ -82,25 +113,64 @@ def score_moves(state: Dict[str, Any]) -> List[Tuple[int, float, Dict[str, Any]]
     return ranked
 
 
+def _choose_status(state: Dict[str, Any]) -> Optional[str]:
+    """Best usable status move, or None when nothing sensible remains.
+
+    Reached only when no move with PP can deal damage. Rather than deferring
+    to a model that is not type-aware, rank the status moves by the game's
+    own effect constant and skip ones that cannot do anything: a sleep/para/
+    poison move on an already-statused enemy fails, and healing at high HP
+    wastes the turn.
+    """
+    mine = state.get("active_mon") or {}
+    enemy = (state.get("battle") or {}).get("enemy") or {}
+    enemy_status = str(enemy.get("status") or "OK").upper()
+    hp = mine.get("hp") or 0
+    max_hp = mine.get("max_hp") or 1
+    hp_frac = hp / max_hp
+
+    cands: List[Tuple[int, int, str]] = []
+    for i, mv in enumerate(mine.get("moves") or []):
+        if not isinstance(mv, dict) or (mv.get("pp", 0) or 0) <= 0:
+            continue
+        name = str(mv.get("name") or "")
+        effect = MOVE_EFFECT.get(name.lower())
+        if not effect:
+            continue
+        category, tier = EFFECT_RANK.get(effect, (None, 0))
+        if category is None:
+            continue
+        if category == "inflict":
+            want = EFFECT_STATUS.get(effect)
+            if want and enemy_status != "OK":
+                continue        # already suffering it - re-applying fails
+        if category == "heal" and hp_frac > 0.5:
+            continue            # nothing to heal
+        cands.append((tier, i, name))
+
+    if not cands:
+        return None
+    cands.sort(key=lambda t: -t[0])
+    tier, slot, name = cands[0]
+    logger.info("battle policy: status move_%d %s (tier %d, enemy %s)",
+                slot, name, tier, enemy_status)
+    return f"move_{slot}"
+
+
 def choose(state: Dict[str, Any]) -> Optional[str]:
     """Best battle option for this turn, or None to defer to the scorer.
 
     Returns ``move_<i>`` naming the move menu slot, which the autopilot's
-    dispatch already understands, or None when no move with PP can deal
-    damage (nothing to gain over letting the configured scorer decide).
+    dispatch already understands. Damaging moves win on merit; if none is
+    usable, the best status move is chosen instead of deferring.
     """
     ranked = score_moves(state)
-    if not ranked:
-        return None
-    slot, score, detail = ranked[0]
-    if score <= 0:
-        # Every usable move is a status move or fully resisted. Falling back
-        # keeps this deterministic rule out of the one case where a model
-        # might actually help (and drains PP toward Struggle naturally).
-        logger.info("battle policy: no damaging move (%s) - deferring",
-                    detail.get("name"))
-        return None
-    logger.info("battle policy: move_%d %s (power=%s x%s stab x%s)",
-                slot, detail.get("name"), detail.get("power"),
-                detail.get("mult"), detail.get("stab"))
-    return f"move_{slot}"
+    if ranked and ranked[0][1] > 0:
+        slot, score, detail = ranked[0]
+        logger.info("battle policy: move_%d %s (power=%s x%s stab x%s)",
+                    slot, detail.get("name"), detail.get("power"),
+                    detail.get("mult"), detail.get("stab"))
+        return f"move_{slot}"
+    # No damaging move with PP. A status move still beats handing the turn
+    # to a scorer that has no type awareness.
+    return _choose_status(state)
