@@ -17,62 +17,103 @@ import logging
 from typing import Any, Dict
 
 from pokemon_agent.memory.reader import GameMemoryReader
+from pokemon_agent.gen1_data import SPRITE_NURSE
+from pokemon_agent.collision import PLAYER_ROW, PLAYER_COL
 
 logger = logging.getLogger("pokemon-agent.state")
 
 
-def _nearest_pokecenter_nurse(reader: GameMemoryReader) -> Optional[Tuple[int, int, int]]:
-    """
-    Returns (dx, dy, dist) where (dx,dy) is one step toward the closest
-    nurse tile, or None if no nurse on the current map.
-    Uses the same collision/walkability data that the Laya router uses.
-    """
-    try:
-        player = reader.read_player()
-        px, py = player.get("position", {}).get("x", 0), player.get("position", {}).get("y", 0)
-        collision = reader.read_map_info().get("collision", {})
-        walkable = collision.get("walkability", [])   # list of strings, '1'=walkable
-        if not walkable:
-            logger.debug("[PC] nurse check: no walkable tiles")
-            return None
+def _nurse_on_screen(collision: Dict[str, Any]) -> Optional[Tuple[int, int, int]]:
+    """(dx, dy, dist) to the nearest nurse **on the current screen**, or None.
 
-        # Nurse tile id – in Red/Blue the nurse sprite uses tile 0x6B in the
-        # second sprite bank (value may differ by ROM; we rely on the fact
-        # that the nurse is the only NPC with sprite id 0x1B in most maps).
-        sprites = collision.get("sprites", [])
-        logger.debug(f"[PC] nurse check: sprites={sprites}")
-        nurse_positions = []
-        for s in sprites:
-            if s.get("who") == 0x1B:          # nurse sprite id
-                nurse_positions.append((s.get("cell", {}).get("y", 0),
-                                        s.get("cell", {}).get("x", 0)))
-        if not nurse_positions:
-            logger.debug("[PC] nurse check: no nurse sprites found")
-            return None
-
-        # BFS over walkable tiles to find the closest nurse.
-        from collections import deque
-        q = deque()
-        q.append((py, px, 0, 0))   # (y, x, dist_y, dist_x)
-        seen = {(py, px)}
-        while q:
-            y, x, dy, dx = q.popleft()
-            if (y, x) in nurse_positions:
-                logger.debug(f"[PC] nurse check: found nurse at ({y},{x}) dist={abs(dy)+abs(dx)}")
-                return (dy, dx, abs(dy) + abs(dx))   # one-step direction + distance
-            for ny, nx in ((y-1, x), (y+1, x), (y, x-1), (y, x+1)):
-                if 0 <= ny < len(walkable) and 0 <= nx < len(walkable[0]):
-                    if walkable[ny][nx] == '1' and (ny, nx) not in seen:
-                        seen.add((ny, nx))
-                        # store the step that got us here
-                        q.append((ny, nx,
-                                   ny - py if abs(ny-py) > abs(nx-px) else 0,
-                                   nx - px if abs(nx-px) > abs(ny-py) else 0))
-        logger.debug("[PC] nurse check: BFS completed without finding nurse")
-        return None   # should not happen on maps that have a nurse
-    except Exception as e:
-        logger.debug(f"[PC] nurse check exception: {e}")
+    Screen-relative: the collision grid is a 10x9 window with the player
+    locked to its centre, and sprites are reported in those coordinates.
+    `dist` is the BFS step count, so real walking distance, not Manhattan.
+    """
+    sprites = collision.get("sprites") or []
+    nurse_cells = {
+        (s.get("row"), s.get("col"))
+        for s in sprites
+        if s.get("picture_id") == SPRITE_NURSE or s.get("who") == "Nurse"
+    }
+    nurse_cells.discard((None, None))
+    if not nurse_cells:
         return None
+
+    grid = collision.get("walkable") or collision.get("passable") or []
+    if not grid:
+        return None
+
+    from collections import deque
+    start: Tuple[int, int] = (PLAYER_ROW, PLAYER_COL)
+    q: "deque[Tuple[int, int, Optional[Tuple[int, int]], int]]" = deque(
+        [(start[0], start[1], None, 0)])          # row, col, first step, dist
+    seen: set = {start}
+    while q:
+        y, x, first, dist = q.popleft()
+        if (y, x) in nurse_cells:
+            if first is None:
+                return (0, 0, 0)                 # already on the nurse tile
+            return (first[1], first[0], dist)    # dx, dy, dist
+        for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            ny, nx = y + dy, x + dx
+            if not (0 <= ny < len(grid) and 0 <= nx < len(grid[0])):
+                continue
+            if (ny, nx) in seen:
+                continue
+            if _cell_walkable(grid, ny, nx):
+                seen.add((ny, nx))
+                q.append((ny, nx, first if first else (dy, dx), dist + 1))
+    return None
+
+
+def _cell_walkable(grid, y: int, x: int) -> bool:
+    """The grid mixes '1'/'0' strings and ints depending on the reader."""
+    try:
+        v = grid[y][x]
+    except (IndexError, TypeError):
+        return False
+    if isinstance(v, str):
+        return v not in ("0", "", " ")
+    return bool(v)
+
+
+def annotate_nearest_pokecenter(state: Dict[str, Any],
+                                collision: Dict[str, Any]) -> None:
+    """Set nearest_pokecenter_* on a state dict that already has collision.
+
+    Called AFTER the collision grid is attached, because that grid is the
+    only source for nurse sprites. The previous version lived inside
+    build_game_state and read `read_map_info()["collision"]`, which does not
+    exist - so it silently returned None on every map.
+    """
+    # Already inside a Pokecenter: nothing to walk to.
+    map_name = (state.get("map") or {}).get("map_name") or ""
+    if "pokecenter" in map_name.lower():
+        state["nearest_pokecenter_dist"] = 0
+        state["nearest_pokecenter_dir"] = (0, 0)
+        state["nearest_pokecenter_src"] = "inside"
+        return
+
+    nurse = _nurse_on_screen(collision) if collision.get("valid") else None
+    if nurse is not None:
+        dx, dy, dist = nurse
+        state["nearest_pokecenter_dist"] = dist
+        state["nearest_pokecenter_dir"] = (dx, dy)
+        state["nearest_pokecenter_src"] = "nurse"
+        return
+
+    door = _nearest_pokecenter_door(state)
+    if door is not None:
+        dx, dy, dist = door
+        state["nearest_pokecenter_dist"] = dist
+        state["nearest_pokecenter_dir"] = (dx, dy)
+        state["nearest_pokecenter_src"] = "door"
+        return
+
+    state["nearest_pokecenter_dist"] = None
+    state["nearest_pokecenter_dir"] = None
+    state["nearest_pokecenter_src"] = None
 
 
 def _load_pc_centers() -> Dict[str, Dict[str, int]]:
@@ -89,22 +130,26 @@ def _load_pc_centers() -> Dict[str, Dict[str, int]]:
 PC_CENTERS: Dict[str, Dict[str, int]] = _load_pc_centers()
 
 
-def _nearest_pokecenter_door(reader: GameMemoryReader) -> Optional[Tuple[int, int, int]]:
-    """Fallback: if the map is a known town and we have a door coordinate,
-    return (dx, dy, dist) to that door."""
-    map_info = reader.read_map_info()
-    map_name = map_info.get("map_name") if map_info else None
+def _nearest_pokecenter_door(state: Dict[str, Any]) -> Optional[Tuple[int, int, int]]:
+    """Fallback: on a city we have a door coordinate for, return (dx, dy, dist).
+
+    Uses MAP coordinates, not screen coordinates - the player position and
+    the pc_centers.json door tiles are both map-local, so the direction
+    stays correct even when the Pokecenter is off-screen.
+    """
+    map_name = (state.get("map") or {}).get("map_name")
     if not map_name or map_name not in PC_CENTERS:
         return None
-    # Player position in map coordinates
-    player = reader.read_player()
-    px = player.get("position", {}).get("x", 0)
-    py = player.get("position", {}).get("y", 0)
+    pos = (state.get("player") or {}).get("position") or {}
+    px, py = pos.get("x"), pos.get("y")
+    if px is None or py is None:
+        return None
     door = PC_CENTERS[map_name]
     dx = door["door_x"] - px
     dy = door["door_y"] - py
     dist = abs(dx) + abs(dy)
-    # Return one-step direction (sign of dx/dy, zero if already aligned)
+    if dist == 0:
+        return (0, 0, 0)            # standing on the door
     step_dx = 0 if dx == 0 else (1 if dx > 0 else -1)
     step_dy = 0 if dy == 0 else (1 if dy > 0 else -1)
     return (step_dx, step_dy, dist)
@@ -174,38 +219,20 @@ def build_game_state(
         state["active_mon"] = None
 
     # ----------------------------------------------------------------------
-    #  Nearest Pokémon Center (Manhattan distance in tiles)
+    #  Nearest Pokémon Center
     # ----------------------------------------------------------------------
-    dxdydist = _nearest_pokecenter(reader)
-    if dxdydist is not None:
-        dx, dy, dist = dxdydist
-        state["nearest_pokecenter_dist"] = dist
-        state["nearest_pokecenter_dir"]  = (dx, dy)   # one step toward it
-    else:
-        state["nearest_pokecenter_dist"] = None
-        state["nearest_pokecenter_dir"]  = None
+    # Deliberately left unset here. Detection needs the collision grid (nurse
+    # sprites), and the server attaches that only after this function returns;
+    # the previous in-line version read a key that never existed and silently
+    # produced None on every map. The server calls
+    # annotate_nearest_pokecenter() once collision is available.
+    state.setdefault("nearest_pokecenter_dist", None)
+    state.setdefault("nearest_pokecenter_dir", None)
+    state.setdefault("nearest_pokecenter_src", None)
 
     state["errors"] = errors
     state["status"] = "degraded" if errors else "ok"
     return state
-
-
-def _nearest_pokecenter(reader: GameMemoryReader) -> Optional[Tuple[int, int, int]]:
-    """
-    Primary detection: nurse sprite (inside or adjacent to the door).
-    Fallback: PC-center door lookup.
-    If inside a Pokecenter interior map, return (0,0,0).
-    Returns (dx, dy, dist) or None.
-    """
-    nurse = _nearest_pokecenter_nurse(reader)
-    if nurse is not None:
-        return nurse
-    # If we are inside a Pokecenter map, consider the center reached
-    map_info = reader.read_map_info()
-    map_name = map_info.get("map_name") if map_info else None
-    if map_name and "pokecenter" in map_name.lower():
-        return (0, 0, 0)
-    return _nearest_pokecenter_door(reader)
 
 
 # -----------------------------------------------------------------------

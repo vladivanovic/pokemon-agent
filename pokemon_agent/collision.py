@@ -26,7 +26,12 @@ than no map.
 
 from __future__ import annotations
 
+import logging
 from typing import Dict, List, Optional, Tuple
+
+from pokemon_agent.gen1_data import SPRITE_NAMES as _COMPILED_SPRITE_NAMES
+
+logger = logging.getLogger("pokemon-agent.collision")
 
 # ---------------------------------------------------------------------------
 # RAM addresses (pokered symbol names in comments)
@@ -63,13 +68,15 @@ S_PICTURE_ID     = 0x00       # 0 = slot disabled
 S_YPIXELS        = 0x04       # screen Y, biased
 S_XPIXELS        = 0x06       # screen X, biased
 
-# Sprite picture ids from pokered constants/sprite_constants.asm.
-# Only the ones we care about identifying; everything else is a generic NPC.
-SPRITE_NAMES: Dict[int, str] = {
+# Overworld sprite names, compiled from pret/pokered sprite_constants.asm
+# (scripts/gen_gen1_data.py). The three below are kept verbatim because the
+# autopilot matches on them - the Oak handoff tests `who == "Prof. Oak"`.
+SPRITE_NAMES: Dict[int, str] = dict(_COMPILED_SPRITE_NAMES)
+SPRITE_NAMES.update({
     0x01: "Red (you)",
     0x02: "Blue/Gary (your rival)",
     0x03: "Prof. Oak",
-}
+})
 
 WARP_ENTRY_SIZE = 4
 MAX_WARPS       = 32
