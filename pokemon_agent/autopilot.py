@@ -717,29 +717,28 @@ class HermesDriver:
     def _select_move(self, idx: int, moves: List[Any]) -> bool:
         """Open the move menu and select slot *idx* (0-based in ``moves``).
 
-        The Gen 1 move menu opens on the previously selected slot and WRAPS,
-        so a fixed "press down * idx" from an unknown start never worked.
-        Proven live when it landed on a 0-PP Vine Whip and wedged on
-        "No PP left for this move!" for 370+ turns.
+        The Gen 1 move menu opens on the PREVIOUSLY SELECTED slot and the
+        cursor WRAPS, so a fixed "press down * idx" from an unknown start
+        cannot land correctly. That is exactly what wedged the agent for
+        370+ turns: it re-selected a 0-PP Vine Whip and looped on
+        "No PP left for this move!".
 
-        Also: a stale "No PP" message can be on screen when the menu opens.
-        That message consumes the first A press (it just dismisses the dialog),
-        leaving the cursor unmoved. We loop the A press until the cursor
-        actually advances.
+        Fix: press down ONE step at a time and re-read the cursor after each
+        press. From any starting slot, n presses visit every slot, so the
+        target is always reached within n steps - no modulo arithmetic and no
+        assumption about how the wraparound is represented internally.
         """
         n = max(1, len(moves))
-        target = idx + 1                     # menu positions are 1-based
+        target = idx + 1                     # move menu positions are 1-based
+
+        # B returns to the FIGHT/PKMN/ITEM/RUN menu and clears a stale
+        # "No PP left" dialog; up+left clamps onto FIGHT; A opens the moves.
         if not self.act(["press_b", "wait_30", "press_up", "press_left",
                          "press_a", "wait_30"]):
             return False
 
-        # Dismiss any stale "No PP" message and ensure the move menu is open.
-        # The first A after FIGHT opens the move menu; if a "No PP" dialog
-        # was already showing, that A just dismisses it and the cursor stays.
-        # Keep pressing A until the cursor actually changes from its initial
-        # value or we time out.
-        initial_cur = None
-        for _ in range(8):
+        reached = False
+        for _ in range(n + 1):
             try:
                 b = (self._get("/state").json().get("battle") or {})
             except Exception:
@@ -747,32 +746,14 @@ class HermesDriver:
             cur = b.get("menu_index")
             if not isinstance(cur, int):
                 return False
-            if initial_cur is None:
-                initial_cur = cur
-            if cur != initial_cur:
+            if cur == target:
+                reached = True
                 break
-            if not self.act(["press_a", "wait_20"]):
+            if not self.act(["press_down", "wait_20"]):
                 return False
-
-        # Now navigate from wherever the cursor actually is.
-        cur = None
-        for _ in range(4):
-            try:
-                b = (self._get("/state").json().get("battle") or {})
-            except Exception:
-                return False
-            cur = b.get("menu_index")
-            if not isinstance(cur, int):
-                return False
-            delta = (target - cur) % n
-            if delta == 0:
-                break
-            if not self.act(["press_down"] * delta + ["wait_20"]):
-                return False
-
-        if cur != target:
-            logger.warning("move select: could not reach slot %d (cursor %s "
-                           "of %d)", idx, cur, n)
+        if not reached:
+            logger.warning("move select: slot %d unreachable after %d steps "
+                           "(menu of %d)", idx, n + 1, n)
         return self.act(["press_a", "wait_60"])
 
     def event(self, **kw) -> None:
