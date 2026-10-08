@@ -275,3 +275,15 @@ class MapGraph:
             return None
         d = self.neighbors(r[0]).get(r[1])
         return _DIR_NAMES.get(d) if d is not None else None
+
+    def neighbor_in_direction(self, name: str,
+                              compass: str) -> Optional[str]:
+        """The map reached by leaving *name* toward *compass*, if any.
+
+        Used to record which map a route hop is *supposed* to reach, so the
+        caller can tell a successful transition from wandering elsewhere.
+        """
+        for nb, delta in self.neighbors(name).items():
+            if _DIR_NAMES.get(delta) == compass:
+                return nb
+        return None
