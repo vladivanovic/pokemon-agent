@@ -1540,7 +1540,10 @@ class HermesDriver:
         """One Hermes-driven turn: build a prompt, shell out, let it act."""
         # Replaying a 1000-message history dominates latency and buys nothing:
         # the escalation goal is regenerated from live state every turn.
-        if self.session_id and (self.turn - self.session_started_at) > 10:
+        # Rotation at 4 turns: the CLI repairs message-alternation violations
+        # on EVERY resume, and the violation count grows with history
+        # (1 -> 3 proven live), so a long session gets slower each turn.
+        if self.session_id and (self.turn - self.session_started_at) > 4:
             logger.info("rotating hermes session (was %d turns old)",
                         self.turn - self.session_started_at)
             self.session_id = None
