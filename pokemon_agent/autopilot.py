@@ -1286,6 +1286,27 @@ class HermesDriver:
                                 and 0 <= wc < len(passable[wr])):
                             passable[wr][wc] = False
 
+                # --- C2c: map-graph route (computed first) ---
+                # A named, multi-map goal ("head north toward Pewter City,
+                # route Pallet -> Route 1 -> Viridian -> Route 2 -> Pewter")
+                # outranks anonymous local wandering. This is the one thing
+                # the local grid cannot express, and the reason Laya/Von
+                # circled town instead of leaving it. When a route exists we
+                # suppress the interchangeable local options below: Von's
+                # probabilities are flat (~0.15 across 11 choices), so
+                # leaving "explore B2" / "enter Blue's House" in the set is
+                # what makes it wander into buildings instead of leaving.
+                try:
+                    route_opts = self._graph_travel_options(
+                        cur_map, goal, passable, ledge_grid)
+                except Exception:
+                    logger.exception("graph travel options failed")
+                    route_opts = {}
+                route_active = bool(route_opts)
+                if route_active:
+                    criteria.update(route_opts)
+                    logger.info("route active: %s", list(route_opts))
+
                 # --- C2: frontier ---
                 # Multi-tile destinations beat interchangeable single steps:
                 # Laya scores ~0.33 on symmetric directions and ~0.99 on named
@@ -1301,6 +1322,8 @@ class HermesDriver:
                                                + abs(rc[1] - PLAYER_COL)))
                 added = 0
                 for fr, fc in frontier:
+                    if route_active:
+                        break             # route supersedes local wandering
                     if added >= 3:
                         break
                     if self.failed_targets.get((cur_map, fr, fc), 0) >= 2:
@@ -1323,6 +1346,8 @@ class HermesDriver:
                 # literally cannot express "go north", so it can only shuffle
                 # within the current map.
                 for name, (dr, dc) in _DIRS.items():
+                    if route_active:
+                        break             # the named route replaces these
                     d = name.split("_")[1]
                     if not _grid_open(passable, PLAYER_ROW + dr,
                                       PLAYER_COL + dc):
@@ -1330,18 +1355,6 @@ class HermesDriver:
                     criteria[f"travel_{d}"] = (
                         f"Head {d} for several tiles, continuing in that "
                         f"direction to reach a new area")
-
-                # --- C2c: map-graph route ---
-                # A named, multi-map goal ("head north toward Pewter City,
-                # route Pallet -> Route 1 -> Viridian -> Route 2 -> Pewter")
-                # outranks anonymous local wandering. This is the one thing
-                # the local grid cannot express, and the reason Laya/Von
-                # circled town instead of leaving it.
-                try:
-                    criteria.update(self._graph_travel_options(
-                        cur_map, goal, passable, ledge_grid))
-                except Exception:
-                    logger.exception("graph travel options failed")
 
                 # --- C3: single steps ---
                 # Always offered, not only when the frontier is empty: if every
@@ -1361,7 +1374,10 @@ class HermesDriver:
                 criteria["interact"] = "Press A to talk to or examine what you face"
 
                 # Named exits elsewhere on screen (not the one underfoot).
-                if not recent_transition:
+                # Suppressed while a map-graph route is active: doors into
+                # buildings are the exact distraction that made the agent
+                # wander (and its own named route may already be a door).
+                if not recent_transition and not route_active:
                     for w in warps[:3]:
                         cell = w.get("cell")
                         if not cell:
