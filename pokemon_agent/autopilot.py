@@ -1517,6 +1517,9 @@ class HermesDriver:
         # (1932 occurrences in one run), which is why the video showed 30s
         # of no action: every battle turn crashed before dispatching.
         directed = False
+        # Track consecutive interact choices regardless of position (micro-moves
+        # reset the per-tile counter but not the intent-spam).
+        self._consecutive_interact = getattr(self, "_consecutive_interact", 0)
 
         # ------------------------------------------------------------------
         # BRANCH A - DIALOG
@@ -1951,10 +1954,14 @@ class HermesDriver:
         # trigger dialog cycles that reset exploring, but the spam is still real.
         # The key insight: ALWAYS suppress interact after 6 turns, but only
         # ADD travel options when not directed (so heal route isn't competed with).
-        if (not on_warp and laya_state["times_on_this_tile"] >= 6):
-            logger.warning("interact spam (%d turns on this tile) - "
+        # Intent-level counter: micro-moves reset the per-tile counter but not
+        # _consecutive_interact - a trainer on an edge ate 200+ turns this way.
+        if (not on_warp and (laya_state["times_on_this_tile"] >= 6
+                             or self._consecutive_interact >= 8)):
+            logger.warning("interact spam (tile=%d, consecutive=%d) - "
                            "suppressing interact",
-                           laya_state["times_on_this_tile"])
+                           laya_state["times_on_this_tile"],
+                           self._consecutive_interact)
             criteria.pop("interact", None)
             # Only add travel options if we're not following a route/heal
             if not directed:
@@ -2010,6 +2017,14 @@ class HermesDriver:
             time.sleep(1.0)
             return
         self.consecutive_fail = 0
+        # Intent-level interact spam: micro-moves reset the per-tile counter
+        # but not this one. A trainer on an edge ate 200+ turns of press_a
+        # here (proven live: here=30, pos bouncing between tiles, interact
+        # chosen every turn regardless of position).
+        if choice == "interact":
+            self._consecutive_interact += 1
+        else:
+            self._consecutive_interact = 0
 
         # ------------------------------------------------------------------
         # DISPATCH - map the chosen key to emulator actions
