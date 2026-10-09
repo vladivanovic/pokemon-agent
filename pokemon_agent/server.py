@@ -179,6 +179,10 @@ app = FastAPI(
     description="HTTP + WebSocket API for Pokemon emulator control",
 )
 
+# Visualisation endpoints
+from pokemon_agent.visualisation_routes import router as visualisation_router
+app.include_router(visualisation_router)
+
 # allow_origins=["*"] with allow_credentials=True is spec-invalid and browsers
 # reject it, so match local origins explicitly instead.
 app.add_middleware(
