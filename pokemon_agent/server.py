@@ -284,22 +284,39 @@ def _publish_frame(force_render: bool = False) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Screen recording — capture the framebuffer to MP4 via /screenrecord
+# Screen recording — sample the PUBLISHED framebuffer to MP4 via /screenrecord
 # ---------------------------------------------------------------------------
+#
+# The recorder does NOT touch the emulator. It samples ``_frame_png`` (the
+# frame the worker already publishes) at the target fps. Early versions ran
+# the capture ON the owner thread via emu_call, which had two fatal effects:
+#
+#   1. The autopilot's /action requests queue behind the recording on the
+#      same thread -> the agent cannot act for the whole duration (the
+#      character stands still - exactly what the video showed);
+#   2. The game advanced one frame per captured frame, so at 20fps capture
+#      the emulator ran at 20fps instead of 60 (one-third speed).
+#
+# Sampling the published cache does not block anything: the emulator keeps
+# running at full speed, Von keeps playing, and the video shows real motion.
+# The publish rate is raised to the recording fps for the duration so the
+# cache is fresh enough (default 10Hz would give a stuttery 10fps clip).
 
 _recording = threading.Event()          # one recording at a time
 _recording_lock = threading.Lock()
+_record_fps_override: Optional[float] = None   # read by the worker loop
 
 
-def _record_frames(emu, duration: float, fps: int,
-                   scale: int) -> str:
-    """Capture the framebuffer for *duration* seconds, encode to MP4.
+def _record_frames_live(duration: float, fps: int, scale: int) -> str:
+    """Sample the published framebuffer for *duration* seconds -> MP4.
 
-    Runs ON THE EMULATOR OWNER THREAD (via emu_call), so the single-owner
-    invariant holds. Each frame: render, read, sleep 1/fps. GameBoy frames
-    are 160x144; scale upsizes for readability (nearest-neighbour).
+    Runs OFF the emulator owner thread (called via asyncio.to_thread), so the
+    autopilot keeps acting and the game keeps running at full speed. Only
+    ``_frame_png`` is read, under ``_frame_lock``.
     """
+    global _record_fps_override
     import numpy as np
+    from PIL import Image
 
     out_path = os.path.join(
         tempfile.gettempdir(),
@@ -313,23 +330,41 @@ def _record_frames(emu, duration: float, fps: int,
     frame_period = 1.0 / max(fps, 1)
     total = max(int(duration * fps), 1)
     frames = []
+    last_png = None
 
-    for i in range(total):
-        emu.tick(1, render_last=True)   # render so the frame is fresh
-        # get_screen() returns a copied RGB PIL Image (160x144).
-        arr = np.asarray(emu.get_screen())
-        if scale > 1:
-            arr = np.repeat(np.repeat(arr, scale, axis=0), scale, axis=1)
-        frames.append(arr)
-        # Keep emulation time ~real: sleeping here on the owner thread pauses
-        # the game for duration seconds, which is the POINT of a recording.
-        time.sleep(frame_period)
+    # Ask the worker to publish at the recording rate (capped) so sampled
+    # frames are distinct instead of the same 10Hz image repeated.
+    _record_fps_override = float(min(max(fps, 1), 30))
+    try:
+        deadline = time.perf_counter()
+        for _ in range(total):
+            with _frame_lock:
+                png = _frame_png
+            if png is not None:
+                if png is not last_png:      # skip duplicates cheaply
+                    arr = np.asarray(Image.open(io.BytesIO(png)).convert("RGB"))
+                    if scale > 1:
+                        arr = np.repeat(np.repeat(arr, scale, axis=0),
+                                        scale, axis=1)
+                    frames.append(arr)
+                    last_png = png
+            deadline += frame_period
+            sleep = deadline - time.perf_counter()
+            if sleep > 0:
+                time.sleep(sleep)
+            else:
+                deadline = time.perf_counter()   # fell behind; resync
+    finally:
+        _record_fps_override = None
+
+    if not frames:
+        raise RuntimeError("no frames were published during the recording window")
 
     iio.imwrite(out_path, np.stack(frames), fps=fps, codec="libx264",
                 macro_block_size=None)
-    logger.info("recorded %d frames (%.0fs @ %dfps) -> %s (%s)",
+    logger.info("recorded %d frames (%.0fs @ %dfps) -> %s (%sKB)",
                 len(frames), duration, fps, out_path,
-                f"{os.path.getsize(out_path) // 1024}KB")
+                os.path.getsize(out_path) // 1024)
     return out_path
 
 
@@ -338,7 +373,6 @@ def _emulator_worker() -> None:
     global _emulator, _reader
     logger.info("emulator worker started")
     period = 1.0 / TARGET_FPS
-    publish_period = 1.0 / PUBLISH_HZ
     next_due = time.perf_counter()
     next_publish = time.perf_counter()
 
@@ -376,9 +410,12 @@ def _emulator_worker() -> None:
 
         # Publish whether or not the agent is running, so the dashboard stays
         # live. Slower cadence when frozen since the image cannot change.
+        # While a recording is in flight the recorder raises the rate to its
+        # own fps (see _record_fps_override) so sampled frames are distinct.
         if _emulator is not None and _emu_state == "ready" and now >= next_publish:
             _publish_frame(force_render=running)
-            next_publish = now + (publish_period if running else 1.0)
+            hz = _record_fps_override or (PUBLISH_HZ if running else 1.0)
+            next_publish = now + (1.0 / hz if hz > 0 else 1.0)
 
     if _emulator is not None:
         try:
@@ -832,9 +869,10 @@ class RecordRequest(BaseModel):
 async def screenrecord(req: RecordRequest):
     """Record *duration* seconds of gameplay to an MP4, then return the file.
 
-    Captures the framebuffer on the emulator owner thread — the game pauses
-    for the recording (real-time capture of a headless emulator). One
-    recording at a time; a second concurrent request returns 409.
+    Samples the framebuffer the worker already publishes — the emulator and
+    the autopilot keep running at full speed, so the clip shows real play
+    instead of a paused, queue-blocked agent. One recording at a time; a
+    second concurrent request returns 409.
     """
     if not 1 <= req.duration <= 300:
         raise HTTPException(status_code=400, detail="duration must be 1..300s")
@@ -850,11 +888,10 @@ async def screenrecord(req: RecordRequest):
                                 detail="A recording is already in progress")
         _recording.set()
     try:
-        # emu_call runs _record_frames on the owner thread; the timeout must
-        # cover capture + encode with headroom.
-        est = req.duration + 30 + req.duration * req.fps * 0.02
-        out_path = await emu_call(_record_frames, req.duration, req.fps,
-                                  req.scale, timeout=max(est, 90.0))
+        # Off the owner thread: sampling the published frame cache must not
+        # block the emulator or the autopilot's action queue.
+        out_path = await asyncio.to_thread(
+            _record_frames_live, req.duration, req.fps, req.scale)
     except HTTPException:
         raise
     except Exception as exc:
