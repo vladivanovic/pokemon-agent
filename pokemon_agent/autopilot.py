@@ -2086,15 +2086,42 @@ class HermesDriver:
             elif dist <= 1:
                 actions = ["press_a", "wait_60"]        # already beside her
             else:
-                # Stop short of the tile - the counter is blocked, so the
-                # useful move is to stand adjacent and press A. Capped at 3
-                # steps because this is a straight-line guess: the next turn
-                # recomputes the direction from the new position.
-                # No trailing press_a: when the straight-line guess is blocked
-                # (a wall, an NPC), press_a talks to whoever is in front
-                # instead - the Gambler on Route 2/Viridian City's edge ate
-                # the approach, opening dialogs forever.
-                actions = [walk] * min(dist - 1, 3)
+                # Obstacle-aware walk, not a straight-line guess: Viridian
+                # City's door sits up-right of the arrival point with a wall
+                # row between, so walk_up x3 hit the wall forever while the
+                # flowers swayed. Path to the door's on-screen cell (warps
+                # know it, e.g. F2), or to a tile in the delta direction when
+                # the door is off-screen. Capped at 3 steps; the next turn
+                # re-aims from the new position. No trailing press_a: when the
+                # guess is blocked, press_a talks to whoever is in front - the
+                # Gambler on the city edge ate the approach with dialogs.
+                door_cell = next(((w["row"], w["col"]) for w in warps
+                                  if "pokecenter" in (w.get("dest_map_name")
+                                                      or "").lower()), None)
+                actions = []
+                if door_cell is not None:
+                    path = _path_to(passable, door_cell, ledges=ledge_grid)
+                    if path:
+                        actions = path[:4]   # step onto the door is next turn
+                if not actions:
+                    # Off-screen door: walk toward the delta direction on the
+                    # collision grid (open cells only).
+                    dr, dc = (0, 0)
+                    if "up" in walk: dr = -1
+                    elif "down" in walk: dr = 1
+                    if "left" in walk: dc = -1
+                    elif "right" in walk: dc = 1
+                    steps = 0
+                    r, c = PLAYER_ROW, PLAYER_COL
+                    while steps < 3:
+                        nr, nc = r + dr, c + dc
+                        if not _grid_open(passable, nr, nc):
+                            break
+                        actions.append(f"walk_{walk.split('_')[1]}")
+                        r, c = nr, nc
+                        steps += 1
+                if not actions:
+                    actions = [walk] * min(dist - 1, 3)
         elif choice == "flee":
             actions = ["press_b", "wait_30", "press_down", "press_right",
                        "press_a", "wait_60"]
