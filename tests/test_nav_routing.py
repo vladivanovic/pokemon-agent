@@ -147,6 +147,53 @@ check("queued edge guarded by route() to the goal",
 check("guard reverts when it would strand the route",
       "self.map_graph.dead_edges.discard((src_m, dst_m))" in auto_src)
 
+print("\n[8] prefer-real-doors rule (needs the LIVE portals.json)")
+# This rule reads recorded door warps, so it must run against the real portal
+# file. Only the dead-edge output is redirected to a temp path.
+os.environ["POKEMON_DEAD_EDGES"] = os.path.join(tmp, "doors_dead.json")
+gl = MapGraph()
+check("live portals loaded", bool(gl.portals), f"{len(gl.portals)} maps")
+check("no dead edges needed for this fix", gl.dead_edges == set(),
+      str(gl.dead_edges))
+check("fake Route 2 -> Pewter City edge is gone",
+      "Pewter City" not in gl.neighbors("Route 2"),
+      str(gl.neighbors("Route 2")))
+check("Route 2 -> Viridian City (real walk-off exit) kept",
+      "Viridian City" in gl.neighbors("Route 2"))
+check("Viridian City -> Route 2 (real walk-off exit) kept",
+      "Route 2" in gl.neighbors("Viridian City"),
+      str(gl.neighbors("Viridian City")))
+check("Viridian City -> Viridian Gym (a NON-gate door) kept",
+      any("Gym" in k for k in gl.neighbors("Viridian City")),
+      str(gl.neighbors("Viridian City")))
+check("route(Viridian City -> Pewter City) is the real chain",
+      gl.route("Viridian City", "Pewter City") == [
+          "Viridian City", "Route 2", "Route 2 Gate Viridian",
+          "Viridian Forest", "Route 2 Gate Pewter", "Pewter City"],
+      str(gl.route("Viridian City", "Pewter City")))
+check("first hop out of Viridian City is north",
+      gl.first_hop_direction("Viridian City", "Pewter City") == "north")
+check("gate chain still intact",
+      gl.adj.get("Route 2 Gate Pewter", {}).get("Pewter City") == (-1, 0))
+
+print("\n[9] the local brain is labelled by the scorer we started with")
+import pokemon_agent.autopilot as ap  # noqa: E402
+auto_src2 = open(ap.__file__).read()
+check("local_label derived from scorer_name",
+      "self.local_label: str = self.scorer_name" in auto_src2)
+check("_enter_mode reports the scorer, not 'laya'",
+      "self.local_label if mode == 'laya' else mode" in auto_src2)
+check("handback logs use the label",
+      '"back to %s", self.mode_turns, self.local_label' in auto_src2
+      or "back to %s\", self.hermes_budget, self.local_label" in auto_src2)
+check("escalation prompt takes {brain}",
+      "{brain} (a fast movement scorer)" in auto_src2)
+check("escalation prompt passed the label",
+      "brain=self.local_label," in auto_src2)
+check("no hardcoded Laya left in the prompts",
+      "Laya will resume" not in auto_src2
+      and "Laya does not" not in auto_src2)
+
 print("\n" + "=" * 58)
 if FAILS:
     print(f"RESULT: {len(FAILS)} FAILED -> {FAILS}")

@@ -442,6 +442,18 @@ class MapGraph:
 
     # --- query --------------------------------------------------------------
 
+    def _portal_has_edge(self, a: str, b: str) -> bool:
+        """True when a DOOR (recorded warp) links a and b, in either direction."""
+        a = self.resolve(a) or a
+        b = self.resolve(b) or b
+        for entry in (self.portals.get(a) or {}).values():
+            if self.resolve(entry.get("dest_map_name")) == b:
+                return True
+        for entry in (self.portals.get(b) or {}).values():
+            if self.resolve(entry.get("dest_map_name")) == a:
+                return True
+        return False
+
     def neighbors(self, name: str) -> Dict[str, Tuple[int, int]]:
         """Adjacent maps merged from geography and recorded portals."""
         name = self.resolve(name) or name
@@ -485,6 +497,31 @@ class MapGraph:
         # adjacent by rectangle but never opens; removing it here lets the BFS
         # find the real Gate -> Forest -> Gate chain instead of returning the
         # fake 2-hop that strands the agent on Route 2 forever.
+        #
+        # PREFER REAL DOORS: when two neighbours point the SAME way and only one
+        # of them is backed by a recorded door, the door is the truth. Route 2's
+        # rectangle spans BOTH of its segments - Viridian Forest splits the map
+        # - so it claims a direct edge north to Pewter City while the real way
+        # north is the gate it has a portal to. Without this the fake 2-hop
+        # survives, and the agent walks north expecting Pewter City.
+        door_dirs = {}
+        for dst, d in out.items():
+            # Only GATE interiors are pass-through connectors sitting BETWEEN
+            # two regions. Scoping matters: a city's Gym is also behind a door
+            # and can share a compass direction with the real route exit
+            # (Viridian City's Gym and Route 2 are BOTH north), so an unscoped
+            # "prefer the door" dropped the genuine Route 2 edge and left
+            # route(Viridian City -> Pewter City) == None.
+            if "gate" in dst.lower() and self._portal_has_edge(name, dst):
+                door_dirs[d] = dst
+        if door_dirs:
+            for dst in [k for k, d in out.items()
+                        if d in door_dirs and door_dirs[d] != k
+                        and not self._portal_has_edge(name, k)]:
+                logger.info("map graph: %s -> %s is a rectangle-only edge in the "
+                            "same direction as the door to %s - preferring the "
+                            "door", name, dst, door_dirs[out[dst]])
+                out.pop(dst, None)
         for dst in [k for k in out if (name, k) in self.dead_edges]:
             out.pop(dst, None)
         return out
