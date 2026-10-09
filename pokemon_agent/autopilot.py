@@ -2145,6 +2145,7 @@ class HermesDriver:
             # Walk toward the Pokecenter and talk to the nurse. The direction
             # is read from /state each turn rather than baked into the action
             # list, so it stays correct as the agent moves and re-aims.
+            src = state.get("nearest_pokecenter_src")
             d = state.get("nearest_pokecenter_dir") or [0, 0]
             try:
                 dx, dy = int(d[0]), int(d[1])
@@ -2178,8 +2179,15 @@ class HermesDriver:
                                "walk_right"]   # reposition; next turn re-reads
                 else:
                     actions = ["walk_up", "press_a", "wait_60"]
-            elif dist <= 1:
+            elif dist <= 1 and src in ("nurse", "inside"):
                 actions = ["press_a", "wait_60"]        # already beside her
+            elif dist <= 1:
+                # The door is adjacent but we are still OUTSIDE - step onto it.
+                # Pressing A out in the street does nothing in Gen 1, which is
+                # exactly what wedged the agent at (23,26) with Viridian's
+                # Pokecenter door 1 tile away (heal_center looping, 45-72 turns
+                # on one tile). Only "already beside the nurse" justifies A.
+                actions = [(walk or "walk_down"), "wait_30", "wait_30"]
             else:
                 # Obstacle-aware walk, not a straight-line guess: Viridian
                 # City's door sits up-right of the arrival point with a wall
