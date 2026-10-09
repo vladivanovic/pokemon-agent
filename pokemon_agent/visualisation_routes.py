@@ -98,7 +98,12 @@ def to_world(map_name: str, local_x: int, local_y: int, offsets: dict) -> Option
     """Convert local map position to world coordinates using portal offsets."""
     off = offsets.get(map_name)
     if off is None:
-        # Fallback: no portal data for this map - can't convert
+        # Fallback: use map_data.json region coordinates if available
+        regions = load_map_data()
+        for r in regions:
+            if r["name"] == map_name:
+                # local (0,0) = region top-left
+                return (r["x"] + local_x * 8, r["y"] + local_y * 8)
         return None
     mx, my = off
     return (mx + local_x * 8, my + local_y * 8)
@@ -129,7 +134,15 @@ async def visualisation_page():
         if wseg:
             world_segments.append(wseg)
 
-    # Build HTML (inline for zero deps)
+    # Load the world map image as base64 for embedding
+    import base64
+    WORLD_MAP = Path("/tmp/world_map_1024.png")
+    world_map_b64 = ""
+    if WORLD_MAP.exists():
+        with WORLD_MAP.open("rb") as f:
+            world_map_b64 = base64.b64encode(f.read()).decode("ascii")
+
+    # Build HTML with real world map background
     html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -139,11 +152,14 @@ async def visualisation_page():
   body {{ font-family: system-ui, sans-serif; background:#111; color:#eee; margin:0; padding:20px; }}
   h1 {{ margin:0 0 10px; font-size:1.4rem; }}
   .wrap {{ max-width:1280px; margin:0 auto; }}
-  canvas {{ background:#0a0a0a; border:1px solid #333; display:block; }}
-  .legend {{ margin-top:12px; display:flex; flex-wrap:wrap; gap:8px; font-size:0.8rem; }}
+  .canvas-wrap {{ position:relative; width:1024px; height:1024px; margin:0 auto; border:1px solid #333; }}
+  canvas {{ position:absolute; top:0; left:0; background:transparent; }}
+  #bg {{ z-index:0; }}
+  #fg {{ z-index:1; }}
+  .legend {{ margin-top:12px; display:flex; flex-wrap:wrap; gap:8px; font-size:0.8rem; justify-content:center; }}
   .leg {{ display:flex; align-items:center; gap:4px; }}
   .swatch {{ width:14px; height:14px; border-radius:2px; border:1px solid #444; }}
-  .info {{ margin-top:8px; font-size:0.85rem; color:#aaa; }}
+  .info {{ margin-top:8px; font-size:0.85rem; color:#aaa; text-align:center; }}
   .tooltip {{ position:fixed; pointer-events:none; background:#222; border:1px solid #555;
                padding:8px 10px; border-radius:4px; font-size:0.75rem; z-index:10;
                display:none; max-width:260px; }}
@@ -155,7 +171,10 @@ async def visualisation_page():
 <body>
 <div class="wrap">
   <h1>Pokémon Red — Agent Path Visualisation</h1>
-  <canvas id="cv" width="1200" height="1220"></canvas>
+  <div class="canvas-wrap">
+    <img id="bg" src="data:image/png;base64,{world_map_b64}" width="1024" height="1024" style="display:block;">
+    <canvas id="fg" width="1024" height="1024"></canvas>
+  </div>
   <div class="legend" id="legend"></div>
   <div class="info" id="info">
     {len(world_segments)} map segments · turns {world_segments[0][0]["turn"] if world_segments else "?"}–{world_segments[-1][-1]["turn"] if world_segments else "?"}
@@ -165,34 +184,20 @@ async def visualisation_page():
 <script>
 const regions = {json.dumps(load_map_data())};
 const segments = {json.dumps(world_segments)};
-const SCALE = 2.569;
-const MIN_X = 0, MIN_Y = 0;
-const MARGIN = 40;
-
-const cv = document.getElementById("cv");
+// World map is 1024x1024 pixels. The flight recorder gives local map coordinates
+// (0-15, 0-15-ish per map). We need to convert using the map_data.json region
+// rectangles which are already in world pixels (0-1023 range).
+const WORLD_W = 1024, WORLD_H = 1024;
+const cv = document.getElementById("fg");
 const ctx = cv.getContext("2d");
+cv.width = WORLD_W; cv.height = WORLD_H;
 const tt = document.getElementById("tt");
 const legDiv = document.getElementById("legend");
 
-function wx(x) {{ return MARGIN + (x - MIN_X) * SCALE; }}
-function wy(y) {{ return MARGIN + (y - MIN_Y) * SCALE; }}
+function wx(x) {{ return x; }}
+function wy(y) {{ return y; }}
 
-// --- draw regions ---
-regions.forEach(r => {{
-  ctx.fillStyle = r.colour;
-  ctx.fillRect(wx(r.x), wy(r.y), r.w * SCALE, r.h * SCALE);
-  ctx.strokeStyle = "#444";
-  ctx.lineWidth = 1;
-  ctx.strokeRect(wx(r.x), wy(r.y), r.w * SCALE, r.h * SCALE);
-  if (r.w * SCALE > 60 && r.h * SCALE > 30) {{
-    ctx.fillStyle = "#222";
-    ctx.font = "10px sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText(r.name, wx(r.x + r.w/2), wy(r.y + r.h/2 + 3));
-  }}
-}});
-
-// --- draw path segments ---
+// --- draw path segments on top of the world map ---
 segments.forEach((seg, si) => {{
   if (seg.length < 2) return;
   ctx.beginPath();
@@ -202,14 +207,14 @@ segments.forEach((seg, si) => {{
   }}
   const hue = (si * 137) % 360;
   ctx.strokeStyle = `hsl(${{hue}}, 80%, 55%)`;
-  ctx.lineWidth = 2;
+  ctx.lineWidth = 3;
   ctx.stroke();
   ctx.fillStyle = `hsl(${{hue}}, 80%, 55%)`;
   ctx.beginPath();
-  ctx.arc(wx(seg[0].wx), wy(seg[0].wy), 4, 0, Math.PI*2);
+  ctx.arc(wx(seg[0].wx), wy(seg[0].wy), 5, 0, Math.PI*2);
   ctx.fill();
   ctx.beginPath();
-  ctx.arc(wx(seg[seg.length-1].wx), wy(seg[seg.length-1].wy), 4, 0, Math.PI*2);
+  ctx.arc(wx(seg[seg.length-1].wx), wy(seg[seg.length-1].wy), 5, 0, Math.PI*2);
   ctx.fill();
 }});
 
@@ -244,7 +249,7 @@ cv.addEventListener("mousemove", e => {{
       t = Math.max(0, Math.min(1, t));
       const px = x1 + t*dx, py = y1 + t*dy;
       const d2 = (mx-px)**2 + (my-py)**2;
-      if (d2 < best && d2 < 100) {{ best = d2; hit = seg[i]; }}
+      if (d2 < best && d2 < 144) {{ best = d2; hit = seg[i]; }}
     }}
   }});
   if (hit) {{
