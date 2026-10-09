@@ -135,13 +135,15 @@ else
 fi
 
 # --- Hourly Log Analysis ---
+TRACE_PATH="${POKEMON_TRACE:-$HOME/.pokemon-agent/flight_recorder.jsonl}"
 ANALYSIS=""
-if [ -f "/home/vlad/.pokemon-agent/flight_recorder.jsonl" ]; then
-    ANALYSIS=$(python3 << 'PYEOF'
+if [ -f "$TRACE_PATH" ]; then
+    ANALYSIS=$(POKEMON_TRACE="$TRACE_PATH" python3 << 'PYEOF'
 import json, sys, os
 from datetime import datetime, timezone, timedelta
 
-path = "/home/vlad/.pokemon-agent/flight_recorder.jsonl"
+path = os.environ.get("POKEMON_TRACE",
+                      os.path.expanduser("~/.pokemon-agent/flight_recorder.jsonl"))
 now = datetime.now(timezone.utc)
 cutoff = now - timedelta(hours=1)
 
