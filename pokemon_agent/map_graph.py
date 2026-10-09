@@ -277,12 +277,18 @@ class MapGraph:
 
     # --- record -------------------------------------------------------------
 
-    def record_warp(self, cur_map: str, warp: dict) -> bool:
+    def record_warp(self, cur_map: str, warp: dict,
+                    player_at: Optional[tuple] = None) -> bool:
         """Persist one warp read from RAM. Returns True if it was new/updated.
 
         ``warp`` is a collision.py warp dict: it has row/col/cell plus
         dest_map and (usually) dest_map_name. Destination name is resolved
         from dest_map when absent so the portal is usable immediately.
+
+        ``player_at`` is the player's global (x, y) at record time. Stored on
+        the entry so the door can be projected back onto the screen from any
+        position: screen = global_door - player_now + PLAYER. Without it a
+        door seen once is unreachable from the other end of a big map.
         """
         if not cur_map or not isinstance(warp, dict):
             return False
@@ -335,6 +341,12 @@ class MapGraph:
             "row": warp.get("row"),
             "col": warp.get("col"),
         }
+        if player_at is not None:
+            try:
+                entry["player_x"] = int(player_at[0])
+                entry["player_y"] = int(player_at[1])
+            except (TypeError, ValueError, IndexError):
+                pass
         bucket = self.portals.setdefault(cur_map, {})
         if bucket.get(cell) == entry:
             return False
