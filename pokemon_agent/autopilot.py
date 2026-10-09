@@ -838,7 +838,11 @@ class HermesDriver:
             if best_name and best_pp > maxima.get(best_name, 0):
                 maxima[best_name] = best_pp          # fresh PP is the new max
             top = maxima.get(best_name, 0)
-            if top and best_pp <= max(1, top // 4):
+            # Floor of 3: before the first Pokecenter heal the observed max is
+            # itself depleted, so 25% of it can be tiny. 3 is > 0 but still
+            # below every Gen 1 move's base PP (min 5), so this cannot oscillate
+            # with a heal that restores to max.
+            if top and best_pp <= max(3, top // 4):
                 return (f"{best_name} PP is nearly exhausted "
                         f"({best_pp}/{top})")
         return ""
