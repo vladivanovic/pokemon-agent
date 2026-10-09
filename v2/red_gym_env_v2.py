@@ -595,20 +595,80 @@ class RedGymEnv(Env):
         Anything that can go back down must not live here — update_reward()
         differences this dict, so a term that falls refunds its own reward and
         becomes farmable. Transient terms go in get_instantaneous_reward().
+
+        Weights reshaped after the 130M-step plateau (ep_rew flat 620-687,
+        badge 0, explore 458/step dominating):
+
+        * badge 10 -> 200 (escalating x3 per badge): a badge was worth ~11
+          map tiles; it must be worth the whole journey to it.
+        * explore 0.5/tile -> 0.25/tile + per-map cap: wandering was 91% of
+          total reward with no gradient toward progress.
+        * pokedex 2 -> 5: catch (which needs pokeballs in the bag) now pays.
+        * party 10 -> 5: redundant with level; half weight.
+        * map_progress 100 -> 150: first-entry milestone chain.
+        * heal 10: unchanged (positive, blackout auto-heal excluded).
+        * win sqrt*8: unchanged; battle 0 (no incentive to enter, only to win).
         """
         return {
             "event": self.reward_scale * self.update_max_event_rew() * 4,
             "level": self.reward_scale * self.get_levels_reward() * 2,
             "heal": self.reward_scale * self.total_healing_rew * 10,
-            "badge": self.reward_scale * self.get_badges() * 10,
+            "badge": self.reward_scale * self.get_badge_reward() * 1,
             "explore": (self.reward_scale * self.explore_weight
-                        * len(self.seen_coords) * 0.5),
-            "pokedex": self.reward_scale * self.get_pokedex_owned() * 2,
+                        * self.get_capped_explore() * 0.25),
+            "pokedex": self.reward_scale * self.get_pokedex_owned() * 5,
             "battle": 0.0 * self.battles_entered,
             "win": self.reward_scale * (self.battle_won_count ** 0.5) * 8,
-            "party": self.reward_scale * self.read_m(PARTY_COUNT) * 10,
-            "map_progress": self.reward_scale * self.max_map_progress * 100,
+            "party": self.reward_scale * self.read_m(PARTY_COUNT) * 5,
+            "map_progress": self.reward_scale * self.max_map_progress * 150,
         }
+
+    # 20 items * 2 (item, qty) + terminator = 41 bytes at 0xD31E
+    BAG_ITEMS_ADDR = 0xD31E
+    BAG_ITEMS_MAX = 20
+
+    def get_pokeball_count(self):
+        """Poke Balls in the bag (item id 0x04). wNumBagItems at 0xD31D is the
+        count of distinct item slots; each slot is (item_id, quantity)."""
+        n = self.read_m(0xD31D)
+        if not 0 < n <= self.BAG_ITEMS_MAX:
+            return 0
+        total = 0
+        for i in range(n):
+            item_id = self.read_m(self.BAG_ITEMS_ADDR + i * 2)
+            if item_id == 0x04:          # POKE_BALL
+                total += self.read_m(self.BAG_ITEMS_ADDR + i * 2 + 1)
+        return total
+
+    def get_badge_reward(self):
+        """Escalating badge reward: 1st=200, 2nd=600, 3rd=1200...
+
+        Linear 10/badge made Brock worth less than 12 new map tiles, so the
+        agent never finished the route. Tripling makes each successive badge
+        worth more than all wandering before it.
+        """
+        n = self.get_badges()
+        return 100 * n * (n + 1)     # sum of 200*i for i in 1..n
+
+    def get_capped_explore(self):
+        """Tile count with a per-map diminishing cap.
+
+        A single map's seen_coords can grow unboundedly; the cap makes the
+        first ~600 tiles on any one map pay full price and the rest ~nothing,
+        so the gradient points at NEW maps instead of re-walking Viridian
+        Forest for the 400th time.
+        """
+        per_map = {}
+        for key in self.seen_coords:
+            try:
+                m = int(key.rsplit("m:", 1)[1])
+            except (ValueError, IndexError):
+                continue
+            per_map[m] = per_map.get(m, 0) + 1
+        total = 0
+        for count in per_map.values():
+            total += min(count, 600)
+        return total
 
     def get_instantaneous_reward(self):
         return self.reward_scale * self.get_current_coord_count_reward() * -0.05
