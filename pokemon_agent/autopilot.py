@@ -473,6 +473,28 @@ def _frontier_targets(passable: List[List[bool]], visits: Dict[tuple, int],
             out.append((r, c))
     return out
 
+def _pinballed(recent: List[tuple], window: int = 12) -> bool:
+    """True when the recent position trail is a back-and-forth pinball.
+
+    Two shapes, because both were observed live and neither implies the other:
+
+    * FEW DISTINCT TILES - Route 2's y=60 strip cycled five tiles
+      ((2,60)..(11,60)) for 605 left/right reversals;
+    * EXPLICIT REVERSALS (A -> B -> A) - Viridian City alternated
+      goto_E1/goto_E2 at (32,11)/(32,10), and drifted across two adjacent
+      pairs (4 tiles) for good measure.
+
+    A tile count alone missed the 4-tile drift when the bar was <=3; reversals
+    alone miss the Route 2 cycle, which never returns in a single step. The
+    caller resets the trail on map change, so this only ever sees one map.
+    """
+    if len(recent) < window:
+        return False
+    flips = sum(1 for k in range(1, len(recent) - 1)
+                if recent[k + 1] == recent[k - 1])
+    return len(set(recent)) <= 5 or flips >= 6
+
+
 def cell_label_local(col: int, row: int) -> str:
     """0-indexed (col,row) -> 'E5'. Mirrors collision.cell_label."""
     return f"{COL_LABELS_LOCAL[col]}{row + 1}"
@@ -1867,13 +1889,17 @@ class HermesDriver:
                 # left/right reversals - 26.6% of every transition recorded.
                 # If the last 12 turns covered <=3 tiles, withdraw them and let
                 # the frontier options, which name a destination, drive instead.
-                pinned = (len(self._recent_pos) >= 12
-                          and len(set(self._recent_pos)) <= 3)
+                #
+                # Detect REVERSALS (A -> B -> A), not just a small tile count:
+                # the Viridian City pinball drifted across two adjacent pairs,
+                # 4 distinct tiles, and slipped straight through a <=3 test.
+                recent = self._recent_pos
+                pinned = _pinballed(recent)
                 if pinned and not directed:
                     logger.info(
                         "pinball on %s (%d tiles across %d turns) - "
-                        "withholding blind travel headings",
-                        cur_map, len(set(self._recent_pos)), len(self._recent_pos))
+                        "withholding blind travel headings and door targets",
+                        cur_map, len(set(recent)), len(recent))
                 # Which heading actually leads to the goal, when the graph
                 # knows. Without this every travel_ option reads identically
                 # and the scorer has no reason to pick the useful one.

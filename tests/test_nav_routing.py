@@ -101,11 +101,35 @@ g3.dead_edges.discard(("Route 2 Gate Pewter", "Pewter City"))
 check("restoring it fixes the route",
       g3.route("Route 2", "Pewter City") == REAL_CHAIN)
 
-print("\n[6] anti-pinball guard wiring (static - the predicate is inline in\n"
+print("\n[6] _pinballed() against the trails actually observed in the recorder")
+from pokemon_agent.autopilot import _pinballed  # noqa: E402
+
+# Route 2 y=60 strip: five tiles cycled for 605 left/right reversals.
+route2 = [(5, 60), (2, 60), (9, 60), (11, 60), (8, 60), (5, 60),
+          (2, 60), (9, 60), (11, 60), (8, 60), (5, 60), (2, 60)]
+check("Route 2 tile cycle is pinned", _pinballed(route2) is True,
+      f"{len(set(route2))} tiles")
+
+# Viridian City: goto_E1/goto_E2 alternation, drifting across two adjacent pairs.
+viridian = [(28, 11), (28, 10)] * 3 + [(32, 11), (32, 10)] * 3
+check("Viridian door alternation is pinned", _pinballed(viridian) is True,
+      f"{len(set(viridian))} tiles")
+check("the old <=3-tile test would have MISSED that one",
+      len(set(viridian)) == 4, f"{len(set(viridian))} distinct tiles")
+
+# A genuine traverse: twelve distinct tiles, no reversals.
+healthy = [(8 + i, 44) for i in range(12)]
+check("a real traverse is NOT pinned", _pinballed(healthy) is False)
+check("short history is NOT pinned", _pinballed([(1, 1), (1, 2)] * 3) is False)
+check("empty history is NOT pinned", _pinballed([]) is False)
+check("window boundary respected",
+      _pinballed([(1, 1), (1, 2)] * 5) is False
+      and _pinballed([(1, 1), (1, 2)] * 6) is True)
+
+print("\n[7] anti-pinball guard wiring (static - the guard body is inline in\n"
       "    _laya_turn and needs a live emulator to exercise)")
 auto_src = open(os.path.join(REPO, "pokemon_agent", "autopilot.py")).read()
-check("pinball predicate over recent positions",
-      "len(set(self._recent_pos)) <= 3" in auto_src)
+check("guard calls the tested predicate", "pinned = _pinballed(recent)" in auto_src)
 check("travel_ headings withheld when pinned",
       "if directed or pinned:" in auto_src)
 check("door targets withheld when pinned",
