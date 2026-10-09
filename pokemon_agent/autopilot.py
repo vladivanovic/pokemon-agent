@@ -1511,6 +1511,12 @@ class HermesDriver:
             for w in warps)
 
         criteria: Dict[str, str] = {}
+        # Defined here so the interact-spam guard (below) can read it on
+        # battle/dialog turns too - it lives in BRANCH C otherwise, and the
+        # guard crashed with UnboundLocalError on every battle turn
+        # (1932 occurrences in one run), which is why the video showed 30s
+        # of no action: every battle turn crashed before dispatching.
+        directed = False
 
         # ------------------------------------------------------------------
         # BRANCH A - DIALOG
