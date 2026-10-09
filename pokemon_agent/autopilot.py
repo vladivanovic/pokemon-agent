@@ -51,6 +51,7 @@ from pokemon_agent.scorer import get_scorer  # pluggable low-level scorer
 from pokemon_agent.map_graph import MapGraph    # global map graph + portals
 from pokemon_agent.state.builder import PC_CENTERS   # cities with a Pokecenter
 from pokemon_agent import gen1_battle           # deterministic Gen 1 battle policy
+from pokemon_agent.gen1_data import MOVE_BASE_PP  # max PP per move (pokered)
 
 # Laya decision model - optional. Import failure must be loud at use time,
 # not silently equivalent to "feature disabled".
@@ -826,9 +827,10 @@ class HermesDriver:
             # Top up BEFORE the tank runs dry. Healing only at 0 PP meant the
             # agent always fought down to its last PP, so a wild battle ended
             # "one move, then RUN" (proven live: watched vs a level-4 Pidgey)
-            # and the walk back started from empty. Self-calibrating reserve: a
-            # Pokecenter restores PP to max, so the highest PP ever seen for a
-            # move IS its maximum; keep a 25% buffer of it.
+            # and the walk back started from empty. Keep a 25% reserve of the
+            # move's TRUE max PP, compiled from pokered (MOVE_BASE_PP); fall
+            # back to the highest PP ever observed for that move, which is the
+            # max whenever the party has been healed at least once.
             best = damaging[0][2] or {}
             best_name = str(best.get("name") or "")
             best_pp = int(best.get("pp", 0) or 0)
@@ -837,11 +839,7 @@ class HermesDriver:
                 maxima = self._move_max_pp = {}
             if best_name and best_pp > maxima.get(best_name, 0):
                 maxima[best_name] = best_pp          # fresh PP is the new max
-            top = maxima.get(best_name, 0)
-            # Floor of 3: before the first Pokecenter heal the observed max is
-            # itself depleted, so 25% of it can be tiny. 3 is > 0 but still
-            # below every Gen 1 move's base PP (min 5), so this cannot oscillate
-            # with a heal that restores to max.
+            top = MOVE_BASE_PP.get(best_name.lower()) or maxima.get(best_name, 0)
             if top and best_pp <= max(3, top // 4):
                 return (f"{best_name} PP is nearly exhausted "
                         f"({best_pp}/{top})")
