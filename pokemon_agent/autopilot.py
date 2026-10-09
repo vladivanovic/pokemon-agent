@@ -1998,6 +1998,13 @@ class HermesDriver:
                             continue   # deliver the parcel to Oak FIRST
                         if dest == "Oak's Lab" and has_dex:
                             continue   # lab business complete
+                        if pinned:
+                            # Ping-ponging beside doors means we cannot
+                            # actually reach them: Viridian City produced a
+                            # goto_E1 <-> goto_E2 alternation at (32,11)/(32,10).
+                            # Withhold door targets so a reachable frontier
+                            # destination drives instead.
+                            continue
                         criteria[f"goto_{cell}"] = (
                             f"Enter the door at {cell} leading to {dest}")
 
