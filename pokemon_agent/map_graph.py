@@ -91,10 +91,22 @@ class MapGraph:
         # Portals discovered from RAM: name -> {cell: {dest_map, dest_map_name, row, col}}
         self.portals: Dict[str, Dict[str, dict]] = {}
         self._portal_index: Dict[str, str] = {}
+        # Adjacencies PROVEN fake in play: (src, dst) pairs whose rectangle (or
+        # portal) edge never produced a transition. Route 2 -> Pewter City is
+        # the canonical case - the drawn rectangles touch, but in-game you go
+        # Route 2 -> Gate Viridian -> Viridian Forest -> Gate Pewter -> Pewter.
+        # Filtering these in neighbors() (the one choke point behind route(),
+        # first_hop_direction() and neighbor_in_direction()) lets the BFS find
+        # the REAL chain instead of returning the fake 2-hop forever.
+        self.dead_edges: set = set()
+        self.dead_edges_path = os.environ.get(
+            "POKEMON_DEAD_EDGES",
+            os.path.join(os.path.dirname(portals_path), "dead_edges.json"))
         self._load_maps()
         self._build_adjacency()
         self._build_alias_index()
         self.load_portals()
+        self.load_dead_edges()
 
     # --- load ---------------------------------------------------------------
 
@@ -196,6 +208,17 @@ class MapGraph:
             # From the gate, Route 2 is SOUTH (player walks down to exit)
             self.adj["Route 2 Gate Viridian"]["Route 2"] = (1, 0)
             self.adj["Route 2"]["Route 2 Gate Viridian"] = (-1, 0)
+        # Route 2 Gate Pewter (north end, id 51's partner) connects NORTH to
+        # Pewter City. Same geometry problem, and its absence is what broke the
+        # whole Chain: with the fake direct Route 2 -> Pewter edge removed, the
+        # BFS walked Route 2 -> Gate Viridian -> Viridian Forest -> Gate Pewter
+        # and then had nowhere to go, so route() returned None and the agent
+        # fell back to blind travel headings (the y=60 pinball). Gate Pewter
+        # spans y 180-188, Pewter City y 138-174 - a 6-row gap.
+        if "Route 2 Gate Pewter" in self.maps and "Pewter City" in self.maps:
+            # From the gate, Pewter City is NORTH (player walks up to exit)
+            self.adj["Route 2 Gate Pewter"]["Pewter City"] = (-1, 0)
+            self.adj["Pewter City"]["Route 2 Gate Pewter"] = (1, 0)
         edges = sum(len(v) for v in self.adj.values()) // 2
         logger.info("map graph: %d adjacency edges", edges)
 
@@ -364,6 +387,59 @@ class MapGraph:
         except Exception as e:  # pragma: no cover
             logger.warning("map graph: cannot save portals: %s", e)
 
+    # --- dead edges ---------------------------------------------------------
+
+    def load_dead_edges(self) -> None:
+        self.dead_edges = set()
+        try:
+            with open(self.dead_edges_path, "r") as f:
+                raw = json.load(f)
+        except FileNotFoundError:
+            return
+        except Exception as e:
+            logger.warning("map graph: bad dead-edges file: %s", e)
+            return
+        for pair in raw.get("edges") or []:
+            try:
+                src, dst = pair
+            except (TypeError, ValueError):
+                continue
+            s, d = self.resolve(src) or src, self.resolve(dst) or dst
+            self.dead_edges.add((s, d))
+        if self.dead_edges:
+            logger.info("map graph: %d proven-dead edges ignored",
+                        len(self.dead_edges))
+
+    def save_dead_edges(self) -> None:
+        try:
+            os.makedirs(os.path.dirname(self.dead_edges_path), exist_ok=True)
+            tmp = self.dead_edges_path + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump({"edges": sorted([list(e) for e in self.dead_edges])},
+                          f, indent=1)
+            os.replace(tmp, self.dead_edges_path)
+        except Exception as e:  # pragma: no cover
+            logger.warning("map graph: cannot save dead edges: %s", e)
+
+    def mark_dead_edge(self, src: str, dst: str) -> bool:
+        """Record that leaving *src* toward *dst* never transitions.
+
+        Returns True if newly recorded. The edge is dropped from neighbors(),
+        so route() immediately re-plans around it - which is the difference
+        between "stop offering the hop" (leaves the agent with NO route and a
+        blind travel fallback) and actually finding the real one.
+        """
+        s, d = self.resolve(src) or src, self.resolve(dst) or dst
+        if not d or s == d:
+            return False
+        if (s, d) in self.dead_edges:
+            return False
+        self.dead_edges.add((s, d))
+        logger.warning("map graph: edge %s -> %s proven dead (%d total) - "
+                       "re-planning without it", s, d, len(self.dead_edges))
+        self.save_dead_edges()
+        return True
+
     # --- query --------------------------------------------------------------
 
     def neighbors(self, name: str) -> Dict[str, Tuple[int, int]]:
@@ -405,6 +481,12 @@ class MapGraph:
                     if d is not None:
                         out[src] = d
                     break
+        # Drop adjacencies proven fake in play. Route 2 -> Pewter City looks
+        # adjacent by rectangle but never opens; removing it here lets the BFS
+        # find the real Gate -> Forest -> Gate chain instead of returning the
+        # fake 2-hop that strands the agent on Route 2 forever.
+        for dst in [k for k in out if (name, k) in self.dead_edges]:
+            out.pop(dst, None)
         return out
 
     def _portal_direction(self, owner: str, dest: str) -> Optional[Tuple[int, int]]:

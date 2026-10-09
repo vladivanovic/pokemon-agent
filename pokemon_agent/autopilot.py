@@ -559,6 +559,13 @@ class HermesDriver:
         self.failed_targets: Dict[tuple, int] = {}   # (map, r, c) -> failures
         self.last_explore_target: Optional[tuple] = None
         self.last_explore_from: Optional[tuple] = None
+        # Anti-pinball: recent positions on the current map. A tiny tile set
+        # revisited over many turns with no map change means the agent is
+        # bouncing between two boundaries - Route 2's y=60 strip did exactly
+        # that for 605 left/right reversals (26.6% of all transitions). Used to
+        # withhold the blind travel_ headings so named destinations drive.
+        self._recent_pos: list = []
+        self._recent_map: Optional[str] = None
         self.session_started_at: int = 0
         self.hermes_time_total: float = 0.0      # seconds spent in Hermes mode
         self.laya_time_total: float = 0.0       # seconds spent in Laya mode
@@ -575,6 +582,9 @@ class HermesDriver:
         self.edge_fails: Dict[tuple, int] = {}
         self._route_pending: Optional[tuple] = None
         self._route_last_pos: Optional[tuple] = None
+        # An edge proven dead in play, queued until the goal is known so the
+        # graph is only mutated when it can still route without that edge.
+        self._pending_dead_edge: Optional[tuple] = None
         # --- low-level scorer: laya | von | expert[:base] ----------------
         # Selectable via --scorer, $POKEMON_SCORER, or config. The scorer
         # replaces Laya's raw router for pick-one-of-N decisions; "expert"
@@ -1509,6 +1519,12 @@ class HermesDriver:
                     self.edge_fails.pop(k, None)
         key = (cur_map, pos.get("x"), pos.get("y"))
         self.visits[key] = self.visits.get(key, 0) + 1
+        # Position history for the anti-pinball guard (reset on map change).
+        if cur_map != self._recent_map:
+            self._recent_map = cur_map
+            self._recent_pos = []
+        self._recent_pos.append((pos.get("x"), pos.get("y")))
+        del self._recent_pos[:-12]
 
         # --- empirical edge verification -----------------------------------
         # Resolve the last route hop: if the map changed the edge is real and
@@ -1531,10 +1547,15 @@ class HermesDriver:
             elif cur_map == rmap and not moved_since:
                 n = self.edge_fails.get((rmap, rdir), 0) + 1
                 self.edge_fails[(rmap, rdir)] = n
-                if n == 4:
-                    logger.warning(
-                        "edge %s/%s never transitions (%d tries) - treating "
-                        "as a fake adjacency", rmap, rdir, n)
+                if n >= 4 and self.map_graph is not None and rnext:
+                    # Queue the proof for the GRAPH. Applied below, once the
+                    # goal is known - dropping an edge is only safe if the
+                    # graph can STILL route to the goal without it. Merely
+                    # suppressing the hop here left the agent with NO route at
+                    # all, which dropped it onto blind travel_left/travel_right
+                    # headings and started the Route 2 y=60 pinball
+                    # (605 reversals = 26.6% of all transitions).
+                    self._pending_dead_edge = (rmap, rnext)
             self._route_pending = None
 
         # --- global map graph: learn portals as we read them ---------------
@@ -1685,6 +1706,33 @@ class HermesDriver:
             goal = plan or self._infer_goal(state)
             seen_maps = {m for (m, _, _) in self.visits if m}
 
+            # --- apply a proven-dead edge, but never strand the route --------
+            # An edge that repeatedly fails to transition is fake (Route 2 ->
+            # Pewter City looks adjacent by rectangle, but in-game you go via
+            # the gates and Viridian Forest). Dropping it lets route() find the
+            # real chain. Only do it if the graph can STILL reach the goal
+            # without the edge: removing a load-bearing edge turned route()
+            # into None and dumped the agent onto blind travel headings, which
+            # is the pinball we are fixing.
+            if self._pending_dead_edge and self.map_graph is not None:
+                src_m, dst_m = self._pending_dead_edge
+                self._pending_dead_edge = None
+                self.map_graph.dead_edges.add((src_m, dst_m))
+                if goal and self.map_graph.route(src_m, goal):
+                    self.map_graph.save_dead_edges()
+                    logger.warning(
+                        "edge %s -> %s proven dead; graph still reaches %s "
+                        "without it - dropping the edge and re-planning",
+                        src_m, dst_m, goal)
+                    for k in [k for k in self.edge_fails if k[0] == src_m]:
+                        self.edge_fails.pop(k, None)
+                else:
+                    self.map_graph.dead_edges.discard((src_m, dst_m))
+                    logger.warning(
+                        "edge %s -> %s is dead but removing it would strand "
+                        "the route to %s - keeping the old suppress-the-hop "
+                        "behaviour instead", src_m, dst_m, goal)
+
             # --- C1: on-warp ---
             # Standing on a door. The tile you must step toward is the
             # building's OUTER WALL, correctly marked non-walkable, so
@@ -1811,16 +1859,43 @@ class HermesDriver:
                 # route by walking off the map edge. Without these options Laya
                 # literally cannot express "go north", so it can only shuffle
                 # within the current map.
+                #
+                # PINBALL GUARD: these headings are interchangeable by design
+                # (each reads "head <dir> for several tiles"), so when the agent
+                # is bouncing between two boundaries nothing distinguishes them
+                # and it never stops. Route 2's y=60 strip produced 605
+                # left/right reversals - 26.6% of every transition recorded.
+                # If the last 12 turns covered <=3 tiles, withdraw them and let
+                # the frontier options, which name a destination, drive instead.
+                pinned = (len(self._recent_pos) >= 12
+                          and len(set(self._recent_pos)) <= 3)
+                if pinned and not directed:
+                    logger.info(
+                        "pinball on %s (%d tiles across %d turns) - "
+                        "withholding blind travel headings",
+                        cur_map, len(set(self._recent_pos)), len(self._recent_pos))
+                # Which heading actually leads to the goal, when the graph
+                # knows. Without this every travel_ option reads identically
+                # and the scorer has no reason to pick the useful one.
+                goal_compass = None
+                if self.map_graph is not None and goal:
+                    try:
+                        goal_compass = self.map_graph.first_hop_direction(
+                            cur_map, goal)
+                    except Exception:
+                        goal_compass = None
                 for name, (dr, dc) in _DIRS.items():
-                    if directed:
-                        break             # the named route replaces these
+                    if directed or pinned:
+                        break       # named route / pinball guard supersedes
                     d = name.split("_")[1]
                     if not _grid_open(passable, PLAYER_ROW + dr,
                                       PLAYER_COL + dc):
                         continue
+                    toward = (f" - this heads toward {goal}"
+                              if goal and d == goal_compass else "")
                     criteria[f"travel_{d}"] = (
                         f"Head {d} for several tiles, continuing in that "
-                        f"direction to reach a new area")
+                        f"direction to reach a new area{toward}")
 
                 # --- C2d: leave building ---
                 # An interior (not in the map graph) where the goal does not
