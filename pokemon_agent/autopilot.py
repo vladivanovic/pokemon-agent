@@ -41,6 +41,7 @@ import sys
 import tempfile
 import time
 from collections import deque
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -65,6 +66,24 @@ except Exception as _exc:  # pragma: no cover
 logging.basicConfig(level=logging.DEBUG,
                     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("pokemon-agent.autopilot")
+# urllib3's DEBUG output logs every single HTTP request to /state (thousands
+# per hour), which buried the actual decisions. The replay trace below is the
+# real "log everything" mechanism - keep urllib3 at WARNING so the human log
+# stays readable.
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("requests").setLevel(logging.WARNING)
+
+# ---------------------------------------------------------------------------
+# Flight recorder - one JSON object per turn, append-only.
+#
+# The human log is good for a tail, but troubleshooting a specific turn means
+# grepping 3.9M characters of interleaved output. This writes a compact,
+# machine-readable record of EVERY decision with the full rationale, so a
+# question like "why did it flee at turn 1345?" is one jq call.
+# ---------------------------------------------------------------------------
+TRACE_PATH = os.environ.get(
+    "POKEMON_TRACE",
+    os.path.expanduser("~/.pokemon-agent/flight_recorder.jsonl"))
 
 # The collision grid is screen-relative and the player is always at E5,
 # i.e. (row 4, col 4) in the 9x10 walkability grids.
@@ -801,8 +820,27 @@ class HermesDriver:
             # is not a strategy. (A blackout would "fix" this for free, but it
             # costs money and warps the agent backwards.)
             ranked = gen1_battle.score_moves(state)
-            if not any(entry[1] > 0 for entry in ranked):
+            damaging = [e for e in ranked if e[1] > 0]
+            if not damaging:
                 return "no damaging move has PP left"
+            # Top up BEFORE the tank runs dry. Healing only at 0 PP meant the
+            # agent always fought down to its last PP, so a wild battle ended
+            # "one move, then RUN" (proven live: watched vs a level-4 Pidgey)
+            # and the walk back started from empty. Self-calibrating reserve: a
+            # Pokecenter restores PP to max, so the highest PP ever seen for a
+            # move IS its maximum; keep a 25% buffer of it.
+            best = damaging[0][2] or {}
+            best_name = str(best.get("name") or "")
+            best_pp = int(best.get("pp", 0) or 0)
+            maxima = getattr(self, "_move_max_pp", None)
+            if maxima is None:
+                maxima = self._move_max_pp = {}
+            if best_name and best_pp > maxima.get(best_name, 0):
+                maxima[best_name] = best_pp          # fresh PP is the new max
+            top = maxima.get(best_name, 0)
+            if top and best_pp <= max(1, top // 4):
+                return (f"{best_name} PP is nearly exhausted "
+                        f"({best_pp}/{top})")
         return ""
 
     def _heal_options(self, state: Dict[str, Any],
@@ -1589,7 +1627,17 @@ class HermesDriver:
                             f"Select FIGHT, navigate to {move_name} (PP={pp}), "
                             "and confirm"
                         )
-            if hp_frac < 0.35:
+            # RUN is offered when we are hurt, OR when no damaging move has PP
+            # (a wild battle is then unwinnable by attrition). The battle policy
+            # returns "flee" for that second case, but this criterion used to
+            # exist only for low HP - so the policy's own choice was rejected as
+            # "not offered" (141 times in one run) and the scorer picked a
+            # useless status move instead. Match the criterion to the policy so
+            # the two agree.
+            _ranked_b = gen1_battle.score_moves(state) if moves else []
+            _no_damaging_pp = not any(e[1] > 0 for e in _ranked_b)
+            _is_wild = str(battle.get("type") or "").lower() != "trainer"
+            if hp_frac < 0.35 or (_no_damaging_pp and _is_wild):
                 criteria["flee"] = "Select RUN and escape this battle"
             criteria["advance_text"] = "Press A to advance battle text"
             criteria["pkmn"] = "Select PKMN to switch Pokémon"
@@ -2304,6 +2352,56 @@ class HermesDriver:
                     self.last_confidence, took_ms,
                     actions, len(criteria), cur_map, pos.get("x"), pos.get("y"),
                     on_warp, laya_state["times_on_this_tile"], self.stuck)
+
+        # ---- flight recorder: one machine-readable line per decision --------
+        # "Why did it do that at turn N?" should be a jq query, not a grep
+        # through millions of chars of interleaved log. This records the whole
+        # decision: the option set, the raw PP both sources reported (the
+        # battle struct and the party struct), the enemy, and the rationale.
+        try:
+            _battle = state.get("battle") or {}
+            _am = state.get("active_mon") or {}
+            _party0 = (state.get("party") or [{}])[0]
+            _rec = {
+                "ts": datetime.now().isoformat(timespec="seconds"),
+                "turn": self.turn + 1,
+                "scorer": self.scorer_name,
+                "choice": choice,
+                "confidence": round(self.last_confidence, 3),
+                "took_ms": round(took_ms),
+                "actions": actions,
+                "policy_driven": bool(policy_choice is not None),
+                "n_options": len(criteria),
+                "options": list(criteria.keys()),
+                "map": cur_map,
+                "pos": [pos.get("x"), pos.get("y")],
+                "door": bool(on_warp),
+                "here": laya_state["times_on_this_tile"],
+                "stuck": self.stuck,
+                "battle": {
+                    "in_battle": _battle.get("in_battle"),
+                    "type": _battle.get("type"),
+                    "menu_index": _battle.get("menu_index"),
+                    "my_hp": [_am.get("hp"), _am.get("max_hp")],
+                    # raw PP from the battle struct (what the policy scores)
+                    "active_moves": [
+                        [m.get("name"), m.get("pp")]
+                        for m in (_am.get("moves") or [])],
+                    # raw PP from the party struct (the durable copy)
+                    "party_moves": [
+                        [m.get("name"), m.get("pp")]
+                        for m in (_party0.get("moves") or [])],
+                    "enemy": [
+                        (_battle.get("enemy") or {}).get("species"),
+                        (_battle.get("enemy") or {}).get("level"),
+                        (_battle.get("enemy") or {}).get("hp"),
+                        (_battle.get("enemy") or {}).get("max_hp")],
+                },
+            }
+            with open(TRACE_PATH, "a") as _fh:
+                _fh.write(json.dumps(_rec) + "\n")
+        except Exception:
+            logger.exception("flight recorder write failed")
 
         self.act(actions)
         self.event(type="decision",
