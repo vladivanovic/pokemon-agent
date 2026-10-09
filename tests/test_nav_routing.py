@@ -101,6 +101,28 @@ g3.dead_edges.discard(("Route 2 Gate Pewter", "Pewter City"))
 check("restoring it fixes the route",
       g3.route("Route 2", "Pewter City") == REAL_CHAIN)
 
+print("\n[6] anti-pinball guard wiring (static - the predicate is inline in\n"
+      "    _laya_turn and needs a live emulator to exercise)")
+auto_src = open(os.path.join(REPO, "pokemon_agent", "autopilot.py")).read()
+check("pinball predicate over recent positions",
+      "len(set(self._recent_pos)) <= 3" in auto_src)
+check("travel_ headings withheld when pinned",
+      "if directed or pinned:" in auto_src)
+check("door targets withheld when pinned",
+      "if pinned:" in auto_src and "Withhold door targets" in auto_src)
+check("position history is trimmed to a window",
+      "del self._recent_pos[:-12]" in auto_src)
+check("history resets on map change",
+      "if cur_map != self._recent_map:" in auto_src)
+check("travel_ names the goal heading",
+      "this heads toward {goal}" in auto_src)
+check("dead edge is queued, not applied immediately",
+      "self._pending_dead_edge = (rmap, rnext)" in auto_src)
+check("queued edge guarded by route() to the goal",
+      "if goal and self.map_graph.route(src_m, goal):" in auto_src)
+check("guard reverts when it would strand the route",
+      "self.map_graph.dead_edges.discard((src_m, dst_m))" in auto_src)
+
 print("\n" + "=" * 58)
 if FAILS:
     print(f"RESULT: {len(FAILS)} FAILED -> {FAILS}")
