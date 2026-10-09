@@ -840,6 +840,17 @@ class HermesDriver:
                         f"HEAL - {reason}. {where}: step up to the counter and "
                         f"press A to talk to the nurse, then accept the heal."}
             walk = _DELTA_TO_WALK.get((dx, dy))
+            if walk is None and (dx or dy):
+                # A diagonal delta (e.g. (1,1) for Viridian City's door, which
+                # sits down-right of the arrival point) has no single walk.
+                # Take the dominant axis - the next turn recomputes the
+                # direction from the new position, so the other axis follows.
+                # Returning {} here instead made heal_center vanish and the
+                # heal_route fallback fire forever.
+                if abs(dx) >= abs(dy):
+                    walk = "walk_right" if dx > 0 else "walk_left"
+                else:
+                    walk = "walk_down" if dy > 0 else "walk_up"
             if walk is None:
                 return {}
             return {"heal_center":
@@ -1780,7 +1791,15 @@ class HermesDriver:
                 if recent_transition and self.arrived_from:
                     back = "walk_" + _OPPOSITE_WALK.get(self.arrived_from, "")
                     others = [k for k in criteria if k in _DIRS and k != back]
-                    if back in criteria and others:
+                    # Healing outranks the arrival guard: if the walk back is
+                    # toward a heal target (heal_center or heal_route walking
+                    # through that boundary), keep it. A crippled party that
+                    # entered Viridian City from the north has its Pokecenter
+                    # to the north-west; suppressing north leaves it nowhere
+                    # to go but back out south, forever.
+                    heal_keys = [k for k in criteria
+                                 if k.startswith("heal_")]
+                    if back in criteria and others and not heal_keys:
                         criteria.pop(back, None)
 
                 # Do not offer interact when a named route or heal route is active.
@@ -2032,11 +2051,32 @@ class HermesDriver:
                 dx, dy = 0, 0
             dist = state.get("nearest_pokecenter_dist") or 0
             walk = _DELTA_TO_WALK.get((dx, dy))
+            if walk is None and (dx or dy):
+                # Diagonal delta (e.g. Viridian City's door sits down-right of
+                # the arrival point). Take the dominant axis - the next turn
+                # recomputes the direction from the new position. Returning {}
+                # here made heal_center emit the INSIDE fallback (walk_up) with
+                # the agent still in the street, walking into walls forever.
+                # On a perfect diagonal (|dx| == |dy|) the dominant axis is a
+                # tie; always picking dx made the agent walk right into the
+                # wall and back forever. Alternate by turn parity instead.
+                if abs(dx) >= abs(dy):
+                    if abs(dx) == abs(dy) and self.turn % 2 == 0:
+                        walk = "walk_down" if dy > 0 else "walk_up"
+                    else:
+                        walk = "walk_right" if dx > 0 else "walk_left"
+                else:
+                    walk = "walk_down" if dy > 0 else "walk_up"
             if walk is None:
-                # Inside a center with the nurse off screen. She stands at the
-                # counter, which is north of the entrance in every Gen 1
-                # Pokecenter, so close in and talk.
-                actions = ["walk_up", "press_a", "wait_60"]
+                # dx == dy == 0 with dist <= 0: inside the center, nurse at the
+                # counter (north of the entrance in every Gen 1 Pokecenter).
+                # dist > 0 with a zero delta means the door read was garbage -
+                # fall back to the heal route instead of walking up blindly.
+                if dist > 0:
+                    actions = ["walk_down", "walk_down", "walk_left",
+                               "walk_right"]   # reposition; next turn re-reads
+                else:
+                    actions = ["walk_up", "press_a", "wait_60"]
             elif dist <= 1:
                 actions = ["press_a", "wait_60"]        # already beside her
             else:
@@ -2044,8 +2084,11 @@ class HermesDriver:
                 # useful move is to stand adjacent and press A. Capped at 3
                 # steps because this is a straight-line guess: the next turn
                 # recomputes the direction from the new position.
+                # No trailing press_a: when the straight-line guess is blocked
+                # (a wall, an NPC), press_a talks to whoever is in front
+                # instead - the Gambler on Route 2/Viridian City's edge ate
+                # the approach, opening dialogs forever.
                 actions = [walk] * min(dist - 1, 3)
-                actions += ["press_a", "wait_60"]
         elif choice == "flee":
             actions = ["press_b", "wait_30", "press_down", "press_right",
                        "press_a", "wait_60"]
