@@ -1461,10 +1461,19 @@ class HermesDriver:
         # only sees trustworthy reads. The length cap is a second guard: a
         # 10x9 screen cannot show more than a handful of doors, so a longer
         # list means the read is still suspect.
+        # Portal cells are SCREEN-relative at record time. We also store the
+        # player's global position at record time so the door can be found
+        # again from anywhere on the map: global_door = screen_cell - player_at
+        # + player_now. Without this, route_B8 has no on-screen target when the
+        # player is at the other end of a big map (Viridian Forest is 24 rows
+        # tall) and the handler falls to a blind single step - the wedge that
+        # bounced the agent up/down at (32,1)/(32,2) for 100+ turns.
         if self.map_graph is not None and warps and len(warps) <= 12:
             learned = False
+            player_at = (pos.get("x"), pos.get("y"))
             for w in warps:
-                if self.map_graph.record_warp(cur_map, w):
+                if self.map_graph.record_warp(cur_map, w,
+                                              player_at=player_at):
                     learned = True
             if learned:
                 self.map_graph.save_portals()
@@ -2095,6 +2104,35 @@ class HermesDriver:
             label = choice[len("route_"):]
             target = next(((w["row"], w["col"]) for w in warps
                            if w.get("cell") == label), None)
+            if target is None:
+                # Door not on this screen (big map, player far away). Project
+                # the recorded door back onto the screen using the player
+                # position at record time: global_door = screen_cell_at_record
+                # - player_at + player_now, then screen_now = global_door
+                # - player_now + PLAYER. Falls back to a blind step only when
+                # we never recorded where we stood.
+                entry = None
+                if self.map_graph:
+                    okey = self.map_graph.resolve(cur_map) or cur_map
+                    entry = ((self.map_graph.portals.get(okey) or {})
+                             .get(label))
+                if entry and entry.get("player_x") is not None:
+                    rec_row = int(entry["row"])
+                    rec_col = int(entry["col"])
+                    px = int(entry["player_x"])
+                    py = int(entry["player_y"])
+                    gx = pos.get("x") or 0
+                    gy = pos.get("y") or 0
+                    # global door position (x=col axis, y=row axis)
+                    gdx = rec_col - px + gx
+                    gdy = rec_row - py + gy
+                    # back to screen-relative for the CURRENT position
+                    tr = gdy - gy + PLAYER_ROW
+                    tc = gdx - gx + PLAYER_COL
+                    h = len(passable)
+                    wdw = len(passable[0]) if h else 0
+                    if 0 <= tr < h and 0 <= tc < wdw:
+                        target = (tr, tc)
             if target is not None:
                 actions = _path_to(passable, target, ledges=ledge_grid)
                 if actions:
