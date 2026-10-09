@@ -51,25 +51,29 @@ INFO level, one line per turn. `urllib3`/`requests` are pinned to WARNING
 because their DEBUG output logged every `/state` request and buried the real
 decisions.
 
-## 3. Rotation — hourly, 12 hour retention
+## 3. Rotation — the agent logs only
 
 `~/.hermes/scripts/rotate_pokemon_logs.sh` (copy: `scripts/rotate_logs.sh`),
 run by the `pokemon-log-rotation` cron job (`0 * * * *`, no-agent).
 
-- small logs (`autopilot_*.log`, `serve_fix.log`, `flight_recorder.jsonl`) are
-  gzipped whole into `v2/runs/archive/` then truncated in place;
-- big training logs (`train_*.log`, 100s of MB) are only tail-archived (last
-  40 MB) so an hourly gzip of a 900 MB file cannot become the disk problem;
-- archives older than 12 h are deleted; a hard cap drops the oldest half if the
-  archive dir exceeds 3 GB;
+Scope: **autopilot + serve + flight recorder only.**
+
+- rotated **daily** at 04:00 UTC, gzipped into `v2/runs/archive/`;
+- **5 days** of agent-log history retained, then deleted;
 - the job is **silent on success** and only prints if something needs a human
-  (gzip failure, archive pressure, disk ≥ 85%).
+  (gzip failure, disk ≥ 85%);
+- `FORCE_HOUR=04 ./rotate_pokemon_logs.sh` runs the daily pass out of band for
+  testing.
+
+### Deliberately out of scope
+
+SB3 training is **not** touched by this cron: neither `v2/runs/checkpoints/`
+nor `train_*.log`. Culling those has to be an explicit, separate decision —
+a misplaced "tidy up" could delete a resume point or a milestone.
+
+`v2/runs/checkpoints/` is the real disk consumer (~8.6 GB vs ~5 MB of agent
+logs). If `/home` fills up, look there first — but prune it on purpose, not by
+a routine cron.
 
 Truncating in place is safe: writers use `>>` (O_APPEND), so the next write
 lands at offset 0 of the emptied file.
-
-### Disk note
-
-The logs were never the real disk consumer — `v2/runs/checkpoints/` (SB3 model
-saves) held ~8.5 GB vs ~0.09 GB of logs. If `/home` fills up, look at
-checkpoints first, not logs.
