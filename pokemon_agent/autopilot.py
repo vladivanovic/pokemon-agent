@@ -862,9 +862,39 @@ class HermesDriver:
         """
         reason = self._needs_heal(state)
         if not reason:
+            # Goal satisfied (or no longer needed) - reset the stall watchdog.
+            self._heal_best_dist = None
+            self._heal_stall = 0
+            return {}
+        # A heal goal that stops making progress is a WEDGE, not patience.
+        # Proven live: the agent cycled heal_center for 130+ of 272 turns in
+        # Viridian City (45-72 turns on a single tile, position frozen at
+        # (23,12)) because the Pokecenter door is 13 tiles SOUTH with an
+        # unbroken wall row between us, and the local 3-step walk cannot route
+        # around it. After N turns with no reduction in distance, stand down
+        # for a while and let normal exploration run - exploration covers
+        # ground, and the walk can finish from a position where it works.
+        if self.turn < getattr(self, "_heal_cooldown_until", 0):
             return {}
         src = state.get("nearest_pokecenter_src")
         dist = state.get("nearest_pokecenter_dist")
+
+        if isinstance(dist, (int, float)):
+            best = getattr(self, "_heal_best_dist", None)
+            if best is None or dist < best:
+                self._heal_best_dist = dist
+                self._heal_stall = 0
+            else:
+                self._heal_stall = getattr(self, "_heal_stall", 0) + 1
+                if self._heal_stall >= 10:
+                    self._heal_cooldown_until = self.turn + 40
+                    self._heal_best_dist = None
+                    self._heal_stall = 0
+                    logger.warning(
+                        "heal goal stalled after 10 turns with no progress "
+                        "(still %s tiles away) - standing down for 40 turns "
+                        "and letting exploration run", dist)
+                    return {}
 
         if src is not None and dist is not None:
             d = state.get("nearest_pokecenter_dir") or [0, 0]
@@ -2170,7 +2200,10 @@ class HermesDriver:
                         actions = path[:4]   # step onto the door is next turn
                 if not actions:
                     # Off-screen door: walk toward the delta direction on the
-                    # collision grid (open cells only).
+                    # collision grid (open cells only). If the direct step is
+                    # blocked - Viridian City has an unbroken wall row between
+                    # the agent and its Pokecenter door - fall through to an
+                    # open neighbour instead of standing still forever.
                     dr, dc = (0, 0)
                     if "up" in walk: dr = -1
                     elif "down" in walk: dr = 1
@@ -2185,6 +2218,30 @@ class HermesDriver:
                         actions.append(f"walk_{walk.split('_')[1]}")
                         r, c = nr, nc
                         steps += 1
+                if not actions:
+                    # Still blocked: try each neighbour, biggest delta axis
+                    # first, and take the first direction that is actually open.
+                    sy = 0 if dy == 0 else (1 if dy > 0 else -1)
+                    sx = 0 if dx == 0 else (1 if dx > 0 else -1)
+                    if abs(dy) >= abs(dx):
+                        cands = [(sy, 0), (0, sx), (0, -sx), (-sy, 0)]
+                    else:
+                        cands = [(0, sx), (sy, 0), (-sy, 0), (0, -sx)]
+                    for cdr, cdc in cands:
+                        if cdr == 0 and cdc == 0:
+                            continue
+                        name = ("walk_up" if cdr < 0 else "walk_down" if cdr > 0
+                                else "walk_left" if cdc < 0 else "walk_right")
+                        r, c, run = PLAYER_ROW, PLAYER_COL, []
+                        while len(run) < 3:
+                            nr, nc = r + cdr, c + cdc
+                            if not _grid_open(passable, nr, nc):
+                                break
+                            run.append(name)
+                            r, c = nr, nc
+                        if run:
+                            actions = run
+                            break
                 if not actions:
                     actions = [walk] * min(dist - 1, 3)
         elif choice == "flee":
