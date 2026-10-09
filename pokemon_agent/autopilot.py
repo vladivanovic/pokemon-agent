@@ -192,7 +192,7 @@ STATE:
 
 If you need information about the world, read the MAP - it is ground truth
 read from game RAM. Do not search the web; the web toolset is disabled."""
-ESCALATION_NUDGE = """You are playing Pokémon Red. Laya (a fast movement model) has
+ESCALATION_NUDGE = """You are playing Pokémon Red. {brain} (a fast movement scorer) has
 been driving, but nothing has advanced for a while, so YOU have control for the
 next {budget} turns. This is turn {n} of {budget}.
 
@@ -200,7 +200,7 @@ GOAL: {goal}
 
 Server: {server}
 
-You know Pokémon Red. Laya does not - it only picks directions. Use that
+You know Pokémon Red. {brain} does not - it only picks directions. Use that
 knowledge: work out what the game is waiting for, and do it.
 
 NEVER call /load or /save. NEVER load a save state. If movement seems not to
@@ -212,7 +212,7 @@ Each turn:
 2. POST {server}/action {{"actions":[...]}}  up to 8 actions - you may send a
    longer sequence than usual since you have the context to plan it
 3. If the blocker is cleared and only movement remains, write HANDBACK in your
-   reply and Laya will resume.
+   reply and {brain} will resume.
 
 Warps (doors, stairs, exits) trigger when you WALK onto or off them - pressing
 A on a warp tile does nothing. Building exits in this game are on the SOUTH
@@ -615,6 +615,11 @@ class HermesDriver:
         self.scorer_name: str = ((scorer
                                   or os.environ.get("POKEMON_SCORER", "laya"))
                                  .lower())
+        # The local (non-Hermes) brain is whichever scorer we were STARTED with,
+        # so every user-facing label says "von" when Von is driving. The internal
+        # mode value stays "laya" to avoid churning comparisons all over the
+        # file, but logs/events must not claim Laya is in control when it is not.
+        self.local_label: str = self.scorer_name
         self.scorer: Optional[Any] = None       # lazy-init on first use
         # Vision-capable models get the vision toolset; text-only models (e.g.
         # Qwen GGUF) must not - vision_analyze 500s and the retry loop blows
@@ -1128,7 +1133,9 @@ class HermesDriver:
         self.recent.clear()
         self.progress_at = now   # grace period in the new mode
         self.last_mode_switch = now
-        self.event(type="decision", text=f"[brain] switched to {mode}")
+        self.event(type="decision",
+                   text=f"[brain] switched to "
+                        f"{self.local_label if mode == 'laya' else mode}")
         self._post_stats()
 
     def _infer_goal(self, state: Dict[str, Any]) -> str:
@@ -1339,7 +1346,8 @@ class HermesDriver:
             self._hermes_last_pos = cur_pos
 
             if self.mode_turns >= 2 and not (state.get("battle") or {}).get("in_battle"):
-                logger.info("hermes yielded after %d turns (battle over) - back to laya", self.mode_turns)
+                logger.info("hermes yielded after %d turns (battle over) - "
+                            "back to %s", self.mode_turns, self.local_label)
                 self._enter_mode("laya")
             elif (moved and self.mode_turns >= self.hermes_budget - 2
                     and self.hermes_budget < self.hermes_budget_max):
@@ -1350,8 +1358,8 @@ class HermesDriver:
                 logger.info("hermes still moving - budget extended to %d",
                             self.hermes_budget)
             elif self.mode_turns >= self.hermes_budget:
-                logger.warning("hermes budget (%d turns) exhausted - back to laya",
-                               self.hermes_budget)
+                logger.warning("hermes budget (%d turns) exhausted - back to %s",
+                               self.hermes_budget, self.local_label)
                 self._enter_mode("laya")
             return self.mode
 
@@ -2630,6 +2638,7 @@ class HermesDriver:
         elif goal:
             prompt = ESCALATION_NUDGE.format(
                 server=self.server, goal=goal, budget=budget, n=n,
+                brain=self.local_label,
                 map_ascii=map_ascii,
                 state=json.dumps(_compact_state(state), indent=2),
             )
@@ -2875,7 +2884,8 @@ class HermesDriver:
                        text="Hermes preflight failed - see driver log.")
             sys.exit(1)
 
-        brain = "laya + hermes escalation" if self.use_laya else "hermes"
+        brain = (f"{self.local_label} + hermes escalation"
+                 if self.use_laya else "hermes")
         print(f"[driver] autopilot. server={self.server} brain={brain} "
               f"model={self.model or 'config default'}")
         if self.use_laya:
