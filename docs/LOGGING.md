@@ -77,3 +77,25 @@ a routine cron.
 
 Truncating in place is safe: writers use `>>` (O_APPEND), so the next write
 lands at offset 0 of the emptied file.
+
+## 4. Hourly analysis (cron `simulation_status_updates`, :05)
+
+`~/.hermes/scripts/collect_pokemon_status.sh` (copy:
+`scripts/collect_pokemon_status.sh`) collects SB3 + autopilot status and emits a
+30-second video, then runs a rule-based screen over the last hour of the flight
+recorder: action mix, battle behaviour, map progress, position drift, and stuck
+detection (max turns on a tile, max stuck counter, longest position freeze).
+
+The cron then hands that data to an agent that **investigates before judging**:
+it queries the flight recorder and the autopilot log, and says whether
+Von/Hermes is behaving appropriately, naming the specific turns and the likely
+cause when it is not. It ends with the video's `MEDIA:` line.
+
+Design notes:
+
+- only genuine warp tiles are excluded from the stuck metric — an earlier
+  version also excluded `heal_center`, which **masked a real Viridian City
+  wedge** (agent cycling `heal_center` for 130+ of 272 turns, 45-72 turns on one
+  tile at (23,12));
+- the screen is deliberately crude and cheap. It exists to *raise* suspicions;
+  the agent's investigation is what resolves them.
