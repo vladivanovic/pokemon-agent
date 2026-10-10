@@ -1188,6 +1188,28 @@ class HermesDriver:
                     "if that means going west or east first.")
 
         if badges == 0:
+            # Shopping first: the forest road to Pewter is a meat grinder with
+            # an empty bag - no Poke Balls means wild encounters are flee-only,
+            # and no Potions means every Caterpie bite sticks. Only trigger in
+            # Viridian City (the Mart is THERE); buying is handled by the
+            # dedicated shop handler once inside.
+            bag = state.get("bag") or []
+            ball_count = sum(e.get("quantity", 0) for e in bag
+                             if "ball" in str(e.get("item", "")).lower())
+            potion_count = sum(e.get("quantity", 0) for e in bag
+                               if "potion" in str(e.get("item", "")).lower())
+            if (ball_count == 0 or potion_count == 0) and "Viridian" in map_name:
+                need = []
+                if ball_count == 0:
+                    need.append("Poke Balls")
+                if potion_count == 0:
+                    need.append("Potions")
+                return ("You have no " + " or ".join(need) + ". Enter the Viridian "
+                        "Poke Mart, face the clerk behind the counter, press A, "
+                        "and buy " + " and ".join(need) +
+                        " (you have enough money). Then leave the Mart and "
+                        "head north to Pewter City through Viridian Forest. "
+                        "Brock uses Rock types - a Grass or Water Pokemon helps.")
             return ("Reach Pewter City and beat Brock at the Gym for the Boulder "
                     "Badge. Route from Viridian City: north through Viridian "
                     "Forest. Brock uses Rock types - a Grass or Water Pokemon "
@@ -1390,21 +1412,19 @@ class HermesDriver:
             return "laya"
 
         self.mode_turns += 1
-        # Two reasons to escalate. A stall means Laya is wedged. A stale plan
-        # means it is executing intent formed long ago - re-planning on a timer
-        # keeps steering fresh instead of waiting for a wedge.
+        # Two escalation triggers historically: a stall (Laya wedged) and a
+        # stale plan (re-planning on a timer). The small local model (Qwen3.5)
+        # burns its whole budget on tool-retry loops during WALK turns - each
+        # escalation was 50-200s of mostly-wasted wall clock - so normal
+        # navigation no longer escalates at all. Von handles movement; a stale
+        # plan only rotates the standing-plan text, it does not hand over.
+        # Hermes/Qwen is reserved for BATTLES (handled by the deterministic
+        # Gen 1 policy behind the scorer anyway) and a future manual
+        # escalate/deescalate button in the Web UI.
         plan_age = self.turn - self.plan_set_at
-        plan_stale = self.standing_plan and plan_age > self.replan_every
-        if stalled_for > self.stall_seconds or plan_stale:
-            why = "stalled" if stalled_for > self.stall_seconds else "plan stale"
-            self.hermes_goal = self._infer_goal(state)
-            self.hermes_budget = self.hermes_turns
-            logger.warning("escalating to hermes (%s, %.0fs since progress, "
-                           "plan %d turns old, budget %d): %s",
-                           why, stalled_for, plan_age, self.hermes_budget,
-                           self.hermes_goal)
-            self._enter_mode("hermes")
-            self.event(type="alert", text=f"Escalating ({why}): {self.hermes_goal}")
+        if self.standing_plan and plan_age > self.replan_every:
+            logger.info("plan stale after %d turns - awaiting next escalation "
+                        "(no auto handover)", plan_age)
         return self.mode
 
     # --- Laya --------------------------------------------------------------
@@ -2502,6 +2522,20 @@ class HermesDriver:
                                         # Use these actions directly - they lead toward the off-screen gate
                                         actions = offscreen_actions
                                         target = None  # ensure we don't try _path_to
+                                # Also patch the target gate tiles as walkable in passable grid
+                                # so future turns can path through the gate once reached
+                                if self.map_graph:
+                                    for cell, p in self.map_graph.portals.get(cur_map, {}).items():
+                                        if p.get("cell") == label:
+                                            try:
+                                                wr = int(p.get("row", 0))
+                                                wc = int(p.get("col", 0))
+                                            except (TypeError, ValueError):
+                                                continue
+                                            if 0 <= wr < len(passable) and 0 <= wc < len(passable[0]):
+                                                passable[wr][wc] = True
+                                                if ledge_grid and 0 <= wr < len(ledge_grid) and 0 <= wc < len(ledge_grid[0]):
+                                                    ledge_grid[wr][wc] = False
                 if target is not None:
                     actions = _path_to(passable, target, ledges=ledge_grid)
                     if actions:
