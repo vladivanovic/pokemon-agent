@@ -42,8 +42,14 @@ ADDR_TILESET       = 0xD367   # wCurMapTileset
 ADDR_TILE_IN_FRONT = 0xCFC6   # wTileInFrontOfPlayer
 ADDR_WALK_COUNTER  = 0xCFC5   # wWalkCounter; nonzero = mid-step, camera moving
 ADDR_SPRITE_DATA1  = 0xC100   # wSpriteStateData1, 16 slots x 16 bytes
-ADDR_NUM_WARPS     = 0xD3AE   # wNumberOfWarps
-ADDR_WARP_ENTRY    = 0xD3AF   # wWarpEntries: y, x, dest_warp, dest_map
+# wNumberOfWarps / wWarpEntries verified against pokered ram.asm + layout.link:
+# Main Data section order is ...wMapBackgroundTile (0xD3AE), wNumberOfWarps
+# (0xD3AF), wWarpEntries (0xD3B0). The old values (0xD3AE/0xD3AF) were off by
+# one: n was read from wMapBackgroundTile ($2D=45 > MAX_WARPS -> empty list)
+# and every warp entry was shifted a byte, decoding garbage. This is why
+# warps[] was empty on every outdoor map.
+ADDR_NUM_WARPS     = 0xD3AF   # wNumberOfWarps
+ADDR_WARP_ENTRY    = 0xD3B0   # wWarpEntries: y, x, dest_warp, dest_map
 
 # ---------------------------------------------------------------------------
 # Geometry — the single source of truth. overlay.py imports these; do not
