@@ -322,24 +322,17 @@ class MapGraph:
         dest_id = warp.get("dest_map")
         if dest_id is None:
             return False
+        # dest_map=255 is Gen 1's "return to last outdoor map" sentinel. The
+        # REAL destination depends on which map the player came from, which
+        # cannot be known from RAM. Poison-proofing: these warps were being
+        # named via MAP_NAMES.get() with whatever map id was in transit
+        # (Fuchsia City / Route 4 junk on the Mart) and 30 portal cells
+        # accumulated - every floor tile "a door" - which pinned the agent
+        # in the Viridian Mart for 600+ turns. 255 warps are handled by the
+        # exit/edge logic and learned from the OUTDOOR side, never recorded.
+        if int(dest_id) == 255:
+            return False
         dest_name = warp.get("dest_map_name")
-        # dest_map=255 is Gen 1's "return to last outdoor map" sentinel.
-        # It doesn't have a fixed name - the actual destination depends on
-        # which outdoor map the player came from. Since we can't know that
-        # from RAM, infer from the geographic graph: a 255 warp on a map
-        # boundary means "exit this direction". If the current map has a
-        # geographic neighbor in that direction, use it.
-        if dest_id == 255:
-            # dest_map=255 is Gen 1's "return to last outdoor map" sentinel.
-            # It doesn't have a fixed name - the actual destination depends on
-            # which outdoor map the player came from. We CANNOT reliably infer it
-            # from geography alone (a gate interior may have 255 warps on multiple
-            # sides leading to DIFFERENT maps - e.g. north->Forest, south->Route 2).
-            # Recording it as the single geographic neighbor gives the WRONG
-            # direction. Instead, skip 255 entirely - the exit/edge logic handles
-            # these connections, and the portal table already learns them from
-            # the outdoor side (Route 2 -> Gate was correctly learned).
-            pass
         if not dest_name or dest_name.startswith("Map "):
             try:
                 from pokemon_agent.memory.red import MAP_NAMES
@@ -351,12 +344,23 @@ class MapGraph:
         # briefly reads garbage and the table yields dozens of phantom cells
         # (all dest_map=255, no name); persisting them marks half the screen
         # as "doors", which then blocks route paths and misleads
-        # leave_building. 255 is Gen 1's "return to the last outdoor map"
-        # sentinel and is handled by the exit logic, not by name routing.
+        # leave_building.
         if not dest_name:
             return False
         cell = warp.get("cell")
         if not cell:
+            return False
+        # Runtime cap: a real door is 1-2 tiles wide, so a map never has more
+        # than a couple of cells to the SAME destination. MAX_SAME_DEST only
+        # ran at LOAD time - at runtime the table grew unbounded (the Mart
+        # reached 30 cells). Drop NEW cells once the bucket for this
+        # destination is full; existing ones stay so a correction never
+        # loses learned doors.
+        bucket_existing = [
+            (c, e) for c, e in self.portals.get(cur_map, {}).items()
+            if e.get("dest_map_name") == dest_name
+        ]
+        if len(bucket_existing) >= self.MAX_SAME_DEST and cell not in self.portals.get(cur_map, {}):
             return False
         entry = {
             "dest_map": int(dest_id),
