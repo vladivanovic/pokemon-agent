@@ -1556,11 +1556,17 @@ class HermesDriver:
         self._recent_pos.append((pos.get("x"), pos.get("y")))
         del self._recent_pos[:-12]
 
+        # --- patch gate tiles as walkable in collision grid ---
+        # Gate/warp tiles are often marked as walls in the collision grid
+        # but are actually passable (stepping on them triggers map transition).
+        # NOTE: build_collision_grid() already lifts warp tiles to walkable
+        # (the engine's CheckWarpsNoCollision runs before the collision check),
+        # but only for warps VISIBLE in the 10x9 window. Once the warp-address
+        # off-by-one was fixed (see collision.py), visible doors show up in
+        # warps[] and are handled there - no extra patching needed here.
+
         # --- empirical edge verification -----------------------------------
         # Resolve the last route hop: if the map changed the edge is real and
-        # any failure count resets. If we neither transitioned nor moved, we
-        # are pressed against a boundary that does not open - count it, and
-        # after enough tries _graph_travel_options stops offering it, which
         # restores goto_/explore_ so the agent can find a gate instead.
         if self._route_pending:
             rmap, rdir, rnext = self._route_pending
@@ -2455,10 +2461,40 @@ class HermesDriver:
                     wdw = len(passable[0]) if h else 0
                     if 0 <= tr < h and 0 <= tc < wdw:
                         target = (tr, tc)
-            if target is not None:
-                actions = _path_to(passable, target, ledges=ledge_grid)
-                if actions:
-                    actions = actions + ["walk_down"]   # step onto the door
+                    else:
+                        # Door is off-screen. Use _path_toward_edge with the
+                        # correct compass direction instead of projecting.
+                        # Figure out which compass direction this door is in.
+                        if self.map_graph:
+                            compass = self.map_graph._portal_direction(cur_map, entry.get("dest_map_name"))
+                            if compass:
+                                d = COMPASS_TO_WALK.get(compass)
+                                if d:
+                                    # Use map_graph portals for avoid set (persistent),
+                                    # but EXCLUDE the target door so we can step on it.
+                                    avoid = set()
+                                    for map_name, portals in self.map_graph.portals.items():
+                                        if map_name != cur_map:
+                                            continue
+                                        for cell, p in portals.items():
+                                            if p.get("cell") == label:
+                                                continue  # don't avoid the target door
+                                            try:
+                                                wr = int(p.get("row", 0))
+                                                wc = int(p.get("col", 0))
+                                            except (TypeError, ValueError):
+                                                continue
+                                            avoid.add((wr, wc))
+                                    offscreen_actions = _path_toward_edge(passable, d, avoid=avoid,
+                                                                        ledges=ledge_grid)
+                                    if offscreen_actions:
+                                        # Use these actions directly - they lead toward the off-screen gate
+                                        actions = offscreen_actions
+                                        target = None  # ensure we don't try _path_to
+                if target is not None:
+                    actions = _path_to(passable, target, ledges=ledge_grid)
+                    if actions:
+                        actions = actions + ["walk_down"]   # step onto the door
             if not actions:
                 logger.warning("no path to route door %s; single step", label)
                 legal = list(_legal_dirs(passable))
