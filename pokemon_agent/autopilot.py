@@ -214,6 +214,15 @@ Each turn:
 3. If the blocker is cleared and only movement remains, write HANDBACK in your
    reply and {brain} will resume.
 
+EXACT curl commands (copy this shape - do not invent new JSON):
+  curl -s -X POST {server}/event -H 'Content-Type: application/json' \\
+       -d '{{"type":"reasoning","text":"a wall blocks north, gate is east"}}'
+  curl -s -X POST {server}/action -H 'Content-Type: application/json' \\
+       -d '{{"actions":["walk_right","walk_right","walk_right"]}}'
+The -d body is ONE line of strict JSON: double quotes only, no trailing
+commas, no nested quotes. If a call fails, do NOT retry with different
+formats - re-read this example.
+
 Warps (doors, stairs, exits) trigger when you WALK onto or off them - pressing
 A on a warp tile does nothing. Building exits in this game are on the SOUTH
 edge: to leave, walk DOWN off the doormat. `exits` in STATE gives the cell of
@@ -264,6 +273,8 @@ def _compact_state(state: Dict[str, Any]) -> Dict[str, Any]:
     dialog = state.get("dialog") or {}
     battle = state.get("battle") or {}
     enemy = battle.get("enemy") or {}
+    in_battle = battle.get("in_battle")
+    dialog_active = dialog.get("text_active") or dialog.get("input_locked")
 
     party = []
     for m in state.get("party") or []:
@@ -284,19 +295,19 @@ def _compact_state(state: Dict[str, Any]) -> Dict[str, Any]:
         "facing": p.get("facing"),
         "money": p.get("money"),
         "badges": p.get("badges"),
-        "party": party,
-        "active_mon": state.get("active_mon"),
-        "text_active": dialog.get("text_active"),
-        "input_locked": dialog.get("input_locked"),
-        "in_battle": battle.get("in_battle"),
-        # battle.enemy is a DICT, not a list - one active enemy at a time.
+        "party": party if in_battle else [],   # drop full party outside battle
+        "active_mon": state.get("active_mon") if in_battle else None,
+        "text_active": dialog.get("text_active") if dialog_active else None,
+        "input_locked": dialog.get("input_locked") if dialog_active else None,
+        "in_battle": in_battle,
         "enemy": ({"species": enemy.get("species"), "level": enemy.get("level"),
                    "hp": enemy.get("hp"), "max_hp": enemy.get("max_hp"),
                    "types": enemy.get("types")}
-                  if battle.get("in_battle") else None),
+                  if in_battle else None),
         "status": state.get("status"),
-        "dialog_text": (state.get("dialog")) or None,
+        "dialog_text": state.get("dialog") if dialog_active else None,
     }
+    # Drop bag entirely - only relevant in menus which we avoid
     col = state.get("collision") or {}
     people = [{"cell": s.get("cell"), "who": s.get("who")}
               for s in col.get("sprites") or []]
@@ -2694,9 +2705,7 @@ class HermesDriver:
         # Small local models (Qwen-2B) also over-search: 10+ web_search calls x
         # 2.5s each + API latency > 120s. A $POKEMON_HERMES_TOOLS override can
         # narrow the toolset further (e.g. "terminal" to drop web).
-        toolset = ("terminal,web,vision" if self.vision_capable
-                   else "terminal,web")
-        toolset = os.environ.get("POKEMON_HERMES_TOOLS", toolset)
+        toolset = os.environ.get("POKEMON_HERMES_TOOLS", "terminal")
         cmd = ["hermes", "chat", "-Q", "--yolo", "--pass-session-id",
                 "-s", "pokemon-player", "-t", toolset]
         if self.session_id and not goal:
@@ -2715,7 +2724,10 @@ class HermesDriver:
         # Small models loop on tool_search when a wanted tool is missing
         # (proven live: 95 tool_search calls x 2.4s = 228s > timeout). Cap
         # the tool-calling iterations and the wall clock per turn.
-        cmd += ["--max-turns", "12",
+        # 6 turns: enough for reasoning + action + a retry or two, without
+        # the model burning its whole budget on tool_search loops (12 was
+        # proven live to exhaust on 5KB-state prompts).
+        cmd += ["--max-turns", "6",
                 "--run-budget", str(max(self.turn_timeout - 30, 60))]
         if have_img:
             cmd += ["--image", img_path]
