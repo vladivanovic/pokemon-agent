@@ -19,7 +19,7 @@ set -euo pipefail
 
 MODEL="${POKEMON_LLAMA_MODEL:-/home/vlad/models/unsloth-Qwen3.5-2B-GGUF/Qwen3.5-2B-UD-Q8_K_XL.gguf}"
 PORT="${POKEMON_LLAMA_PORT:-8000}"
-CTX="${POKEMON_LLAMA_CTX:-65536}"
+CTX="${POKEMON_LLAMA_CTX:-16384}"
 LLAMA_DIR="${POKEMON_LLAMA_DIR:-/home/vlad/llama.cpp}"
 LOG="${POKEMON_LLAMA_LOG:-/tmp/llama_qwen65k.log}"
 
@@ -34,13 +34,14 @@ fi
 
 echo "[llama] model=$(basename "$MODEL") port=$PORT ctx=$CTX log=$LOG"
 cd "$LLAMA_DIR"
-# -ngl 999 / -t 8 / -tb 8 are for this Orin box; -fa on + q8_0 KV halves memory.
+# -ngl 99 -> offload 99 layers to GPU (Orin GPU has 2048 CUDA cores, can handle most layers)
+# -fa on + q8_0 KV halves memory. -mlock prevents swapping.
 exec env LLAMA_ARG_N_PREDICT=1500 ./build/bin/llama-server \
     -m "$MODEL" \
     -c "$CTX" \
     -fa on \
     -ctk q8_0 -ctv q8_0 \
-    -ngl 999 \
+    -ngl 99 \
     -t 8 -tb 8 \
     -np 1 \
     --n-predict 1500 \

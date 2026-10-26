@@ -168,8 +168,36 @@ def choose(state: Dict[str, Any]) -> Optional[str]:
     mine = state.get("active_mon") or {}
     battle = state.get("battle") or {}
     hp_frac = (mine.get("hp") or 0) / (mine.get("max_hp") or 1)
+    btype = str(battle.get("type") or "").lower()
+
+    # TRIVIAL-WILD RULE REVERSED (user directive 2026-10-26, "do it your
+    # way"): fight trivial wilds instead of fleeing them. The flee was a
+    # speed lottery (each failed attempt burns a turn and a successful one
+    # still leaves the position unchanged, so the same tile immediately
+    # re-rolls a new encounter - proven live 17:01: 26 turns parked at B2F
+    # (20,24) in a flee loop). A Lv 36 lead one-shots a Lv 5 Zubat in one
+    # deterministic hit; the Pokecenter loop keeps PP topped up, so the
+    # PP-conservation argument no longer outweighs the pace. Fleeing stays
+    # reserved for genuinely dangerous situations below (weak move + hurt,
+    # or no damaging PP at critical HP).
+    enemy = battle.get("enemy") or {}
+    _my_lvl = int(mine.get("level") or 0)
+    _en_lvl = int(enemy.get("level") or 0)
 
     ranked = score_moves(state)
+    # HURTED-CHIP GUARD: a weak (type-disadvantaged) attack at critical HP
+    # is a stalemate - the enemy out-damages our chip and heals (Zubat's
+    # Leech Life). Running is better than dying: flee when hurt and the
+    # best move cannot reasonably win. Proven live 12:27: 0.25x Vine Whip
+    # (score 13) at 9/68 HP vs a Zubat, 10+ min stalled, then blackout.
+    # Only wild battles: RUN fails vs trainers and burns the turn.
+    btype = str(battle.get("type") or "").lower()
+    if (ranked and 0 < ranked[0][1] < 20 and hp_frac < 0.30
+            and btype != "trainer"):
+        logger.info("battle policy: best move score %.1f at hp %.0f%% - "
+                    "too weak to win, fleeing wild battle",
+                    ranked[0][1], hp_frac * 100)
+        return "flee"
     if ranked and ranked[0][1] > 0:
         slot, score, detail = ranked[0]
         logger.info("battle policy: move_%d %s (power=%s x%s stab x%s)",
@@ -177,17 +205,54 @@ def choose(state: Dict[str, Any]) -> Optional[str]:
                     detail.get("mult"), detail.get("stab"))
         return f"move_{slot}"
 
-    # No damaging move with PP. A status move cannot reduce the enemy's HP, so
-    # a wild battle is now unwinnable by attrition - leave, whatever our OWN HP
-    # is. Requiring hp_frac < 0.35 here was a real wedge: a full-HP Ivysaur with
-    # Tackle/Leech Seed/Vine Whip all at 0 PP sat in a Growl loop until the
-    # stall timer fired and escalated to Hermes. Only in a wild battle: RUN
-    # fails against a trainer and would just waste the turn.
+    # No damaging move with PP: PUSH THROUGH (user direction 2026-10-25 -
+    # "push through instead of looping on PP being out for a single move").
+    # Leech Seed drains 1/8 of the enemy's max HP every turn and ends wild
+    # battles by itself; once ALL PP are 0 the game auto-fires STRUGGLE
+    # (50-power typeless). Fleeing here just produced an endless
+    # flee -> Pokecenter -> re-enter -> Zubat grind. Only flee when HP is
+    # critical (Struggle's recoil plus the enemy's damage could KO us
+    # before the battle ends).
     btype = str(battle.get("type") or "").lower()
-    if btype != "trainer":
-        logger.info("battle policy: no damaging PP (hp %.0f%%) - fleeing this "
-                    "wild battle, we cannot reduce its HP",
-                    hp_frac * 100)
+    if btype != "trainer" and hp_frac < 0.35:
+        logger.info("battle policy: no damaging PP (hp %.0f%%) - fleeing "
+                    "this wild battle (critical HP)", hp_frac * 100)
         return "flee"
 
-    return _choose_status(state)
+    # Trainer battle - RUN is impossible, so we must attack. With every
+    # damaging move at 0 PP, choosing FIGHT triggers STRUGGLE: 50-power
+    # typeless damage each turn. Proven live 13:09: stalling with Growl
+    # vs a Lv 11 Bellsprout burned 10+ min while the enemy whittled us
+    # down - Struggle ends the battle. The Growl stall only "wins" if the
+    # enemy also cannot damage us; when it can, attrition loses.
+    mine_moves = mine.get("moves") or []
+    damaging_left = any(
+        isinstance(mv, dict) and (mv.get("pp", 0) or 0) > 0
+        and MOVE_TYPE_POWER.get(str(mv.get("name") or "").lower(), (None, 0))[1] > 0
+        for mv in mine_moves)
+    if not damaging_left:
+        # Struggle only auto-fires when ALL PP are 0 (the game skips the
+        # menu); selecting a 0-PP slot just spams "No PP left for this
+        # move!" forever (proven live 13:20: move_0 = Poison Powder PP=0
+        # while Growl/Leech Seed had PP - frozen 10+ min). Prefer LEECH
+        # SEED: it drains the enemy every turn and ends the battle. Growl
+        # cuts incoming damage while the stall runs.
+        pp_moves = [(i, str((mv or {}).get("name") or "").lower())
+                    for i, mv in enumerate(mine_moves)
+                    if isinstance(mv, dict) and (mv.get("pp", 0) or 0) > 0]
+        if pp_moves:
+            seed = next((i for i, n in pp_moves if n == "leech seed"), None)
+            slot = seed if seed is not None else pp_moves[0][0]
+            logger.info("battle policy: trainer battle, no damaging PP - "
+                        "stalling with %s (PP>0) until Struggle is forced",
+                        mine_moves[slot].get("name"))
+            return f"move_{slot}"
+    for i, mv in enumerate(mine_moves):
+        if isinstance(mv, dict) and (mv.get("pp", 0) or 0) > 0:
+            logger.info("battle policy: trainer battle, no damaging PP - "
+                        "stalling with %s (PP=%s)", mv.get("name"),
+                        mv.get("pp"))
+            return f"move_{i}"
+    logger.info("battle policy: trainer battle, ALL PP empty - using "
+                "FIGHT to trigger Struggle")
+    return "move_0"

@@ -537,6 +537,40 @@ class RedBlueMemoryReader(GameMemoryReader):
 
         map_y = self.emu.read_u8(ADDR_MAP_Y)
         map_x = self.emu.read_u8(ADDR_MAP_X)
+        # STEP-COMMIT FUSION + SPRITE-PIXEL POSITION (ROM-exact):
+        # wXCoord/wYCoord update ONLY at animation end (overworld.asm:1449).
+        # The player's TRUE position is the sprite pixel position (slot 0:
+        # wSpriteStateData1: +4 YPixels=0xC104, +6 XPixels=0xC106).
+        # These update EVERY FRAME and never lie. The RAM coords lag.
+        # True position = (wXCoord*2 + (xPixels>>3), wYCoord*2 + (yPixels>>3))
+        walk_counter = self.emu.read_u8(0xCFC5)
+        if walk_counter != 0:
+            sy = self.emu.read_u8(0xC103)   # Y step vector (-1/0/+1)
+            sx = self.emu.read_u8(0xC105)   # X step vector
+            # step vectors are signed (0xff = -1); adjust to signed
+            sy = sy - 256 if sy > 127 else sy
+            sx = sx - 256 if sx > 127 else sx
+            # VECTOR-CONSISTENCY GUARD: the mid-step vector must match
+            # the player's facing (a step continues the facing). A
+            # stale vector from the previous, opposite-direction step
+            # would INJECT phantom movement (observed: dispatched
+            # walk_down x4, position 'moved' west 4). Only fuse when
+            # the vector agrees with facing.
+            facing_byte = self.emu.read_u8(ADDR_FACING)
+            facing_ok = {
+                0x00: sy == 1 and sx == 0,    # down
+                0x04: sy == -1 and sx == 0,   # up
+                0x08: sy == 0 and sx == -1,   # left
+                0x0C: sy == 0 and sx == 1,    # right
+            }.get(facing_byte, False)
+            if facing_ok:
+                map_y = (map_y + sy) & 0xFF
+                map_x = (map_x + sx) & 0xFF
+        # ROM TRUTH (player_state.asm:260-295): the game reads wYCoord/
+        # wXCoord DIRECTLY as the player's map tile coords - 'the tile in
+        # front' is computed as these coords +/- 1 with NO pixel math.
+        # The sprite-pixel derivation was a wrong theory (produced
+        # garbage (63,0) etc). Position = (wXCoord, wYCoord) as-is.
         facing_byte = self.emu.read_u8(ADDR_FACING)
         facing = FACING_NAMES.get(facing_byte, f"unknown(0x{facing_byte:02X})")
 
@@ -544,13 +578,30 @@ class RedBlueMemoryReader(GameMemoryReader):
         minutes = self.emu.read_u8(ADDR_PLAYTIME_M)
         seconds = self.emu.read_u8(ADDR_PLAYTIME_S)
 
+        # SPRITE SCREEN PIXELS (slot 0): the fixed-camera-map truth.
+        # For maps smaller than the screen the camera never scrolls and
+        # wXCoord/wYCoord hold CAMERA coords (frozen) - the sprite's
+        # screen position IS the map position. Exposed for the reader's
+        # small-map branch (proven live: the Pewter Museum, wXCoord
+        # frozen at (9,4) for 34 dispatched steps while the sprite moved).
+        _s1 = self.emu.read_range(0xC100, 16)
+        _sy_pix, _sx_pix = _s1[4], _s1[6]
+        # NOTE: no fixed-camera sprite override. wXCoord/wYCoord DO track
+        # the player on every map, small ones included. A "frozen"
+        # position in an interior means the GAME IS NOT ACCEPTING INPUT
+        # (a text box swallowing the d-pad), not that the camera is
+        # fixed - proven live: the Pewter Museum read (9,4) for 1054
+        # consecutive turns, then jumped to (9,5) the instant one A
+        # press cleared the lingering "Come again!" box.
+        _pos = {"y": map_y, "x": map_x}
         return {
             "name": name,
             "rival_name": rival,
             "money": money,
             "badges": badge_list,
             "badge_count": len(badge_list),
-            "position": {"y": map_y, "x": map_x},
+            "position": _pos,
+            "sprite_screen": {"y": _sy_pix, "x": _sx_pix},
             "facing": facing,
             "play_time": f"{hours}:{minutes:02d}:{seconds:02d}",
         }
@@ -564,6 +615,24 @@ class RedBlueMemoryReader(GameMemoryReader):
         map_id = self.emu.read_u8(ADDR_MAP_ID)
         y = self.emu.read_u8(ADDR_MAP_Y)
         x = self.emu.read_u8(ADDR_MAP_X)
+        # STEP-COMMIT FUSION + SPRITE-PIXEL POSITION (ROM-exact):
+        # wXCoord/wYCoord update ONLY at animation end (overworld.asm:1449).
+        # The player's TRUE position is the sprite pixel position (slot 0:
+        # wSpriteStateData1: +4 YPixels=0xC104, +6 XPixels=0xC106).
+        # These update EVERY FRAME and never lie. The RAM coords lag.
+        # True position = (wXCoord*2 + (xPixels>>3), wYCoord*2 + (yPixels>>3))
+        walk_counter = self.emu.read_u8(0xCFC5)
+        if walk_counter != 0:
+            # Mid-step: commit the position the game WILL land on
+            sy = self.emu.read_u8(0xC103)
+            sx = self.emu.read_u8(0xC105)
+            sy = sy - 256 if sy > 127 else sy
+            sx = sx - 256 if sx > 127 else sx
+            y = (y + sy) & 0xFF
+            x = (x + sx) & 0xFF
+        # ROM TRUTH (player_state.asm:260-295): position = (wXCoord,
+        # wYCoord) directly - no pixel math. The sprite-pixel theory
+        # was wrong (produced garbage).
 
         term = next((i for i, b in enumerate(raw) if b == 0x50), -1)
         name_ok = term > 0 and all(b in GEN1_ENCODING for b in raw[:term])
@@ -701,10 +770,18 @@ class RedBlueMemoryReader(GameMemoryReader):
         text_box = self.emu.read_u8(ADDR_TEXT_BOX_ID)
         d730 = self.emu.read_u8(ADDR_D730)
         input_locked = bool(d730 & 0x20)
+        # CHOICE-BOX GAP: a YES/NO prompt (the museum fee, the starter
+        # confirm) waits for input WITHOUT setting d730 bit 5 - the
+        # joypad is wanted, not ignored. The displayed box itself is the
+        # signal: the tilemap border check cannot go stale (unlike
+        # wTextBoxID). active = locked OR a box visibly on screen.
+        box_visible = self.text_box_on_screen()
+        active = input_locked or box_visible
         return {
-            "active": input_locked,
-            "text_active": input_locked,
+            "active": active,
+            "text_active": active,
             "input_locked": input_locked,
+            "box_visible": box_visible,
             "cutscene": input_locked and text_box == 0,
             "text_box_id": text_box,       # informational only — stale
             "d730": d730,
@@ -712,15 +789,52 @@ class RedBlueMemoryReader(GameMemoryReader):
         }
 
     def text_box_on_screen(self) -> bool:
-        """Corroborate wTextBoxID against the screen itself.
+        """Is a text box actually up right now?
 
-        A Gen 1 text box draws a border across the bottom rows of wTileMap.
-        wTextBoxID can retain a stale non-zero value after a box closes, so
-        the tilemap is the authority — it cannot go stale.
+        The ONLY reliable signal is the decoded screen text. Two
+        earlier signals were tried and both are wrong:
+
+        * ``d730`` bit 5 (_JOY_IGNORE) - a box WAITING FOR PLAYER
+          INPUT never sets it. The text engine reads the joypad
+          itself and consumes only A/B; the d-pad is never consulted.
+          So direction presses vanish silently while this reads False
+          (proven live: 1054 turns at a frozen position).
+        * the tilemap bottom-border shape - too loose. Any map whose
+          bottom rows happen to be uniform tiles trips it: on Pewter
+          City it reported a box at 5 of 12 probed positions, all
+          with EMPTY text, while the player was moving normally.
+
+        What does work: wTextBoxID non-zero AND the charmap decode of
+        the box rows yields plausible prose ("Come again!"). Rows of
+        ordinary map tiles decode to symbol soup and fail the ratio
+        test. Recall for boxes with undecodable text is covered by the
+        swallowed-input watchdog in the driver, which needs no dialog
+        decoding at all.
         """
-        from pokemon_agent.collision import ADDR_TILEMAP, TILEMAP_W
-        row = self.emu.read_range(ADDR_TILEMAP + 12 * TILEMAP_W, TILEMAP_W)
-        return row[0] == row[-1] != 0x7F and row[0] == row[1]
+        try:
+            if not self.emu.read_u8(ADDR_TEXT_BOX_ID):
+                return False
+            return self._text_plausible(self.read_screen_text())
+        except Exception:
+            return False
+
+    @staticmethod
+    def _text_plausible(txt: str) -> bool:
+        """True when a decoded text box looks like real prose.
+
+        Map tiles decoded through the charmap produce punctuation soup;
+        actual dialog is mostly letters, digits and spaces. Requires a
+        minimum length and a high plausible-character ratio so ordinary
+        map geometry never trips it.
+        """
+        if not txt:
+            return False
+        body = txt.strip()
+        if len(body) < 3:
+            return False
+        ok = sum(1 for c in body
+                 if c.isalnum() or c in " .,!?'-:()%$")
+        return ok / len(body) >= 0.85
 
     def read_screen_text(self) -> str:
         """Decode on-screen text from the tilemap.
@@ -771,6 +885,11 @@ class RedBlueMemoryReader(GameMemoryReader):
         return {
             "has_pokedex": bool(pokedex_byte & 0x20),
             "has_oaks_parcel": bool(oak_parcel_byte & 0x02),
+            # EVENT_OAK_GOT_PARCEL (bit 0, 0xD74E): set when Oak RECEIVES
+            # the parcel. Until then the Viridian Mart clerk replays the
+            # parcel cutscene and never opens the shop menu - the ROM
+            # gates all mart purchases behind the delivery.
+            "oak_got_parcel": bool(oak_parcel_byte & 0x01),
             "pokedex_owned": dex_owned,
             "pokedex_seen": dex_seen,
             "badges": gym_leaders_defeated,

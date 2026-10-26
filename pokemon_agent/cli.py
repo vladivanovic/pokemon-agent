@@ -100,6 +100,27 @@ def cmd_info(args):
 
 def cmd_play(args):
     """Run the standalone autopilot loop."""
+    planner = getattr(args, "planner", None)
+    if planner:
+        # Two-tier mode: VLM (or rules) planner decides goals, the frozen Von
+        # engine executes them. See pokemon_agent/planner_client.py.
+        from pokemon_agent.autopilot import PlannerDriver
+        server = f"http://{args.host}:{args.port}"
+        driver = PlannerDriver(
+            server,
+            model=args.model,
+            provider=getattr(args, "provider", None),
+            use_laya=getattr(args, "laya", False),
+            stall_seconds=getattr(args, "stall_seconds", 60.0),
+            hermes_turns=getattr(args, "hermes_turns", 12),
+            vision=not getattr(args, "no_vision", False),
+            replan_every=getattr(args, "replan_every", 120),
+            scorer=getattr(args, "scorer", None),
+            planner_mode=planner,
+            plan_interval=getattr(args, "plan_interval", 15),
+        )
+        driver.run()
+        return
     from pokemon_agent.autopilot import run_autopilot
     server = f"http://{args.host}:{args.port}"
     run_autopilot(
@@ -177,7 +198,12 @@ def main():
     play_p.add_argument("--debug", action="store_true", help="Enable debug logging")
     play_p.add_argument("--laya", action="store_true", default=False, help="Use Laya decision model instead of Hermes CLI")
     play_p.add_argument("--scorer", default=None,
-                        help="Low-level scorer backend: laya, von, or expert[:base] (e.g. expert:von). Default: $POKEMON_SCORER or laya")
+                        help="Low-level scorer backend: laya, von, llm, or "
+                             "expert[:base] (e.g. expert:von). 'llm' calls a "
+                             "local llama.cpp server with a per-turn "
+                             "json_schema enum of the offered options "
+                             "($POKEMON_LLM_URL/_MODEL/_TIMEOUT). "
+                             "Default: $POKEMON_SCORER or laya")
     play_p.add_argument("--stall-seconds", type=float, default=60.0,
                         help="Seconds without progress before escalating to Hermes")
     play_p.add_argument("--hermes-turns", type=int, default=12,
@@ -188,6 +214,13 @@ def main():
                         help="Autosave every N turns")
     play_p.add_argument("--replan-every", type=int, default=120,
                         help="Re-plan with Hermes every N Laya turns even without a stall")
+    play_p.add_argument("--planner", default=None,
+                        choices=["vlm", "rules", "auto"],
+                        help="Two-tier mode: VLM (or deterministic rules) "
+                             "planner emits the high-level goal, the Von "
+                             "engine executes it. Default: legacy single-tier")
+    play_p.add_argument("--plan-interval", type=int, default=15,
+                        help="Turns between planner refreshes in --planner mode")
 
     # --- play-api (Hermes AIAgent direct) ---
     play_api_p = sub.add_parser("play-api", help="Run the LLM autopilot using Hermes AIAgent API (direct, faster)")

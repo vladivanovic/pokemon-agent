@@ -46,6 +46,26 @@ def _rect(coord: Tuple[int, int], size: Tuple[int, int]) -> Tuple[int, int, int,
     return x, y, x + w, y + h
 
 
+# Building interiors have NO named-destination doors: their only exits are
+# dest_map=255 ("return to last outdoor map") warps, which are rejected
+# outright. Any named portal on one of these is stale-frame garbage - the
+# Viridian Mart accumulated 30 cells to Pallet Town / Fuchsia City / Route 4
+# from a bad warp-table read. Gate interiors are real connectors (exempt).
+_INTERIOR_HINTS = ("mart", "pokecenter", "pokémon center", "gym", "house",
+                   "lab", "school", "museum", "dojo", "club", "lobby",
+                   "mansion")
+
+
+def _is_interior(name: str) -> bool:
+    """True for building interiors that must have no named portals."""
+    if not name:
+        return False
+    low = str(name).lower()
+    if "gate" in low:
+        return False          # gate interiors are real connectors
+    return any(h in low for h in _INTERIOR_HINTS)
+
+
 def _canon(name: str) -> str:
     """Normalize a map name for cross-source matching.
 
@@ -107,6 +127,13 @@ class MapGraph:
         self._build_alias_index()
         self.load_portals()
         self.load_dead_edges()
+        # FAKE EDGE FIX: Route 2 rect (64-84, 174-246) touches Viridian City
+        # rect (54-94, 246-282) at y=246. This IS the real connection (Route 2 south
+        # end = Viridian City north end). The agent was going NORTH on Route 2
+        # instead of SOUTH - but the edge itself is valid. The dead_edge was
+        # blocking the real path. Remove it from dead_edges if loaded from file.
+        self.dead_edges.discard(("Route 2", "Viridian City"))
+        self.dead_edges.discard(("Viridian City", "Route 2"))
 
     # --- load ---------------------------------------------------------------
 
@@ -140,8 +167,20 @@ class MapGraph:
         Portals name maps that are NOT regions in map_data.json - gate
         interiors, building floors. They are still valid graph nodes, and
         resolve() must know them or every edge touching one is dropped.
+
+        Index BOTH sides: the source map (bucket key) AND every destination
+        name. Destinations were missing, so resolve("Viridian Mart") returned
+        None even though Viridian City has doors to it - the router could not
+        target any interior, which is why the shopping goal produced no route
+        options and the agent wandered the city.
         """
-        self._portal_index: Dict[str, str] = {_canon(n): n for n in self.portals}
+        idx: Dict[str, str] = {_canon(n): n for n in self.portals}
+        for cells in self.portals.values():
+            for entry in (cells or {}).values():
+                dn = (entry or {}).get("dest_map_name")
+                if dn:
+                    idx.setdefault(_canon(dn), dn)
+        self._portal_index = idx
 
     def _build_alias_index(self) -> None:
         """Map alias spellings to their canonical graph names.
@@ -188,6 +227,23 @@ class MapGraph:
         return getattr(self, "_portal_index", {}).get(_canon(name))
 
 
+    def node_names(self) -> List[str]:
+        """Every valid graph node: geometry regions plus portal endpoints.
+
+        Routing must be able to NAME a goal that is not a map_data region -
+        interiors (Mart, Pokecenter) exist only as portal destinations. The
+        goal resolver searched self.maps alone, so 'Viridian Mart' was never
+        recognised and no route to it was ever offered.
+        """
+        names = dict.fromkeys(self.maps)
+        names.update(dict.fromkeys(self.portals))
+        for cells in self.portals.values():
+            for entry in (cells or {}).values():
+                dn = (entry or {}).get("dest_map_name")
+                if dn:
+                    names.setdefault(dn, None)
+        return list(names)
+
     def _build_adjacency(self) -> None:
         rects = {n: _rect(m["coord"], m["size"]) for n, m in self.maps.items()}
         names = list(rects)
@@ -204,10 +260,21 @@ class MapGraph:
         # Route 2 Gate Viridian (id 50) sits at the south end of Viridian
         # Forest and connects south to Route 2. The rects don't touch,
         # so add the edge manually.
+        # Route 2: y 174-245, Gate Viridian: y 236-244 -> gate is SOUTH of Route 2
         if "Route 2 Gate Viridian" in self.maps and "Route 2" in self.maps:
-            # From the gate, Route 2 is SOUTH (player walks down to exit)
-            self.adj["Route 2 Gate Viridian"]["Route 2"] = (1, 0)
-            self.adj["Route 2"]["Route 2 Gate Viridian"] = (-1, 0)
+            # From the gate, Route 2 is NORTH (player walks up to exit)
+            self.adj["Route 2 Gate Viridian"]["Route 2"] = (-1, 0)
+            # From Route 2, the gate is SOUTH (player walks down to exit)
+            self.adj["Route 2"]["Route 2 Gate Viridian"] = (1, 0)
+        # Route 2 Gate Pewter (north end) connects NORTH to Pewter City.
+        # Route 2: y 174-245, Gate Pewter: y 180-188 -> gate is NORTH of Route 2
+        # But the rectangle edge Route 2 -> Pewter City is also north.
+        # The real path is Route 2 -> Gate Pewter -> Pewter City.
+        # We need the Route 2 -> Gate Pewter edge with correct direction.
+        if "Route 2 Gate Pewter" in self.maps and "Route 2" in self.maps:
+            # From Route 2, Gate Pewter is NORTH
+            self.adj["Route 2"]["Route 2 Gate Pewter"] = (-1, 0)
+            self.adj["Route 2 Gate Pewter"]["Route 2"] = (1, 0)
         # Route 2 Gate Pewter (north end, id 51's partner) connects NORTH to
         # Pewter City. Same geometry problem, and its absence is what broke the
         # whole Chain: with the fake direct Route 2 -> Pewter edge removed, the
@@ -219,6 +286,14 @@ class MapGraph:
             # From the gate, Pewter City is NORTH (player walks up to exit)
             self.adj["Route 2 Gate Pewter"]["Pewter City"] = (-1, 0)
             self.adj["Pewter City"]["Route 2 Gate Pewter"] = (1, 0)
+        # Route 3 -> Route 4: the rects touch on the north side, but the
+        # real connection is the ROUTE 4 GATE at Route 3's far EAST end
+        # (pokered: Route 3's east exit leads into the gate house to
+        # Route 4). first_hop_direction returning 'north' sent the agent
+        # walking up into ledge rows (proven live: y=4 pinball).
+        if "Route 3" in self.adj and "Route 4" in self.adj:
+            self.adj["Route 3"]["Route 4"] = (0, 1)   # east
+            self.adj["Route 4"]["Route 3"] = (0, -1)  # west
         edges = sum(len(v) for v in self.adj.values()) // 2
         logger.info("map graph: %d adjacency edges", edges)
 
@@ -245,6 +320,11 @@ class MapGraph:
         dropped_cells = 0
         for name, cells in (raw or {}).items():
             if not isinstance(cells, dict):
+                dropped_maps += 1
+                continue
+            # Interior buildings have no named doors - drop whatever is there.
+            if _is_interior(name):
+                dropped_cells += len(cells)
                 continue
             grouped: Dict[str, Dict[str, dict]] = {}
             for cell, entry in cells.items():
@@ -331,6 +411,10 @@ class MapGraph:
         # in the Viridian Mart for 600+ turns. 255 warps are handled by the
         # exit/edge logic and learned from the OUTDOOR side, never recorded.
         if int(dest_id) == 255:
+            return False
+        # Interior buildings never have named-destination doors. Refusing them
+        # here stops the Mart/Pokecenter poisoning at the source.
+        if _is_interior(cur_map):
             return False
         dest_name = warp.get("dest_map_name")
         if not dest_name or dest_name.startswith("Map "):
@@ -521,7 +605,8 @@ class MapGraph:
         if door_dirs:
             for dst in [k for k, d in out.items()
                         if d in door_dirs and door_dirs[d] != k
-                        and not self._portal_has_edge(name, k)]:
+                        and not self._portal_has_edge(name, k)
+                        and (name not in self.adj or k not in self.adj[name])]:
                 logger.info("map graph: %s -> %s is a rectangle-only edge in the "
                             "same direction as the door to %s - preferring the "
                             "door", name, dst, door_dirs[out[dst]])

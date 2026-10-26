@@ -1,0 +1,7 @@
+# Battle-model training deps. Install into /home/vlad/hermes_venv.
+# Already present: torch 2.13.0+cu130, transformers 5.17.0, accelerate 1.12.0
+peft>=0.21
+datasets>=5.0
+trl>=1.15
+# NOT installable on aarch64 (Orin): bitsandbytes, causal-conv1d,
+# flash-linear-attention. The 0.8B fits in bf16 + LoRA without them.

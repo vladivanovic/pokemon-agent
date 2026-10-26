@@ -1,0 +1,994 @@
+{
+ "Pallet Town": [
+  20,
+  18
+ ],
+ "Viridian City": [
+  40,
+  36
+ ],
+ "Pewter City": [
+  40,
+  36
+ ],
+ "Cerulean City": [
+  40,
+  36
+ ],
+ "Lavender Town": [
+  20,
+  18
+ ],
+ "Vermilion City": [
+  40,
+  36
+ ],
+ "Celadon City": [
+  50,
+  36
+ ],
+ "Fuchsia City": [
+  40,
+  36
+ ],
+ "Cinnabar Island": [
+  20,
+  18
+ ],
+ "Indigo Plateau": [
+  20,
+  18
+ ],
+ "Saffron City": [
+  40,
+  36
+ ],
+ "Unused Map 0B": [
+  0,
+  0
+ ],
+ "Route 1": [
+  20,
+  36
+ ],
+ "Route 2": [
+  20,
+  72
+ ],
+ "Route 3": [
+  70,
+  18
+ ],
+ "Route 4": [
+  90,
+  18
+ ],
+ "Route 5": [
+  20,
+  36
+ ],
+ "Route 6": [
+  20,
+  36
+ ],
+ "Route 7": [
+  20,
+  18
+ ],
+ "Route 8": [
+  60,
+  18
+ ],
+ "Route 9": [
+  60,
+  18
+ ],
+ "Route 10": [
+  20,
+  72
+ ],
+ "Route 11": [
+  60,
+  18
+ ],
+ "Route 12": [
+  20,
+  108
+ ],
+ "Route 13": [
+  60,
+  18
+ ],
+ "Route 14": [
+  20,
+  54
+ ],
+ "Route 15": [
+  60,
+  18
+ ],
+ "Route 16": [
+  40,
+  18
+ ],
+ "Route 17": [
+  20,
+  144
+ ],
+ "Route 18": [
+  50,
+  18
+ ],
+ "Route 19": [
+  20,
+  54
+ ],
+ "Route 20": [
+  100,
+  18
+ ],
+ "Route 21": [
+  20,
+  90
+ ],
+ "Route 22": [
+  40,
+  18
+ ],
+ "Route 23": [
+  20,
+  144
+ ],
+ "Route 24": [
+  20,
+  36
+ ],
+ "Route 25": [
+  60,
+  18
+ ],
+ "Reds House 1F": [
+  8,
+  8
+ ],
+ "Reds House 2F": [
+  8,
+  8
+ ],
+ "Blue's House": [
+  8,
+  8
+ ],
+ "Oak's Lab": [
+  10,
+  12
+ ],
+ "Viridian Pokecenter": [
+  14,
+  8
+ ],
+ "Viridian Mart": [
+  8,
+  8
+ ],
+ "Viridian School House": [
+  8,
+  8
+ ],
+ "Viridian Nickname House": [
+  8,
+  8
+ ],
+ "Viridian Gym": [
+  20,
+  18
+ ],
+ "Digletts Cave Route 2": [
+  8,
+  8
+ ],
+ "Viridian Forest North Gate": [
+  10,
+  8
+ ],
+ "Route 2 Trade House": [
+  8,
+  8
+ ],
+ "Route 2 Gate": [
+  10,
+  8
+ ],
+ "Route 2 Gate Viridian": [
+  10,
+  8
+ ],
+ "Viridian Forest": [
+  34,
+  48
+ ],
+ "Pewter Museum 1F": [
+  20,
+  8
+ ],
+ "Pewter Museum 2F": [
+  14,
+  8
+ ],
+ "Pewter Gym": [
+  10,
+  14
+ ],
+ "Pewter Nidoran House": [
+  8,
+  8
+ ],
+ "Pewter Mart": [
+  8,
+  8
+ ],
+ "Pewter Speech House": [
+  8,
+  8
+ ],
+ "Pewter Pokecenter": [
+  14,
+  8
+ ],
+ "Mt Moon 1F": [
+  40,
+  36
+ ],
+ "Mt Moon B1F": [
+  28,
+  28
+ ],
+ "Mt Moon B2F": [
+  40,
+  36
+ ],
+ "Cerulean Trashed House": [
+  8,
+  8
+ ],
+ "Cerulean Trade House": [
+  8,
+  8
+ ],
+ "Cerulean Pokecenter": [
+  14,
+  8
+ ],
+ "Cerulean Gym": [
+  10,
+  14
+ ],
+ "Bike Shop": [
+  8,
+  8
+ ],
+ "Cerulean Mart": [
+  8,
+  8
+ ],
+ "Mt Moon Pokecenter": [
+  14,
+  8
+ ],
+ "Cerulean Trashed House Copy": [
+  8,
+  8
+ ],
+ "Route 5 Gate": [
+  8,
+  6
+ ],
+ "Underground Path Route 5": [
+  8,
+  8
+ ],
+ "Daycare": [
+  8,
+  8
+ ],
+ "Route 6 Gate": [
+  8,
+  6
+ ],
+ "Underground Path Route 6": [
+  8,
+  8
+ ],
+ "Underground Path Route 6 Copy": [
+  8,
+  8
+ ],
+ "Route 7 Gate": [
+  6,
+  8
+ ],
+ "Underground Path Route 7": [
+  8,
+  8
+ ],
+ "Underground Path Route 7 Copy": [
+  8,
+  8
+ ],
+ "Route 8 Gate": [
+  6,
+  8
+ ],
+ "Underground Path Route 8": [
+  8,
+  8
+ ],
+ "Rock Tunnel Pokecenter": [
+  14,
+  8
+ ],
+ "Rock Tunnel 1F": [
+  40,
+  36
+ ],
+ "Power Plant": [
+  40,
+  36
+ ],
+ "Route 11 Gate 1F": [
+  8,
+  10
+ ],
+ "Digletts Cave Route 11": [
+  8,
+  8
+ ],
+ "Route 11 Gate 2F": [
+  8,
+  8
+ ],
+ "Route 12 Gate 1F": [
+  10,
+  8
+ ],
+ "Bills House": [
+  8,
+  8
+ ],
+ "Vermilion Pokecenter": [
+  14,
+  8
+ ],
+ "Pokemon Fan Club": [
+  8,
+  8
+ ],
+ "Vermilion Mart": [
+  8,
+  8
+ ],
+ "Vermilion Gym": [
+  10,
+  18
+ ],
+ "Vermilion Pidgey House": [
+  8,
+  8
+ ],
+ "Vermilion Dock": [
+  28,
+  12
+ ],
+ "Ss Anne 1F": [
+  40,
+  18
+ ],
+ "Ss Anne 2F": [
+  40,
+  18
+ ],
+ "Ss Anne 3F": [
+  20,
+  6
+ ],
+ "Ss Anne B1F": [
+  30,
+  8
+ ],
+ "Ss Anne Bow": [
+  20,
+  14
+ ],
+ "Ss Anne Kitchen": [
+  14,
+  16
+ ],
+ "Ss Anne Captains Room": [
+  6,
+  8
+ ],
+ "Ss Anne 1F Rooms": [
+  24,
+  16
+ ],
+ "Ss Anne 2F Rooms": [
+  24,
+  16
+ ],
+ "Ss Anne B1F Rooms": [
+  24,
+  16
+ ],
+ "Unused Map 69": [
+  0,
+  0
+ ],
+ "Unused Map 6A": [
+  0,
+  0
+ ],
+ "Unused Map 6B": [
+  0,
+  0
+ ],
+ "Victory Road 1F": [
+  20,
+  18
+ ],
+ "Unused Map 6D": [
+  0,
+  0
+ ],
+ "Unused Map 6E": [
+  0,
+  0
+ ],
+ "Unused Map 6F": [
+  0,
+  0
+ ],
+ "Unused Map 70": [
+  0,
+  0
+ ],
+ "Lances Room": [
+  26,
+  26
+ ],
+ "Unused Map 72": [
+  0,
+  0
+ ],
+ "Unused Map 73": [
+  0,
+  0
+ ],
+ "Unused Map 74": [
+  0,
+  0
+ ],
+ "Unused Map 75": [
+  0,
+  0
+ ],
+ "Hall Of Fame": [
+  10,
+  8
+ ],
+ "Underground Path North South": [
+  8,
+  48
+ ],
+ "Champions Room": [
+  8,
+  8
+ ],
+ "Underground Path West East": [
+  50,
+  8
+ ],
+ "Celadon Mart 1F": [
+  20,
+  8
+ ],
+ "Celadon Mart 2F": [
+  20,
+  8
+ ],
+ "Celadon Mart 3F": [
+  20,
+  8
+ ],
+ "Celadon Mart 4F": [
+  20,
+  8
+ ],
+ "Celadon Mart Roof": [
+  20,
+  8
+ ],
+ "Celadon Mart Elevator": [
+  4,
+  4
+ ],
+ "Celadon Mansion 1F": [
+  8,
+  12
+ ],
+ "Celadon Mansion 2F": [
+  8,
+  12
+ ],
+ "Celadon Mansion 3F": [
+  8,
+  12
+ ],
+ "Celadon Mansion Roof": [
+  8,
+  12
+ ],
+ "Celadon Mansion Roof House": [
+  8,
+  8
+ ],
+ "Celadon Pokecenter": [
+  14,
+  8
+ ],
+ "Celadon Gym": [
+  10,
+  18
+ ],
+ "Game Corner": [
+  20,
+  18
+ ],
+ "Celadon Mart 5F": [
+  20,
+  8
+ ],
+ "Game Corner Prize Room": [
+  10,
+  8
+ ],
+ "Celadon Diner": [
+  10,
+  8
+ ],
+ "Celadon Chief House": [
+  8,
+  8
+ ],
+ "Celadon Hotel": [
+  14,
+  8
+ ],
+ "Lavender Pokecenter": [
+  14,
+  8
+ ],
+ "Pokemon Tower 1F": [
+  20,
+  18
+ ],
+ "Pokemon Tower 2F": [
+  20,
+  18
+ ],
+ "Pokemon Tower 3F": [
+  20,
+  18
+ ],
+ "Pokemon Tower 4F": [
+  20,
+  18
+ ],
+ "Pokemon Tower 5F": [
+  20,
+  18
+ ],
+ "Pokemon Tower 6F": [
+  20,
+  18
+ ],
+ "Pokemon Tower 7F": [
+  20,
+  18
+ ],
+ "Mr Fujis House": [
+  8,
+  8
+ ],
+ "Lavender Mart": [
+  8,
+  8
+ ],
+ "Lavender Cubone House": [
+  8,
+  8
+ ],
+ "Fuchsia Mart": [
+  8,
+  8
+ ],
+ "Fuchsia Bills Grandpas House": [
+  8,
+  8
+ ],
+ "Fuchsia Pokecenter": [
+  14,
+  8
+ ],
+ "Wardens House": [
+  10,
+  8
+ ],
+ "Safari Zone Gate": [
+  8,
+  6
+ ],
+ "Fuchsia Gym": [
+  10,
+  18
+ ],
+ "Fuchsia Meeting Room": [
+  14,
+  8
+ ],
+ "Seafoam Islands B1F": [
+  30,
+  18
+ ],
+ "Seafoam Islands B2F": [
+  30,
+  18
+ ],
+ "Seafoam Islands B3F": [
+  30,
+  18
+ ],
+ "Seafoam Islands B4F": [
+  30,
+  18
+ ],
+ "Vermilion Old Rod House": [
+  8,
+  8
+ ],
+ "Fuchsia Good Rod House": [
+  8,
+  8
+ ],
+ "Pokemon Mansion 1F": [
+  30,
+  28
+ ],
+ "Cinnabar Gym": [
+  20,
+  18
+ ],
+ "Cinnabar Lab": [
+  18,
+  8
+ ],
+ "Cinnabar Lab Trade Room": [
+  8,
+  8
+ ],
+ "Cinnabar Lab Metronome Room": [
+  8,
+  8
+ ],
+ "Cinnabar Lab Fossil Room": [
+  8,
+  8
+ ],
+ "Cinnabar Pokecenter": [
+  14,
+  8
+ ],
+ "Cinnabar Mart": [
+  8,
+  8
+ ],
+ "Cinnabar Mart Copy": [
+  8,
+  8
+ ],
+ "Indigo Plateau Lobby": [
+  16,
+  12
+ ],
+ "Copycats House 1F": [
+  8,
+  8
+ ],
+ "Copycats House 2F": [
+  8,
+  8
+ ],
+ "Fighting Dojo": [
+  10,
+  12
+ ],
+ "Saffron Gym": [
+  20,
+  18
+ ],
+ "Saffron Pidgey House": [
+  8,
+  8
+ ],
+ "Saffron Mart": [
+  8,
+  8
+ ],
+ "Silph Co 1F": [
+  30,
+  18
+ ],
+ "Saffron Pokecenter": [
+  14,
+  8
+ ],
+ "Mr Psychics House": [
+  8,
+  8
+ ],
+ "Route 15 Gate 1F": [
+  8,
+  10
+ ],
+ "Route 15 Gate 2F": [
+  8,
+  8
+ ],
+ "Route 16 Gate 1F": [
+  8,
+  14
+ ],
+ "Route 16 Gate 2F": [
+  8,
+  8
+ ],
+ "Route 16 Fly House": [
+  8,
+  8
+ ],
+ "Route 12 Super Rod House": [
+  8,
+  8
+ ],
+ "Route 18 Gate 1F": [
+  8,
+  10
+ ],
+ "Route 18 Gate 2F": [
+  8,
+  8
+ ],
+ "Seafoam Islands 1F": [
+  30,
+  18
+ ],
+ "Route 22 Gate": [
+  10,
+  8
+ ],
+ "Victory Road 2F": [
+  30,
+  18
+ ],
+ "Route 12 Gate 2F": [
+  8,
+  8
+ ],
+ "Vermilion Trade House": [
+  8,
+  8
+ ],
+ "Digletts Cave": [
+  40,
+  36
+ ],
+ "Victory Road 3F": [
+  30,
+  18
+ ],
+ "Rocket Hideout B1F": [
+  30,
+  28
+ ],
+ "Rocket Hideout B2F": [
+  30,
+  28
+ ],
+ "Rocket Hideout B3F": [
+  30,
+  28
+ ],
+ "Rocket Hideout B4F": [
+  30,
+  24
+ ],
+ "Rocket Hideout Elevator": [
+  6,
+  8
+ ],
+ "Unused Map Cc": [
+  0,
+  0
+ ],
+ "Unused Map Cd": [
+  0,
+  0
+ ],
+ "Unused Map Ce": [
+  0,
+  0
+ ],
+ "Silph Co 2F": [
+  30,
+  18
+ ],
+ "Silph Co 3F": [
+  30,
+  18
+ ],
+ "Silph Co 4F": [
+  30,
+  18
+ ],
+ "Silph Co 5F": [
+  30,
+  18
+ ],
+ "Silph Co 6F": [
+  26,
+  18
+ ],
+ "Silph Co 7F": [
+  26,
+  18
+ ],
+ "Silph Co 8F": [
+  26,
+  18
+ ],
+ "Pokemon Mansion 2F": [
+  30,
+  28
+ ],
+ "Pokemon Mansion 3F": [
+  30,
+  18
+ ],
+ "Pokemon Mansion B1F": [
+  30,
+  28
+ ],
+ "Safari Zone East": [
+  30,
+  26
+ ],
+ "Safari Zone North": [
+  40,
+  36
+ ],
+ "Safari Zone West": [
+  30,
+  26
+ ],
+ "Safari Zone Center": [
+  30,
+  26
+ ],
+ "Safari Zone Center Rest House": [
+  8,
+  8
+ ],
+ "Safari Zone Secret House": [
+  8,
+  8
+ ],
+ "Safari Zone West Rest House": [
+  8,
+  8
+ ],
+ "Safari Zone East Rest House": [
+  8,
+  8
+ ],
+ "Safari Zone North Rest House": [
+  8,
+  8
+ ],
+ "Cerulean Cave 2F": [
+  30,
+  18
+ ],
+ "Cerulean Cave B1F": [
+  30,
+  18
+ ],
+ "Cerulean Cave 1F": [
+  30,
+  18
+ ],
+ "Name Raters House": [
+  8,
+  8
+ ],
+ "Cerulean Badge House": [
+  8,
+  8
+ ],
+ "Unused Map E7": [
+  0,
+  0
+ ],
+ "Rock Tunnel B1F": [
+  40,
+  36
+ ],
+ "Silph Co 9F": [
+  26,
+  18
+ ],
+ "Silph Co 10F": [
+  16,
+  18
+ ],
+ "Silph Co 11F": [
+  18,
+  18
+ ],
+ "Silph Co Elevator": [
+  4,
+  4
+ ],
+ "Unused Map Ed": [
+  0,
+  0
+ ],
+ "Unused Map Ee": [
+  0,
+  0
+ ],
+ "Trade Center": [
+  10,
+  8
+ ],
+ "Colosseum": [
+  10,
+  8
+ ],
+ "Unused Map F1": [
+  0,
+  0
+ ],
+ "Unused Map F2": [
+  0,
+  0
+ ],
+ "Unused Map F3": [
+  0,
+  0
+ ],
+ "Unused Map F4": [
+  0,
+  0
+ ],
+ "Loreleis Room": [
+  10,
+  12
+ ],
+ "Brunos Room": [
+  10,
+  12
+ ],
+ "Agathas Room": [
+  10,
+  12
+ ]
+}
