@@ -110,10 +110,12 @@ def annotate_nearest_pokecenter(state: Dict[str, Any],
 
     door = _nearest_pokecenter_door(state)
     if door is not None:
-        dx, dy, dist = door
+        dx, dy, dist, door_x, door_y = door
         state["nearest_pokecenter_dist"] = dist
         state["nearest_pokecenter_dir"] = (dx, dy)
         state["nearest_pokecenter_src"] = "door"
+        state["nearest_pokecenter_x"] = door_x
+        state["nearest_pokecenter_y"] = door_y
         return
 
     state["nearest_pokecenter_dist"] = None
@@ -135,8 +137,8 @@ def _load_pc_centers() -> Dict[str, Dict[str, int]]:
 PC_CENTERS: Dict[str, Dict[str, int]] = _load_pc_centers()
 
 
-def _nearest_pokecenter_door(state: Dict[str, Any]) -> Optional[Tuple[int, int, int]]:
-    """Fallback: on a city we have a door coordinate for, return (dx, dy, dist).
+def _nearest_pokecenter_door(state: Dict[str, Any]) -> Optional[Tuple[int, int, int, int, int]]:
+    """Fallback: on a city we have a door coordinate for, return (dx, dy, dist, door_x, door_y).
 
     Uses MAP coordinates, not screen coordinates - the player position and
     the pc_centers.json door tiles are both map-local, so the direction
@@ -154,10 +156,10 @@ def _nearest_pokecenter_door(state: Dict[str, Any]) -> Optional[Tuple[int, int, 
     dy = door["door_y"] - py
     dist = abs(dx) + abs(dy)
     if dist == 0:
-        return (0, 0, 0)            # standing on the door
+        return (0, 0, 0, door["door_x"], door["door_y"])  # standing on the door
     step_dx = 0 if dx == 0 else (1 if dx > 0 else -1)
     step_dy = 0 if dy == 0 else (1 if dy > 0 else -1)
-    return (step_dx, step_dy, dist)
+    return (step_dx, step_dy, dist, door["door_x"], door["door_y"])
 
 
 def build_game_state(

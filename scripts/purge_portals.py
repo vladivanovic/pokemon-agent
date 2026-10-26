@@ -19,6 +19,9 @@ import json
 import os
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from pokemon_agent.map_graph import _is_interior  # noqa: E402
+
 PORTALS = os.environ.get(
     "POKEMON_PORTALS",
     os.path.expanduser("~/.pokemon-agent/portals.json"))
@@ -38,11 +41,15 @@ def canon(name):
 def clean_portals_data(raw: dict) -> tuple:
     """Return (clean, stats). Stats is a dict of counts for reporting."""
     clean = {}
-    stats = {"dropped_255": 0, "dropped_junkname": 0,
+    stats = {"dropped_255": 0, "dropped_junkname": 0, "dropped_interior": 0,
              "dropped_overflow": 0, "dropped_maps": 0, "kept_cells": 0}
     for map_name, cells in (raw or {}).items():
         if not isinstance(cells, dict):
             stats["dropped_maps"] += 1
+            continue
+        # Building interiors have no named doors at all.
+        if _is_interior(map_name):
+            stats["dropped_interior"] += len(cells)
             continue
         grouped = {}
         for cell, entry in cells.items():

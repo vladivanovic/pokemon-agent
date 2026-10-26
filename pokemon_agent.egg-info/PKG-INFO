@@ -45,33 +45,135 @@ Dynamic: license-file
 
 # Pokemon Red Agent Project
 
-This repository contains the setup and scripts to run a Pokemon Red agent using:
-- **Laya** (fast heuristic explorer) for local decision-making
-- **Hermes Agent** (LLM-powered planner) for high-level strategy
-- **SB3 (Stable Baselines3)** PPO training for reinforcement learning
-- Custom Gym environment (`RedGymEnv_v2`) interfacing with Pokemon Red via `pokemon-agent serve`
+A Pokemon Red agent with a **two-tier architecture**: a VLM planner decides
+WHAT to do, a deterministic driver decides HOW to move.
+
+```
+VLM planner (--planner vlm, every 15 turns)   "Traverse Mt. Moon south to north"
+                  |
+                  v
+Von scorer  (--scorer von, every turn)         BFS to door, walk right, ledge hop,
+                                               Gen 1 battle policy (~1ms/turn)
+```
+
+## Architecture: planner vs scorer (pick ONE per layer)
+
+There are two decision layers. Each has swappable implementations - they are
+NOT duplicates of each other:
+
+**Layer 1 - High-level planner** (`--planner`): what should the agent want?
+| Option | What it does | Speed |
+|--------|--------------|-------|
+| `--planner vlm` | Fine-tuned Qwen2.5-VL-7B LoRA reads screen+RAM, picks a goal from a closed 16-goal vocabulary | ~2s, every 15 turns |
+| `--planner rules` | Deterministic rules (`planner_rules.py`) - same logic that labels the training data | ~0ms |
+| *(absent)* | Legacy: Hermes LLM escalation on stall | slow, per-stall |
+
+**Layer 2 - Low-level scorer** (`--scorer`): given the goal, what button now?
+| Option | What it does | Speed |
+|--------|--------------|-------|
+| `--scorer von` | Deterministic: BFS over learned walkable grid, portal routing, empirical ledge hops, exact Gen 1 battle policy | ~1ms/turn |
+| `--scorer laya` | Neural fast scorer - candidate actions scored by a small local model | ~50ms/turn |
+| `--scorer llm` | Local llama.cpp server picks from offered options per turn | ~2-4s/turn |
+
+**Key point:** Von and Laya are NOT both running, and are not the same thing.
+**Von is the agent** (the whole driver: map graph, stall guards, flight
+recorder, heal logic). **Laya is one scorer backend you could plug into it.**
+Von's scorer is strictly more capable today (Laya has no map graph, no ledge
+hops, no battle policy) - we run `--scorer von` and keep `--scorer laya`
+available as an experiment.
+
+Also available: `--scorer expert:von` (Von + fallback), and legacy `--laya`
+(which just selects Laya as the scorer; redundant with `--scorer laya`).
 
 ## Components
 
 1. **Emulator Server** (`pokemon-agent serve`)
    - Runs the Pokemon Red ROM and exposes a HTTP API (`localhost:8765`) for state/control.
-   - Required for both Laya/Hermes play and SB3 training.
+   - Also serves `/screenshot` (latest frame) and `/screenrecord` (MP4 clips
+     sampled from the published framebuffer - does NOT pause the emulator).
 
-2. **Play Loop** (`pokemon-agent play`)
-   - Combines Laya (fast, local) and Hermes (LLM, slower) agents.
-   - Laya runs every turn; Hermes escalates after 45 seconds of no progress.
-   - Configured via environment variables:
-     - `POKEMON_HERMES_MODEL`: e.g., `nvidia/nemotron-3.5-lightning-30b-a3b`
-     - `POKEMON_HERMES_PROVIDER`: e.g., `nvidia`
-   - Flags:
-     - `--host`, `--port`: API endpoint
-     - `--laya`: enable Laya
-     - `--stall-seconds 45`: wait before escalating to Hermes
-     - `--hermes-turns 8`: max Hermes turns per escalation
-     - `--turn-timeout 360`: seconds to wait for a Hermes turn (increased to accommodate slower LLMs)
+2. **Play Loop** (`pokemon-agent play`) - the two-tier agent
+   ```bash
+   pokemon-agent play --host localhost --port 8765 \
+       --scorer von --planner vlm --plan-interval 15 \
+       --stall-seconds 45 --hermes-turns 8 --turn-timeout 240
+   ```
+   - `--planner vlm` requires a llama.cpp server with the planner LoRA
+     (`POKEMON_PLANNER_URL`, default `http://127.0.0.1:8002/v1`); falls back
+     to `--planner rules` behavior per-turn if the server is down.
+   - `--plan-interval N`: planner refresh cadence in turns (default 15).
+   - `--scorer von`: deterministic movement+battle (recommended).
+   - `--laya` is accepted but ignored: Von is the only driver now.
 
-3. **SB3 Training** (`baseline_fast_v2.py`)
-   - Trains a PPO policy using the custom Gym environment.
+### Engine layout (which file does what)
+
+| File | Lines | Role |
+|------|-------|------|
+| `pokemon_agent/von.py` | ~4,000 | **The engine AND the source of truth.** Primitives (BFS, ledges, doors, heal, battle, screen stitching) + the driver + the router + the goal-termination and desync-recovery layers. |
+| `pokemon_agent/autopilot.py` | ~90 | Back-compat shim: re-exports `VonDriver`/`HermesDriver`/`PlannerDriver`/`run_autopilot` and the BFS primitives so the CLI, tests and `vlm_brain.py` keep importing the same names. |
+| `pokemon_agent/planner_client.py` | — | Tier-1 VLM planner client (closed goal vocab). |
+| `pokemon_agent/planner_rules.py` | — | Tier-1 deterministic rules planner (offline labeler + fallback). |
+
+The legacy monolith (`autopilot-von-on-rails.py` / `von_rails.py`) and the
+slice build (`build_von.py`) were retired on 2026-10-17 - `von.py` is
+edited directly now, and the pre-split history lives in git.
+
+### Design rules (why the engine looks like this)
+
+1. **The planner owns strategy; the engine owns topology.** There is no
+   `_infer_goal` tower, no per-map `if cur_map == ...` overrides, no compass
+   locks, no stall cooldowns and no pinball detectors. Adding a map must not
+   require an engine change.
+2. **One decision shape.** The router computes a concrete walk path and
+   offers it as the **sole** option (`route_to_waypoint`); its handler
+   executes that path verbatim. A single option cannot oscillate - this is
+   structural, not a threshold.
+3. **Three generic routing tiers**, no per-map code:
+   1. a **learned portal** toward the destination (decoded from
+      `portals.json`; sharper every session),
+   2. a **BFS to the boundary** in the graph's compass direction over the
+      stitched map,
+   3. a **frontier step** toward unexplored space, for winding maps and
+      boundaries the stitched map has not learned yet.
+   The chosen target cell is **sticky** until reached or unreachable.
+4. **The map corrects itself.** When the agent stops moving with a target
+   committed, the first step of that path is marked unwalkable and the target
+   is dropped (`_waypoint_stall_check`). Stitched grids lie; observation wins.
+5. **Battles stay deterministic** (`gen1_battle`): an exact type chart at
+   ~0ms beats a language model at ~2s/turn, always.
+6. **Naming convention that matters:** the map graph speaks **compass**
+   (north/south/east/west) while the BFS and actions speak **button**
+   directions (up/down/left/right). Translating between them
+   (`COMPASS_TO_WALK`) is the difference between a working route hop and a
+   handler that silently falls through.
+7. **Portal decoding:** a persisted portal stores the player's position when
+   the door was seen (`player_x`/`player_y`) plus the door's **screen** cell
+   (`col`/`row`). The door is at
+   `(player_x + col - PLAYER_COL, player_y + row - PLAYER_ROW)`. All four
+   Mt Moon 1F portals on Route 4 decode to the same door at `(18, 5)`.
+
+3. **Planner training** (`train_planner_lora.py` + `convert_pokedreamer.py`)
+   - Data: PokeDreamer NPZ (auto-labeled from RAM state via
+     `planner_rules.derive_goal` - NO manual labeling) + TAS replay with RAM
+     capture (`tas_replay.py`) + live self-play (`collect_live.py` writes
+     `dataset/live/` while the agent plays).
+   - Class-balanced conversion is mandatory: raw PokeDreamer is ~82% dialog
+     frames (`--max-per-goal 800`).
+   - Qwen2.5-VL-7B LoRA; serve with llama.cpp:
+     ```bash
+     # convert PEFT adapter to GGUF for llama.cpp
+     python /path/to/llama.cpp/convert_lora_to_gguf.py \
+         out/planner_lora/adapter \
+         --base /home/vlad/models/Qwen2.5-VL-7B-Instruct \
+         --outfile out/planner_lora/planner_lora.gguf --outtype f16
+     # serve (GGUF base model + mmproj + LoRA)
+     llama-server -m <Qwen2.5-VL-7B-BF16.gguf> --mmproj <mmproj-F16.gguf> \
+         --lora out/planner_lora/planner_lora.gguf \
+         --port 8002 --ctx-size 4096 --n-gpu-layers 999
+     ```
+
+4. **SB3 Training** (`baseline_fast_v2.py`, retired but kept)
+   - PPO policy training; produced 0 badges at 100M steps - kept for reference.
    - Run from `/home/vlad/pokemon-agent/v2/`.
 
 ## Setup & Execution
@@ -95,15 +197,18 @@ source /home/vlad/hermes_venv/bin/activate
 pokemon-agent serve --rom PokemonRed.gb --port 8765
 ```
 
-### 3. Start the Play Loop (Laya + Hermes)
+### 3. Start the Play Loop (two-tier: VLM planner + Von scorer)
 In another terminal/screen session:
 ```bash
 cd /home/vlad/pokemon-agent
 source /home/vlad/hermes_venv/bin/activate
-export POKEMON_HERMES_MODEL="nvidia/nemotron-3.5-lightning-30b-a3b"
-export POKEMON_HERMES_PROVIDER="nvidia"
-pokemon-agent play --host localhost --port 8765 --laya --stall-seconds 45 --hermes-turns 8 --turn-timeout 360
+export POKEMON_PLANNER_URL="http://127.0.0.1:8002/v1"   # planner LoRA server
+pokemon-agent play --host localhost --port 8765 \
+    --scorer von --planner vlm --plan-interval 15 \
+    --stall-seconds 45 --hermes-turns 8 --turn-timeout 240
 ```
+Without a planner server running, use `--planner rules` (deterministic) or
+omit `--planner` for legacy Hermes-escalation behavior.
 
 ### 4. (Optional) Start SB3 Training
 In a third terminal/screen session:
@@ -129,5 +234,71 @@ python baseline_fast_v2.py \
   - Hermes agent: `~/.hermes/logs/agent.log`
   - Pokemon agent play: `/home/vlad/pokemon-agent/v2/runs/autopilot_*.log`
   - SB3 training: `/home/vlad/pokemon-agent/v2/runs/train_*.log`
+
+## GPU PyTorch on JetPack 7.2 (Orin sm_87) — the undocumented path
+
+JetPack 7.2 (L4T R39, Ubuntu 24.04, CUDA 13.2, Python 3.12) has NO working
+PyTorch in NVIDIA's apt repos, and the official Jetson redist indexes
+(`developer.download.nvidia.com/compute/redist/jp/vXX`) do not carry JetPack 7
+wheels yet. The plain `pip install torch` wheel reports
+`torch.cuda.is_available() == True` but silently falls back to CPU — its CUDA
+kernel list has no `sm_87` (Orin's compute capability). Verify with:
+
+```python
+import torch
+print(torch.cuda.get_arch_list())   # bad: ['sm_80','sm_90','sm_100',...] (no sm_87)
+# + warning: "No published PyTorch CUDA builds ... support this GPU"
+```
+
+`torch.cuda.is_available() == True` is NOT proof — only a real kernel launch is.
+
+**The one that works** is the prerelease `cu132` wheel from PyTorch's own
+index (cu132 matches the JetPack 7.2 system CUDA 13.2; the aarch64 build
+includes sm_87):
+
+```bash
+pip install --pre torch torchvision \
+    --extra-index-url https://download.pytorch.org/whl/cu132 --upgrade
+```
+
+Gotchas:
+
+- `--pre` is REQUIRED — without it pip finds nothing and you conclude no wheel
+  exists. It is a prerelease, invisible to normal pip listing.
+- Use `--extra-index-url` (NOT `--index-url`) so numpy etc. still resolve from
+  PyPI.
+- Python must be 3.12 (JetPack 7.2 default). No cp313 wheel exists for this
+  stack yet.
+- If a later `import torch`-adjacent module fails with a missing `lib*.so`,
+  install the NVIDIA CUDA repo packages (NVPL, cuDSS) per the reference:
+  https://github.com/iuliaferoli/jetson-jp7.2-install
+- **torchaudio conflict**: the newest torchaudio in user site-packages
+  (`~/.local/...`) may be built against a different CUDA (e.g. cu130 vs
+  cu132) and will hard-fail EVERY import of transformers/peft with
+  "PyTorch and TorchAudio were compiled with different CUDA versions". If you
+  don't need torchaudio, move it aside:
+  ```bash
+  mkdir -p ~/.local/lib/python3.12/site-packages_disabled
+  mv ~/.local/lib/python3.12/site-packages/torchaudio* \
+     ~/.local/lib/python3.12/site-packages_disabled/
+  ```
+  (No cu132 torchaudio exists yet; restore from `site-packages_disabled/` when
+  it does or if a project needs audio.)
+- Packages that pin torch (e.g. `vllm==2.13.0`) will warn about the version
+  mismatch — harmless unless you actually use them.
+
+**Verify after install** (the only test that counts — a real kernel launch):
+
+```python
+import torch
+print(torch.__version__)                    # expect 2.14.1+cu132 (or newer cu132)
+print(torch.cuda.get_arch_list())           # must still list sm-capable archs
+x = torch.randn(2048, 2048, device='cuda'); y = x @ x; torch.cuda.synchronize()
+print('GPU OK', y.shape)                    # no "no kernel image" error = pass
+```
+
+Measured speedup on AGX Orin 64GB (Qwen2.5-VL-7B LoRA, bs=2): ~24.6s/step CPU
+→ ~12-24s/step GPU (unified memory caps the advantage; inference benefits are
+larger than training).
 
 Enjoy watching the agent explore Kanto!

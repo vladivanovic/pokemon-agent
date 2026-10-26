@@ -1,0 +1,6945 @@
+{
+"0": {
+"const": "PalletTown",
+"file": "PalletTown",
+"warps": [
+{
+"x": 5,
+"y": 5,
+"dest": "REDS_HOUSE_1F",
+"idx": "1"
+},
+{
+"x": 13,
+"y": 5,
+"dest": "BLUES_HOUSE",
+"idx": "1"
+},
+{
+"x": 12,
+"y": 11,
+"dest": "OAKS_LAB",
+"idx": "2"
+}
+]
+},
+"1": {
+"const": "ViridianCity",
+"file": "ViridianCity",
+"warps": [
+{
+"x": 23,
+"y": 25,
+"dest": "VIRIDIAN_POKECENTER",
+"idx": "1"
+},
+{
+"x": 29,
+"y": 19,
+"dest": "VIRIDIAN_MART",
+"idx": "1"
+},
+{
+"x": 21,
+"y": 15,
+"dest": "VIRIDIAN_SCHOOL_HOUSE",
+"idx": "1"
+},
+{
+"x": 21,
+"y": 9,
+"dest": "VIRIDIAN_NICKNAME_HOUSE",
+"idx": "1"
+},
+{
+"x": 32,
+"y": 7,
+"dest": "VIRIDIAN_GYM",
+"idx": "1"
+}
+]
+},
+"2": {
+"const": "PewterCity",
+"file": "PewterCity",
+"warps": [
+{
+"x": 14,
+"y": 7,
+"dest": "MUSEUM_1F",
+"idx": "1"
+},
+{
+"x": 19,
+"y": 5,
+"dest": "MUSEUM_1F",
+"idx": "3"
+},
+{
+"x": 16,
+"y": 17,
+"dest": "PEWTER_GYM",
+"idx": "1"
+},
+{
+"x": 29,
+"y": 13,
+"dest": "PEWTER_NIDORAN_HOUSE",
+"idx": "1"
+},
+{
+"x": 23,
+"y": 17,
+"dest": "PEWTER_MART",
+"idx": "1"
+},
+{
+"x": 7,
+"y": 29,
+"dest": "PEWTER_SPEECH_HOUSE",
+"idx": "1"
+},
+{
+"x": 13,
+"y": 25,
+"dest": "PEWTER_POKECENTER",
+"idx": "1"
+}
+]
+},
+"3": {
+"const": "CeruleanCity",
+"file": "CeruleanCity",
+"warps": [
+{
+"x": 27,
+"y": 11,
+"dest": "CERULEAN_TRASHED_HOUSE",
+"idx": "1"
+},
+{
+"x": 13,
+"y": 15,
+"dest": "CERULEAN_TRADE_HOUSE",
+"idx": "1"
+},
+{
+"x": 19,
+"y": 17,
+"dest": "CERULEAN_POKECENTER",
+"idx": "1"
+},
+{
+"x": 30,
+"y": 19,
+"dest": "CERULEAN_GYM",
+"idx": "1"
+},
+{
+"x": 13,
+"y": 25,
+"dest": "BIKE_SHOP",
+"idx": "1"
+},
+{
+"x": 25,
+"y": 25,
+"dest": "CERULEAN_MART",
+"idx": "1"
+},
+{
+"x": 4,
+"y": 11,
+"dest": "CERULEAN_CAVE_1F",
+"idx": "1"
+},
+{
+"x": 27,
+"y": 9,
+"dest": "CERULEAN_TRASHED_HOUSE",
+"idx": "3"
+},
+{
+"x": 9,
+"y": 11,
+"dest": "CERULEAN_BADGE_HOUSE",
+"idx": "2"
+},
+{
+"x": 9,
+"y": 9,
+"dest": "CERULEAN_BADGE_HOUSE",
+"idx": "1"
+}
+]
+},
+"4": {
+"const": "LavenderTown",
+"file": "LavenderTown",
+"warps": [
+{
+"x": 3,
+"y": 5,
+"dest": "LAVENDER_POKECENTER",
+"idx": "1"
+},
+{
+"x": 14,
+"y": 5,
+"dest": "POKEMON_TOWER_1F",
+"idx": "1"
+},
+{
+"x": 7,
+"y": 9,
+"dest": "MR_FUJIS_HOUSE",
+"idx": "1"
+},
+{
+"x": 15,
+"y": 13,
+"dest": "LAVENDER_MART",
+"idx": "1"
+},
+{
+"x": 3,
+"y": 13,
+"dest": "LAVENDER_CUBONE_HOUSE",
+"idx": "1"
+},
+{
+"x": 7,
+"y": 13,
+"dest": "NAME_RATERS_HOUSE",
+"idx": "1"
+}
+]
+},
+"5": {
+"const": "VermilionCity",
+"file": "VermilionCity",
+"warps": [
+{
+"x": 11,
+"y": 3,
+"dest": "VERMILION_POKECENTER",
+"idx": "1"
+},
+{
+"x": 9,
+"y": 13,
+"dest": "POKEMON_FAN_CLUB",
+"idx": "1"
+},
+{
+"x": 23,
+"y": 13,
+"dest": "VERMILION_MART",
+"idx": "1"
+},
+{
+"x": 12,
+"y": 19,
+"dest": "VERMILION_GYM",
+"idx": "1"
+},
+{
+"x": 23,
+"y": 19,
+"dest": "VERMILION_PIDGEY_HOUSE",
+"idx": "1"
+},
+{
+"x": 18,
+"y": 31,
+"dest": "VERMILION_DOCK",
+"idx": "1"
+},
+{
+"x": 19,
+"y": 31,
+"dest": "VERMILION_DOCK",
+"idx": "1"
+},
+{
+"x": 15,
+"y": 13,
+"dest": "VERMILION_TRADE_HOUSE",
+"idx": "1"
+},
+{
+"x": 7,
+"y": 3,
+"dest": "VERMILION_OLD_ROD_HOUSE",
+"idx": "1"
+}
+]
+},
+"6": {
+"const": "CeladonCity",
+"file": "CeladonCity",
+"warps": [
+{
+"x": 8,
+"y": 13,
+"dest": "CELADON_MART_1F",
+"idx": "1"
+},
+{
+"x": 10,
+"y": 13,
+"dest": "CELADON_MART_1F",
+"idx": "3"
+},
+{
+"x": 24,
+"y": 9,
+"dest": "CELADON_MANSION_1F",
+"idx": "1"
+},
+{
+"x": 24,
+"y": 3,
+"dest": "CELADON_MANSION_1F",
+"idx": "3"
+},
+{
+"x": 25,
+"y": 3,
+"dest": "CELADON_MANSION_1F",
+"idx": "3"
+},
+{
+"x": 41,
+"y": 9,
+"dest": "CELADON_POKECENTER",
+"idx": "1"
+},
+{
+"x": 12,
+"y": 27,
+"dest": "CELADON_GYM",
+"idx": "1"
+},
+{
+"x": 28,
+"y": 19,
+"dest": "GAME_CORNER",
+"idx": "1"
+},
+{
+"x": 39,
+"y": 19,
+"dest": "CELADON_MART_5F",
+"idx": "1"
+},
+{
+"x": 33,
+"y": 19,
+"dest": "GAME_CORNER_PRIZE_ROOM",
+"idx": "1"
+},
+{
+"x": 31,
+"y": 27,
+"dest": "CELADON_DINER",
+"idx": "1"
+},
+{
+"x": 35,
+"y": 27,
+"dest": "CELADON_CHIEF_HOUSE",
+"idx": "1"
+},
+{
+"x": 43,
+"y": 27,
+"dest": "CELADON_HOTEL",
+"idx": "1"
+}
+]
+},
+"7": {
+"const": "FuchsiaCity",
+"file": "FuchsiaCity",
+"warps": [
+{
+"x": 5,
+"y": 13,
+"dest": "FUCHSIA_MART",
+"idx": "1"
+},
+{
+"x": 11,
+"y": 27,
+"dest": "FUCHSIA_BILLS_GRANDPAS_HOUSE",
+"idx": "1"
+},
+{
+"x": 19,
+"y": 27,
+"dest": "FUCHSIA_POKECENTER",
+"idx": "1"
+},
+{
+"x": 27,
+"y": 27,
+"dest": "WARDENS_HOUSE",
+"idx": "1"
+},
+{
+"x": 18,
+"y": 3,
+"dest": "SAFARI_ZONE_GATE",
+"idx": "1"
+},
+{
+"x": 5,
+"y": 27,
+"dest": "FUCHSIA_GYM",
+"idx": "1"
+},
+{
+"x": 22,
+"y": 13,
+"dest": "FUCHSIA_MEETING_ROOM",
+"idx": "1"
+},
+{
+"x": 31,
+"y": 27,
+"dest": "FUCHSIA_GOOD_ROD_HOUSE",
+"idx": "2"
+},
+{
+"x": 31,
+"y": 24,
+"dest": "FUCHSIA_GOOD_ROD_HOUSE",
+"idx": "1"
+}
+]
+},
+"8": {
+"const": "CinnabarIsland",
+"file": "CinnabarIsland",
+"warps": [
+{
+"x": 6,
+"y": 3,
+"dest": "POKEMON_MANSION_1F",
+"idx": "2"
+},
+{
+"x": 18,
+"y": 3,
+"dest": "CINNABAR_GYM",
+"idx": "1"
+},
+{
+"x": 6,
+"y": 9,
+"dest": "CINNABAR_LAB",
+"idx": "1"
+},
+{
+"x": 11,
+"y": 11,
+"dest": "CINNABAR_POKECENTER",
+"idx": "1"
+},
+{
+"x": 15,
+"y": 11,
+"dest": "CINNABAR_MART",
+"idx": "1"
+}
+]
+},
+"9": {
+"const": "IndigoPlateau",
+"file": "IndigoPlateau",
+"warps": [
+{
+"x": 9,
+"y": 5,
+"dest": "INDIGO_PLATEAU_LOBBY",
+"idx": "1"
+},
+{
+"x": 10,
+"y": 5,
+"dest": "INDIGO_PLATEAU_LOBBY",
+"idx": "1"
+}
+]
+},
+"10": {
+"const": "SaffronCity",
+"file": "SaffronCity",
+"warps": [
+{
+"x": 7,
+"y": 5,
+"dest": "COPYCATS_HOUSE_1F",
+"idx": "1"
+},
+{
+"x": 26,
+"y": 3,
+"dest": "FIGHTING_DOJO",
+"idx": "1"
+},
+{
+"x": 34,
+"y": 3,
+"dest": "SAFFRON_GYM",
+"idx": "1"
+},
+{
+"x": 13,
+"y": 11,
+"dest": "SAFFRON_PIDGEY_HOUSE",
+"idx": "1"
+},
+{
+"x": 25,
+"y": 11,
+"dest": "SAFFRON_MART",
+"idx": "1"
+},
+{
+"x": 18,
+"y": 21,
+"dest": "SILPH_CO_1F",
+"idx": "1"
+},
+{
+"x": 9,
+"y": 29,
+"dest": "SAFFRON_POKECENTER",
+"idx": "1"
+},
+{
+"x": 29,
+"y": 29,
+"dest": "MR_PSYCHICS_HOUSE",
+"idx": "1"
+}
+]
+},
+"11": {
+"const": "SaffronCity",
+"file": "SaffronCity",
+"warps": [
+{
+"x": 7,
+"y": 5,
+"dest": "COPYCATS_HOUSE_1F",
+"idx": "1"
+},
+{
+"x": 26,
+"y": 3,
+"dest": "FIGHTING_DOJO",
+"idx": "1"
+},
+{
+"x": 34,
+"y": 3,
+"dest": "SAFFRON_GYM",
+"idx": "1"
+},
+{
+"x": 13,
+"y": 11,
+"dest": "SAFFRON_PIDGEY_HOUSE",
+"idx": "1"
+},
+{
+"x": 25,
+"y": 11,
+"dest": "SAFFRON_MART",
+"idx": "1"
+},
+{
+"x": 18,
+"y": 21,
+"dest": "SILPH_CO_1F",
+"idx": "1"
+},
+{
+"x": 9,
+"y": 29,
+"dest": "SAFFRON_POKECENTER",
+"idx": "1"
+},
+{
+"x": 29,
+"y": 29,
+"dest": "MR_PSYCHICS_HOUSE",
+"idx": "1"
+}
+]
+},
+"12": {
+"const": "Route1",
+"file": "Route1",
+"warps": []
+},
+"13": {
+"const": "Route2",
+"file": "Route2",
+"warps": [
+{
+"x": 12,
+"y": 9,
+"dest": "DIGLETTS_CAVE_ROUTE_2",
+"idx": "1"
+},
+{
+"x": 3,
+"y": 11,
+"dest": "VIRIDIAN_FOREST_NORTH_GATE",
+"idx": "2"
+},
+{
+"x": 15,
+"y": 19,
+"dest": "ROUTE_2_TRADE_HOUSE",
+"idx": "1"
+},
+{
+"x": 16,
+"y": 35,
+"dest": "ROUTE_2_GATE",
+"idx": "2"
+},
+{
+"x": 15,
+"y": 39,
+"dest": "ROUTE_2_GATE",
+"idx": "3"
+},
+{
+"x": 3,
+"y": 43,
+"dest": "VIRIDIAN_FOREST_SOUTH_GATE",
+"idx": "3"
+}
+]
+},
+"14": {
+"const": "Route3",
+"file": "Route3",
+"warps": []
+},
+"15": {
+"const": "Route4",
+"file": "Route4",
+"warps": [
+{
+"x": 11,
+"y": 5,
+"dest": "MT_MOON_POKECENTER",
+"idx": "1"
+},
+{
+"x": 18,
+"y": 5,
+"dest": "MT_MOON_1F",
+"idx": "1"
+},
+{
+"x": 24,
+"y": 5,
+"dest": "MT_MOON_B1F",
+"idx": "8"
+}
+]
+},
+"16": {
+"const": "Route5",
+"file": "Route5",
+"warps": [
+{
+"x": 10,
+"y": 29,
+"dest": "ROUTE_5_GATE",
+"idx": "4"
+},
+{
+"x": 9,
+"y": 29,
+"dest": "ROUTE_5_GATE",
+"idx": "3"
+},
+{
+"x": 10,
+"y": 33,
+"dest": "ROUTE_5_GATE",
+"idx": "1"
+},
+{
+"x": 17,
+"y": 27,
+"dest": "UNDERGROUND_PATH_ROUTE_5",
+"idx": "1"
+},
+{
+"x": 10,
+"y": 21,
+"dest": "DAYCARE",
+"idx": "1"
+}
+]
+},
+"17": {
+"const": "Route6",
+"file": "Route6",
+"warps": [
+{
+"x": 9,
+"y": 1,
+"dest": "ROUTE_6_GATE",
+"idx": "3"
+},
+{
+"x": 10,
+"y": 1,
+"dest": "ROUTE_6_GATE",
+"idx": "3"
+},
+{
+"x": 10,
+"y": 7,
+"dest": "ROUTE_6_GATE",
+"idx": "1"
+},
+{
+"x": 17,
+"y": 13,
+"dest": "UNDERGROUND_PATH_ROUTE_6",
+"idx": "1"
+}
+]
+},
+"18": {
+"const": "Route7",
+"file": "Route7",
+"warps": [
+{
+"x": 18,
+"y": 9,
+"dest": "ROUTE_7_GATE",
+"idx": "3"
+},
+{
+"x": 18,
+"y": 10,
+"dest": "ROUTE_7_GATE",
+"idx": "4"
+},
+{
+"x": 11,
+"y": 9,
+"dest": "ROUTE_7_GATE",
+"idx": "1"
+},
+{
+"x": 11,
+"y": 10,
+"dest": "ROUTE_7_GATE",
+"idx": "2"
+},
+{
+"x": 5,
+"y": 13,
+"dest": "UNDERGROUND_PATH_ROUTE_7",
+"idx": "1"
+}
+]
+},
+"19": {
+"const": "Route8",
+"file": "Route8",
+"warps": [
+{
+"x": 1,
+"y": 9,
+"dest": "ROUTE_8_GATE",
+"idx": "1"
+},
+{
+"x": 1,
+"y": 10,
+"dest": "ROUTE_8_GATE",
+"idx": "2"
+},
+{
+"x": 8,
+"y": 9,
+"dest": "ROUTE_8_GATE",
+"idx": "3"
+},
+{
+"x": 8,
+"y": 10,
+"dest": "ROUTE_8_GATE",
+"idx": "4"
+},
+{
+"x": 13,
+"y": 3,
+"dest": "UNDERGROUND_PATH_ROUTE_8",
+"idx": "1"
+}
+]
+},
+"20": {
+"const": "Route9",
+"file": "Route9",
+"warps": []
+},
+"21": {
+"const": "Route10",
+"file": "Route10",
+"warps": [
+{
+"x": 11,
+"y": 19,
+"dest": "ROCK_TUNNEL_POKECENTER",
+"idx": "1"
+},
+{
+"x": 8,
+"y": 17,
+"dest": "ROCK_TUNNEL_1F",
+"idx": "1"
+},
+{
+"x": 8,
+"y": 53,
+"dest": "ROCK_TUNNEL_1F",
+"idx": "3"
+},
+{
+"x": 6,
+"y": 39,
+"dest": "POWER_PLANT",
+"idx": "1"
+}
+]
+},
+"22": {
+"const": "Route11",
+"file": "Route11",
+"warps": [
+{
+"x": 49,
+"y": 8,
+"dest": "ROUTE_11_GATE_1F",
+"idx": "1"
+},
+{
+"x": 49,
+"y": 9,
+"dest": "ROUTE_11_GATE_1F",
+"idx": "2"
+},
+{
+"x": 58,
+"y": 8,
+"dest": "ROUTE_11_GATE_1F",
+"idx": "3"
+},
+{
+"x": 58,
+"y": 9,
+"dest": "ROUTE_11_GATE_1F",
+"idx": "4"
+},
+{
+"x": 4,
+"y": 5,
+"dest": "DIGLETTS_CAVE_ROUTE_11",
+"idx": "1"
+}
+]
+},
+"23": {
+"const": "Route12",
+"file": "Route12",
+"warps": [
+{
+"x": 10,
+"y": 15,
+"dest": "ROUTE_12_GATE_1F",
+"idx": "1"
+},
+{
+"x": 11,
+"y": 15,
+"dest": "ROUTE_12_GATE_1F",
+"idx": "2"
+},
+{
+"x": 10,
+"y": 21,
+"dest": "ROUTE_12_GATE_1F",
+"idx": "3"
+},
+{
+"x": 11,
+"y": 77,
+"dest": "ROUTE_12_SUPER_ROD_HOUSE",
+"idx": "1"
+}
+]
+},
+"24": {
+"const": "Route13",
+"file": "Route13",
+"warps": []
+},
+"25": {
+"const": "Route14",
+"file": "Route14",
+"warps": []
+},
+"26": {
+"const": "Route15",
+"file": "Route15",
+"warps": [
+{
+"x": 7,
+"y": 8,
+"dest": "ROUTE_15_GATE_1F",
+"idx": "1"
+},
+{
+"x": 7,
+"y": 9,
+"dest": "ROUTE_15_GATE_1F",
+"idx": "2"
+},
+{
+"x": 14,
+"y": 8,
+"dest": "ROUTE_15_GATE_1F",
+"idx": "3"
+},
+{
+"x": 14,
+"y": 9,
+"dest": "ROUTE_15_GATE_1F",
+"idx": "4"
+}
+]
+},
+"27": {
+"const": "Route16",
+"file": "Route16",
+"warps": [
+{
+"x": 17,
+"y": 10,
+"dest": "ROUTE_16_GATE_1F",
+"idx": "1"
+},
+{
+"x": 17,
+"y": 11,
+"dest": "ROUTE_16_GATE_1F",
+"idx": "2"
+},
+{
+"x": 24,
+"y": 10,
+"dest": "ROUTE_16_GATE_1F",
+"idx": "3"
+},
+{
+"x": 24,
+"y": 11,
+"dest": "ROUTE_16_GATE_1F",
+"idx": "4"
+},
+{
+"x": 17,
+"y": 4,
+"dest": "ROUTE_16_GATE_1F",
+"idx": "5"
+},
+{
+"x": 17,
+"y": 5,
+"dest": "ROUTE_16_GATE_1F",
+"idx": "6"
+},
+{
+"x": 24,
+"y": 4,
+"dest": "ROUTE_16_GATE_1F",
+"idx": "7"
+},
+{
+"x": 24,
+"y": 5,
+"dest": "ROUTE_16_GATE_1F",
+"idx": "8"
+},
+{
+"x": 7,
+"y": 5,
+"dest": "ROUTE_16_FLY_HOUSE",
+"idx": "1"
+}
+]
+},
+"28": {
+"const": "Route17",
+"file": "Route17",
+"warps": []
+},
+"29": {
+"const": "Route18",
+"file": "Route18",
+"warps": [
+{
+"x": 33,
+"y": 8,
+"dest": "ROUTE_18_GATE_1F",
+"idx": "1"
+},
+{
+"x": 33,
+"y": 9,
+"dest": "ROUTE_18_GATE_1F",
+"idx": "2"
+},
+{
+"x": 40,
+"y": 8,
+"dest": "ROUTE_18_GATE_1F",
+"idx": "3"
+},
+{
+"x": 40,
+"y": 9,
+"dest": "ROUTE_18_GATE_1F",
+"idx": "4"
+}
+]
+},
+"30": {
+"const": "Route19",
+"file": "Route19",
+"warps": []
+},
+"31": {
+"const": "Route20",
+"file": "Route20",
+"warps": [
+{
+"x": 48,
+"y": 5,
+"dest": "SEAFOAM_ISLANDS_1F",
+"idx": "1"
+},
+{
+"x": 58,
+"y": 9,
+"dest": "SEAFOAM_ISLANDS_1F",
+"idx": "3"
+}
+]
+},
+"32": {
+"const": "Route21",
+"file": "Route21",
+"warps": []
+},
+"33": {
+"const": "Route22",
+"file": "Route22",
+"warps": [
+{
+"x": 8,
+"y": 5,
+"dest": "ROUTE_22_GATE",
+"idx": "1"
+}
+]
+},
+"34": {
+"const": "Route23",
+"file": "Route23",
+"warps": [
+{
+"x": 7,
+"y": 139,
+"dest": "ROUTE_22_GATE",
+"idx": "3"
+},
+{
+"x": 8,
+"y": 139,
+"dest": "ROUTE_22_GATE",
+"idx": "4"
+},
+{
+"x": 4,
+"y": 31,
+"dest": "VICTORY_ROAD_1F",
+"idx": "1"
+},
+{
+"x": 14,
+"y": 31,
+"dest": "VICTORY_ROAD_2F",
+"idx": "2"
+}
+]
+},
+"35": {
+"const": "Route24",
+"file": "Route24",
+"warps": []
+},
+"36": {
+"const": "Route25",
+"file": "Route25",
+"warps": [
+{
+"x": 45,
+"y": 3,
+"dest": "BILLS_HOUSE",
+"idx": "1"
+}
+]
+},
+"37": {
+"const": "RedsHouse1F",
+"file": "RedsHouse1F",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 7,
+"y": 1,
+"dest": "REDS_HOUSE_2F",
+"idx": "1"
+}
+]
+},
+"38": {
+"const": "RedsHouse2F",
+"file": "RedsHouse2F",
+"warps": [
+{
+"x": 7,
+"y": 1,
+"dest": "REDS_HOUSE_1F",
+"idx": "3"
+}
+]
+},
+"39": {
+"const": "BluesHouse",
+"file": "BluesHouse",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "2"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "2"
+}
+]
+},
+"40": {
+"const": "OaksLab",
+"file": "OaksLab",
+"warps": [
+{
+"x": 4,
+"y": 11,
+"dest": "LAST_MAP",
+"idx": "3"
+},
+{
+"x": 5,
+"y": 11,
+"dest": "LAST_MAP",
+"idx": "3"
+}
+]
+},
+"41": {
+"const": "ViridianPokecenter",
+"file": "ViridianPokecenter",
+"warps": [
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "1"
+}
+]
+},
+"42": {
+"const": "ViridianMart",
+"file": "ViridianMart",
+"warps": [
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "2"
+},
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "2"
+}
+]
+},
+"43": {
+"const": "ViridianSchoolHouse",
+"file": "ViridianSchoolHouse",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "3"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "3"
+}
+]
+},
+"44": {
+"const": "ViridianNicknameHouse",
+"file": "ViridianNicknameHouse",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "4"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "4"
+}
+]
+},
+"45": {
+"const": "ViridianGym",
+"file": "ViridianGym",
+"warps": [
+{
+"x": 16,
+"y": 17,
+"dest": "LAST_MAP",
+"idx": "5"
+},
+{
+"x": 17,
+"y": 17,
+"dest": "LAST_MAP",
+"idx": "5"
+}
+]
+},
+"46": {
+"const": "DiglettsCaveRoute2",
+"file": "DiglettsCaveRoute2",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 4,
+"y": 4,
+"dest": "DIGLETTS_CAVE",
+"idx": "1"
+}
+]
+},
+"47": {
+"const": "ViridianForestNorthGate",
+"file": "ViridianForestNorthGate",
+"warps": [
+{
+"x": 4,
+"y": 0,
+"dest": "LAST_MAP",
+"idx": "2"
+},
+{
+"x": 5,
+"y": 0,
+"dest": "LAST_MAP",
+"idx": "2"
+},
+{
+"x": 4,
+"y": 7,
+"dest": "VIRIDIAN_FOREST",
+"idx": "1"
+},
+{
+"x": 5,
+"y": 7,
+"dest": "VIRIDIAN_FOREST",
+"idx": "1"
+}
+]
+},
+"48": {
+"const": "Route2TradeHouse",
+"file": "Route2TradeHouse",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "3"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "3"
+}
+]
+},
+"49": {
+"const": "Route2Gate",
+"file": "Route2Gate",
+"warps": [
+{
+"x": 4,
+"y": 0,
+"dest": "LAST_MAP",
+"idx": "4"
+},
+{
+"x": 5,
+"y": 0,
+"dest": "LAST_MAP",
+"idx": "4"
+},
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "5"
+},
+{
+"x": 5,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "5"
+}
+]
+},
+"50": {
+"const": "ViridianForestSouthGate",
+"file": "ViridianForestSouthGate",
+"warps": [
+{
+"x": 4,
+"y": 0,
+"dest": "VIRIDIAN_FOREST",
+"idx": "4"
+},
+{
+"x": 5,
+"y": 0,
+"dest": "VIRIDIAN_FOREST",
+"idx": "5"
+},
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "6"
+},
+{
+"x": 5,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "6"
+}
+]
+},
+"51": {
+"const": "ViridianForest",
+"file": "ViridianForest",
+"warps": [
+{
+"x": 1,
+"y": 0,
+"dest": "VIRIDIAN_FOREST_NORTH_GATE",
+"idx": "3"
+},
+{
+"x": 2,
+"y": 0,
+"dest": "VIRIDIAN_FOREST_NORTH_GATE",
+"idx": "4"
+},
+{
+"x": 15,
+"y": 47,
+"dest": "VIRIDIAN_FOREST_SOUTH_GATE",
+"idx": "2"
+},
+{
+"x": 16,
+"y": 47,
+"dest": "VIRIDIAN_FOREST_SOUTH_GATE",
+"idx": "2"
+},
+{
+"x": 17,
+"y": 47,
+"dest": "VIRIDIAN_FOREST_SOUTH_GATE",
+"idx": "2"
+},
+{
+"x": 18,
+"y": 47,
+"dest": "VIRIDIAN_FOREST_SOUTH_GATE",
+"idx": "2"
+}
+]
+},
+"52": {
+"const": "Museum1F",
+"file": "Museum1F",
+"warps": [
+{
+"x": 10,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 11,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 16,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "2"
+},
+{
+"x": 17,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "2"
+},
+{
+"x": 7,
+"y": 7,
+"dest": "MUSEUM_2F",
+"idx": "1"
+}
+]
+},
+"53": {
+"const": "Museum2F",
+"file": "Museum2F",
+"warps": [
+{
+"x": 7,
+"y": 7,
+"dest": "MUSEUM_1F",
+"idx": "5"
+}
+]
+},
+"54": {
+"const": "PewterGym",
+"file": "PewterGym",
+"warps": [
+{
+"x": 4,
+"y": 13,
+"dest": "LAST_MAP",
+"idx": "3"
+},
+{
+"x": 5,
+"y": 13,
+"dest": "LAST_MAP",
+"idx": "3"
+}
+]
+},
+"55": {
+"const": "PewterNidoranHouse",
+"file": "PewterNidoranHouse",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "4"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "4"
+}
+]
+},
+"56": {
+"const": "PewterMart",
+"file": "PewterMart",
+"warps": [
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "5"
+},
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "5"
+}
+]
+},
+"57": {
+"const": "PewterSpeechHouse",
+"file": "PewterSpeechHouse",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "6"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "6"
+}
+]
+},
+"58": {
+"const": "PewterPokecenter",
+"file": "PewterPokecenter",
+"warps": [
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "7"
+},
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "7"
+}
+]
+},
+"59": {
+"const": "MtMoon1F",
+"file": "MtMoon1F",
+"warps": [
+{
+"x": 14,
+"y": 35,
+"dest": "LAST_MAP",
+"idx": "2"
+},
+{
+"x": 15,
+"y": 35,
+"dest": "LAST_MAP",
+"idx": "2"
+},
+{
+"x": 5,
+"y": 5,
+"dest": "MT_MOON_B1F",
+"idx": "1"
+},
+{
+"x": 17,
+"y": 11,
+"dest": "MT_MOON_B1F",
+"idx": "3"
+},
+{
+"x": 25,
+"y": 15,
+"dest": "MT_MOON_B1F",
+"idx": "4"
+}
+]
+},
+"60": {
+"const": "MtMoonB1F",
+"file": "MtMoonB1F",
+"warps": [
+{
+"x": 5,
+"y": 5,
+"dest": "MT_MOON_1F",
+"idx": "3"
+},
+{
+"x": 17,
+"y": 11,
+"dest": "MT_MOON_B2F",
+"idx": "1"
+},
+{
+"x": 25,
+"y": 9,
+"dest": "MT_MOON_1F",
+"idx": "4"
+},
+{
+"x": 25,
+"y": 15,
+"dest": "MT_MOON_1F",
+"idx": "5"
+},
+{
+"x": 21,
+"y": 17,
+"dest": "MT_MOON_B2F",
+"idx": "2"
+},
+{
+"x": 13,
+"y": 27,
+"dest": "MT_MOON_B2F",
+"idx": "3"
+},
+{
+"x": 23,
+"y": 3,
+"dest": "MT_MOON_B2F",
+"idx": "4"
+},
+{
+"x": 27,
+"y": 3,
+"dest": "LAST_MAP",
+"idx": "3"
+}
+]
+},
+"61": {
+"const": "MtMoonB2F",
+"file": "MtMoonB2F",
+"warps": [
+{
+"x": 25,
+"y": 9,
+"dest": "MT_MOON_B1F",
+"idx": "2"
+},
+{
+"x": 21,
+"y": 17,
+"dest": "MT_MOON_B1F",
+"idx": "5"
+},
+{
+"x": 15,
+"y": 27,
+"dest": "MT_MOON_B1F",
+"idx": "6"
+},
+{
+"x": 5,
+"y": 7,
+"dest": "MT_MOON_B1F",
+"idx": "7"
+}
+]
+},
+"62": {
+"const": "CeruleanTrashedHouse",
+"file": "CeruleanTrashedHouse",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 3,
+"y": 0,
+"dest": "LAST_MAP",
+"idx": "8"
+}
+]
+},
+"63": {
+"const": "CeruleanTradeHouse",
+"file": "CeruleanTradeHouse",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "2"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "2"
+}
+]
+},
+"64": {
+"const": "CeruleanPokecenter",
+"file": "CeruleanPokecenter",
+"warps": [
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "3"
+},
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "3"
+}
+]
+},
+"65": {
+"const": "CeruleanGym",
+"file": "CeruleanGym",
+"warps": [
+{
+"x": 4,
+"y": 13,
+"dest": "LAST_MAP",
+"idx": "4"
+},
+{
+"x": 5,
+"y": 13,
+"dest": "LAST_MAP",
+"idx": "4"
+}
+]
+},
+"66": {
+"const": "BikeShop",
+"file": "BikeShop",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "5"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "5"
+}
+]
+},
+"67": {
+"const": "CeruleanMart",
+"file": "CeruleanMart",
+"warps": [
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "6"
+},
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "6"
+}
+]
+},
+"68": {
+"const": "MtMoonPokecenter",
+"file": "MtMoonPokecenter",
+"warps": [
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "1"
+}
+]
+},
+"69": {
+"const": "CeruleanTrashedHouse",
+"file": "CeruleanTrashedHouse",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 3,
+"y": 0,
+"dest": "LAST_MAP",
+"idx": "8"
+}
+]
+},
+"70": {
+"const": "Route5Gate",
+"file": "Route5Gate",
+"warps": [
+{
+"x": 3,
+"y": 5,
+"dest": "LAST_MAP",
+"idx": "3"
+},
+{
+"x": 4,
+"y": 5,
+"dest": "LAST_MAP",
+"idx": "3"
+},
+{
+"x": 3,
+"y": 0,
+"dest": "LAST_MAP",
+"idx": "2"
+},
+{
+"x": 4,
+"y": 0,
+"dest": "LAST_MAP",
+"idx": "1"
+}
+]
+},
+"71": {
+"const": "UndergroundPathRoute5",
+"file": "UndergroundPathRoute5",
+"warps": [
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "4"
+},
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "4"
+},
+{
+"x": 4,
+"y": 4,
+"dest": "UNDERGROUND_PATH_NORTH_SOUTH",
+"idx": "1"
+}
+]
+},
+"72": {
+"const": "Daycare",
+"file": "Daycare",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "5"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "5"
+}
+]
+},
+"73": {
+"const": "Route6Gate",
+"file": "Route6Gate",
+"warps": [
+{
+"x": 3,
+"y": 5,
+"dest": "LAST_MAP",
+"idx": "3"
+},
+{
+"x": 4,
+"y": 5,
+"dest": "LAST_MAP",
+"idx": "3"
+},
+{
+"x": 3,
+"y": 0,
+"dest": "LAST_MAP",
+"idx": "2"
+},
+{
+"x": 4,
+"y": 0,
+"dest": "LAST_MAP",
+"idx": "2"
+}
+]
+},
+"74": {
+"const": "UndergroundPathRoute6",
+"file": "UndergroundPathRoute6",
+"warps": [
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "4"
+},
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "4"
+},
+{
+"x": 4,
+"y": 4,
+"dest": "UNDERGROUND_PATH_NORTH_SOUTH",
+"idx": "2"
+}
+]
+},
+"75": {
+"const": "UndergroundPathRoute6",
+"file": "UndergroundPathRoute6",
+"warps": [
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "4"
+},
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "4"
+},
+{
+"x": 4,
+"y": 4,
+"dest": "UNDERGROUND_PATH_NORTH_SOUTH",
+"idx": "2"
+}
+]
+},
+"76": {
+"const": "Route7Gate",
+"file": "Route7Gate",
+"warps": [
+{
+"x": 0,
+"y": 3,
+"dest": "LAST_MAP",
+"idx": "4"
+},
+{
+"x": 0,
+"y": 4,
+"dest": "LAST_MAP",
+"idx": "4"
+},
+{
+"x": 5,
+"y": 3,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 5,
+"y": 4,
+"dest": "LAST_MAP",
+"idx": "2"
+}
+]
+},
+"77": {
+"const": "UndergroundPathRoute7",
+"file": "UndergroundPathRoute7",
+"warps": [
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "5"
+},
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "5"
+},
+{
+"x": 4,
+"y": 4,
+"dest": "UNDERGROUND_PATH_WEST_EAST",
+"idx": "1"
+}
+]
+},
+"78": {
+"const": "UndergroundPathRoute7Copy",
+"file": "UndergroundPathRoute7Copy",
+"warps": [
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "6"
+},
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "6"
+},
+{
+"x": 4,
+"y": 4,
+"dest": "UNDERGROUND_PATH_WEST_EAST",
+"idx": "1"
+}
+]
+},
+"79": {
+"const": "Route8Gate",
+"file": "Route8Gate",
+"warps": [
+{
+"x": 0,
+"y": 3,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 0,
+"y": 4,
+"dest": "LAST_MAP",
+"idx": "2"
+},
+{
+"x": 5,
+"y": 3,
+"dest": "LAST_MAP",
+"idx": "3"
+},
+{
+"x": 5,
+"y": 4,
+"dest": "LAST_MAP",
+"idx": "4"
+}
+]
+},
+"80": {
+"const": "UndergroundPathRoute8",
+"file": "UndergroundPathRoute8",
+"warps": [
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "5"
+},
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "5"
+},
+{
+"x": 4,
+"y": 4,
+"dest": "UNDERGROUND_PATH_WEST_EAST",
+"idx": "2"
+}
+]
+},
+"81": {
+"const": "RockTunnelPokecenter",
+"file": "RockTunnelPokecenter",
+"warps": [
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "1"
+}
+]
+},
+"82": {
+"const": "RockTunnel1F",
+"file": "RockTunnel1F",
+"warps": [
+{
+"x": 15,
+"y": 3,
+"dest": "LAST_MAP",
+"idx": "2"
+},
+{
+"x": 15,
+"y": 0,
+"dest": "LAST_MAP",
+"idx": "2"
+},
+{
+"x": 15,
+"y": 33,
+"dest": "LAST_MAP",
+"idx": "3"
+},
+{
+"x": 15,
+"y": 35,
+"dest": "LAST_MAP",
+"idx": "3"
+},
+{
+"x": 37,
+"y": 3,
+"dest": "ROCK_TUNNEL_B1F",
+"idx": "1"
+},
+{
+"x": 5,
+"y": 3,
+"dest": "ROCK_TUNNEL_B1F",
+"idx": "2"
+},
+{
+"x": 17,
+"y": 11,
+"dest": "ROCK_TUNNEL_B1F",
+"idx": "3"
+},
+{
+"x": 37,
+"y": 17,
+"dest": "ROCK_TUNNEL_B1F",
+"idx": "4"
+}
+]
+},
+"83": {
+"const": "PowerPlant",
+"file": "PowerPlant",
+"warps": [
+{
+"x": 4,
+"y": 35,
+"dest": "LAST_MAP",
+"idx": "4"
+},
+{
+"x": 5,
+"y": 35,
+"dest": "LAST_MAP",
+"idx": "4"
+},
+{
+"x": 0,
+"y": 11,
+"dest": "LAST_MAP",
+"idx": "4"
+}
+]
+},
+"84": {
+"const": "Route11Gate1F",
+"file": "Route11Gate1F",
+"warps": [
+{
+"x": 0,
+"y": 4,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 0,
+"y": 5,
+"dest": "LAST_MAP",
+"idx": "2"
+},
+{
+"x": 7,
+"y": 4,
+"dest": "LAST_MAP",
+"idx": "3"
+},
+{
+"x": 7,
+"y": 5,
+"dest": "LAST_MAP",
+"idx": "4"
+},
+{
+"x": 6,
+"y": 8,
+"dest": "ROUTE_11_GATE_2F",
+"idx": "1"
+}
+]
+},
+"85": {
+"const": "DiglettsCaveRoute11",
+"file": "DiglettsCaveRoute11",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "5"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "5"
+},
+{
+"x": 4,
+"y": 4,
+"dest": "DIGLETTS_CAVE",
+"idx": "2"
+}
+]
+},
+"86": {
+"const": "Route11Gate2F",
+"file": "Route11Gate2F",
+"warps": [
+{
+"x": 7,
+"y": 7,
+"dest": "ROUTE_11_GATE_1F",
+"idx": "5"
+}
+]
+},
+"87": {
+"const": "Route12Gate1F",
+"file": "Route12Gate1F",
+"warps": [
+{
+"x": 4,
+"y": 0,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 5,
+"y": 0,
+"dest": "LAST_MAP",
+"idx": "2"
+},
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "3"
+},
+{
+"x": 5,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "3"
+},
+{
+"x": 8,
+"y": 6,
+"dest": "ROUTE_12_GATE_2F",
+"idx": "1"
+}
+]
+},
+"88": {
+"const": "BillsHouse",
+"file": "BillsHouse",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "1"
+}
+]
+},
+"89": {
+"const": "VermilionPokecenter",
+"file": "VermilionPokecenter",
+"warps": [
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "1"
+}
+]
+},
+"90": {
+"const": "PokemonFanClub",
+"file": "PokemonFanClub",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "2"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "2"
+}
+]
+},
+"91": {
+"const": "VermilionMart",
+"file": "VermilionMart",
+"warps": [
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "3"
+},
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "3"
+}
+]
+},
+"92": {
+"const": "VermilionGym",
+"file": "VermilionGym",
+"warps": [
+{
+"x": 4,
+"y": 17,
+"dest": "LAST_MAP",
+"idx": "4"
+},
+{
+"x": 5,
+"y": 17,
+"dest": "LAST_MAP",
+"idx": "4"
+}
+]
+},
+"93": {
+"const": "VermilionPidgeyHouse",
+"file": "VermilionPidgeyHouse",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "5"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "5"
+}
+]
+},
+"94": {
+"const": "VermilionDock",
+"file": "VermilionDock",
+"warps": [
+{
+"x": 14,
+"y": 0,
+"dest": "LAST_MAP",
+"idx": "6"
+},
+{
+"x": 14,
+"y": 2,
+"dest": "SS_ANNE_1F",
+"idx": "2"
+}
+]
+},
+"95": {
+"const": "SSAnne1F",
+"file": "SSAnne1F",
+"warps": [
+{
+"x": 26,
+"y": 0,
+"dest": "VERMILION_DOCK",
+"idx": "2"
+},
+{
+"x": 27,
+"y": 0,
+"dest": "VERMILION_DOCK",
+"idx": "2"
+},
+{
+"x": 31,
+"y": 8,
+"dest": "SS_ANNE_1F_ROOMS",
+"idx": "1"
+},
+{
+"x": 23,
+"y": 8,
+"dest": "SS_ANNE_1F_ROOMS",
+"idx": "2"
+},
+{
+"x": 19,
+"y": 8,
+"dest": "SS_ANNE_1F_ROOMS",
+"idx": "3"
+},
+{
+"x": 15,
+"y": 8,
+"dest": "SS_ANNE_1F_ROOMS",
+"idx": "4"
+},
+{
+"x": 11,
+"y": 8,
+"dest": "SS_ANNE_1F_ROOMS",
+"idx": "5"
+},
+{
+"x": 7,
+"y": 8,
+"dest": "SS_ANNE_1F_ROOMS",
+"idx": "6"
+},
+{
+"x": 2,
+"y": 6,
+"dest": "SS_ANNE_2F",
+"idx": "7"
+},
+{
+"x": 37,
+"y": 15,
+"dest": "SS_ANNE_B1F",
+"idx": "6"
+},
+{
+"x": 3,
+"y": 16,
+"dest": "SS_ANNE_KITCHEN",
+"idx": "1"
+}
+]
+},
+"96": {
+"const": "SSAnne2F",
+"file": "SSAnne2F",
+"warps": [
+{
+"x": 9,
+"y": 11,
+"dest": "SS_ANNE_2F_ROOMS",
+"idx": "1"
+},
+{
+"x": 13,
+"y": 11,
+"dest": "SS_ANNE_2F_ROOMS",
+"idx": "3"
+},
+{
+"x": 17,
+"y": 11,
+"dest": "SS_ANNE_2F_ROOMS",
+"idx": "5"
+},
+{
+"x": 21,
+"y": 11,
+"dest": "SS_ANNE_2F_ROOMS",
+"idx": "7"
+},
+{
+"x": 25,
+"y": 11,
+"dest": "SS_ANNE_2F_ROOMS",
+"idx": "9"
+},
+{
+"x": 29,
+"y": 11,
+"dest": "SS_ANNE_2F_ROOMS",
+"idx": "11"
+},
+{
+"x": 2,
+"y": 4,
+"dest": "SS_ANNE_1F",
+"idx": "9"
+},
+{
+"x": 2,
+"y": 12,
+"dest": "SS_ANNE_3F",
+"idx": "2"
+},
+{
+"x": 36,
+"y": 4,
+"dest": "SS_ANNE_CAPTAINS_ROOM",
+"idx": "1"
+}
+]
+},
+"97": {
+"const": "SSAnne3F",
+"file": "SSAnne3F",
+"warps": [
+{
+"x": 0,
+"y": 3,
+"dest": "SS_ANNE_BOW",
+"idx": "1"
+},
+{
+"x": 19,
+"y": 3,
+"dest": "SS_ANNE_2F",
+"idx": "8"
+}
+]
+},
+"98": {
+"const": "SSAnneB1F",
+"file": "SSAnneB1F",
+"warps": [
+{
+"x": 23,
+"y": 3,
+"dest": "SS_ANNE_B1F_ROOMS",
+"idx": "9"
+},
+{
+"x": 19,
+"y": 3,
+"dest": "SS_ANNE_B1F_ROOMS",
+"idx": "7"
+},
+{
+"x": 15,
+"y": 3,
+"dest": "SS_ANNE_B1F_ROOMS",
+"idx": "5"
+},
+{
+"x": 11,
+"y": 3,
+"dest": "SS_ANNE_B1F_ROOMS",
+"idx": "3"
+},
+{
+"x": 7,
+"y": 3,
+"dest": "SS_ANNE_B1F_ROOMS",
+"idx": "1"
+},
+{
+"x": 27,
+"y": 5,
+"dest": "SS_ANNE_1F",
+"idx": "10"
+}
+]
+},
+"99": {
+"const": "SSAnneBow",
+"file": "SSAnneBow",
+"warps": [
+{
+"x": 13,
+"y": 6,
+"dest": "SS_ANNE_3F",
+"idx": "1"
+},
+{
+"x": 13,
+"y": 7,
+"dest": "SS_ANNE_3F",
+"idx": "1"
+}
+]
+},
+"100": {
+"const": "SSAnneKitchen",
+"file": "SSAnneKitchen",
+"warps": [
+{
+"x": 6,
+"y": 0,
+"dest": "SS_ANNE_1F",
+"idx": "11"
+}
+]
+},
+"101": {
+"const": "SSAnneCaptainsRoom",
+"file": "SSAnneCaptainsRoom",
+"warps": [
+{
+"x": 0,
+"y": 7,
+"dest": "SS_ANNE_2F",
+"idx": "9"
+}
+]
+},
+"102": {
+"const": "SSAnne1FRooms",
+"file": "SSAnne1FRooms",
+"warps": [
+{
+"x": 0,
+"y": 0,
+"dest": "SS_ANNE_1F",
+"idx": "3"
+},
+{
+"x": 10,
+"y": 0,
+"dest": "SS_ANNE_1F",
+"idx": "4"
+},
+{
+"x": 20,
+"y": 0,
+"dest": "SS_ANNE_1F",
+"idx": "5"
+},
+{
+"x": 0,
+"y": 10,
+"dest": "SS_ANNE_1F",
+"idx": "6"
+},
+{
+"x": 10,
+"y": 10,
+"dest": "SS_ANNE_1F",
+"idx": "7"
+},
+{
+"x": 20,
+"y": 10,
+"dest": "SS_ANNE_1F",
+"idx": "8"
+}
+]
+},
+"103": {
+"const": "SSAnne2FRooms",
+"file": "SSAnne2FRooms",
+"warps": [
+{
+"x": 2,
+"y": 5,
+"dest": "SS_ANNE_2F",
+"idx": "1"
+},
+{
+"x": 3,
+"y": 5,
+"dest": "SS_ANNE_2F",
+"idx": "1"
+},
+{
+"x": 12,
+"y": 5,
+"dest": "SS_ANNE_2F",
+"idx": "2"
+},
+{
+"x": 13,
+"y": 5,
+"dest": "SS_ANNE_2F",
+"idx": "2"
+},
+{
+"x": 22,
+"y": 5,
+"dest": "SS_ANNE_2F",
+"idx": "3"
+},
+{
+"x": 23,
+"y": 5,
+"dest": "SS_ANNE_2F",
+"idx": "3"
+},
+{
+"x": 2,
+"y": 15,
+"dest": "SS_ANNE_2F",
+"idx": "4"
+},
+{
+"x": 3,
+"y": 15,
+"dest": "SS_ANNE_2F",
+"idx": "4"
+},
+{
+"x": 12,
+"y": 15,
+"dest": "SS_ANNE_2F",
+"idx": "5"
+},
+{
+"x": 13,
+"y": 15,
+"dest": "SS_ANNE_2F",
+"idx": "5"
+},
+{
+"x": 22,
+"y": 15,
+"dest": "SS_ANNE_2F",
+"idx": "6"
+},
+{
+"x": 23,
+"y": 15,
+"dest": "SS_ANNE_2F",
+"idx": "6"
+}
+]
+},
+"104": {
+"const": "SSAnneB1FRooms",
+"file": "SSAnneB1FRooms",
+"warps": [
+{
+"x": 2,
+"y": 5,
+"dest": "SS_ANNE_B1F",
+"idx": "5"
+},
+{
+"x": 3,
+"y": 5,
+"dest": "SS_ANNE_B1F",
+"idx": "5"
+},
+{
+"x": 12,
+"y": 5,
+"dest": "SS_ANNE_B1F",
+"idx": "4"
+},
+{
+"x": 13,
+"y": 5,
+"dest": "SS_ANNE_B1F",
+"idx": "4"
+},
+{
+"x": 22,
+"y": 5,
+"dest": "SS_ANNE_B1F",
+"idx": "3"
+},
+{
+"x": 23,
+"y": 5,
+"dest": "SS_ANNE_B1F",
+"idx": "3"
+},
+{
+"x": 2,
+"y": 15,
+"dest": "SS_ANNE_B1F",
+"idx": "2"
+},
+{
+"x": 3,
+"y": 15,
+"dest": "SS_ANNE_B1F",
+"idx": "2"
+},
+{
+"x": 12,
+"y": 15,
+"dest": "SS_ANNE_B1F",
+"idx": "1"
+},
+{
+"x": 13,
+"y": 15,
+"dest": "SS_ANNE_B1F",
+"idx": "1"
+}
+]
+},
+"105": {
+"const": "LancesRoom",
+"file": "LancesRoom",
+"warps": [
+{
+"x": 24,
+"y": 16,
+"dest": "AGATHAS_ROOM",
+"idx": "3"
+},
+{
+"x": 5,
+"y": 0,
+"dest": "CHAMPIONS_ROOM",
+"idx": "1"
+},
+{
+"x": 6,
+"y": 0,
+"dest": "CHAMPIONS_ROOM",
+"idx": "1"
+}
+]
+},
+"106": {
+"const": "LancesRoom",
+"file": "LancesRoom",
+"warps": [
+{
+"x": 24,
+"y": 16,
+"dest": "AGATHAS_ROOM",
+"idx": "3"
+},
+{
+"x": 5,
+"y": 0,
+"dest": "CHAMPIONS_ROOM",
+"idx": "1"
+},
+{
+"x": 6,
+"y": 0,
+"dest": "CHAMPIONS_ROOM",
+"idx": "1"
+}
+]
+},
+"107": {
+"const": "LancesRoom",
+"file": "LancesRoom",
+"warps": [
+{
+"x": 24,
+"y": 16,
+"dest": "AGATHAS_ROOM",
+"idx": "3"
+},
+{
+"x": 5,
+"y": 0,
+"dest": "CHAMPIONS_ROOM",
+"idx": "1"
+},
+{
+"x": 6,
+"y": 0,
+"dest": "CHAMPIONS_ROOM",
+"idx": "1"
+}
+]
+},
+"108": {
+"const": "VictoryRoad1F",
+"file": "VictoryRoad1F",
+"warps": [
+{
+"x": 8,
+"y": 17,
+"dest": "LAST_MAP",
+"idx": "3"
+},
+{
+"x": 9,
+"y": 17,
+"dest": "LAST_MAP",
+"idx": "3"
+},
+{
+"x": 1,
+"y": 1,
+"dest": "VICTORY_ROAD_2F",
+"idx": "1"
+}
+]
+},
+"109": {
+"const": "LancesRoom",
+"file": "LancesRoom",
+"warps": [
+{
+"x": 24,
+"y": 16,
+"dest": "AGATHAS_ROOM",
+"idx": "3"
+},
+{
+"x": 5,
+"y": 0,
+"dest": "CHAMPIONS_ROOM",
+"idx": "1"
+},
+{
+"x": 6,
+"y": 0,
+"dest": "CHAMPIONS_ROOM",
+"idx": "1"
+}
+]
+},
+"110": {
+"const": "LancesRoom",
+"file": "LancesRoom",
+"warps": [
+{
+"x": 24,
+"y": 16,
+"dest": "AGATHAS_ROOM",
+"idx": "3"
+},
+{
+"x": 5,
+"y": 0,
+"dest": "CHAMPIONS_ROOM",
+"idx": "1"
+},
+{
+"x": 6,
+"y": 0,
+"dest": "CHAMPIONS_ROOM",
+"idx": "1"
+}
+]
+},
+"111": {
+"const": "LancesRoom",
+"file": "LancesRoom",
+"warps": [
+{
+"x": 24,
+"y": 16,
+"dest": "AGATHAS_ROOM",
+"idx": "3"
+},
+{
+"x": 5,
+"y": 0,
+"dest": "CHAMPIONS_ROOM",
+"idx": "1"
+},
+{
+"x": 6,
+"y": 0,
+"dest": "CHAMPIONS_ROOM",
+"idx": "1"
+}
+]
+},
+"112": {
+"const": "LancesRoom",
+"file": "LancesRoom",
+"warps": [
+{
+"x": 24,
+"y": 16,
+"dest": "AGATHAS_ROOM",
+"idx": "3"
+},
+{
+"x": 5,
+"y": 0,
+"dest": "CHAMPIONS_ROOM",
+"idx": "1"
+},
+{
+"x": 6,
+"y": 0,
+"dest": "CHAMPIONS_ROOM",
+"idx": "1"
+}
+]
+},
+"113": {
+"const": "LancesRoom",
+"file": "LancesRoom",
+"warps": [
+{
+"x": 24,
+"y": 16,
+"dest": "AGATHAS_ROOM",
+"idx": "3"
+},
+{
+"x": 5,
+"y": 0,
+"dest": "CHAMPIONS_ROOM",
+"idx": "1"
+},
+{
+"x": 6,
+"y": 0,
+"dest": "CHAMPIONS_ROOM",
+"idx": "1"
+}
+]
+},
+"114": {
+"const": "LancesRoom",
+"file": "LancesRoom",
+"warps": [
+{
+"x": 24,
+"y": 16,
+"dest": "AGATHAS_ROOM",
+"idx": "3"
+},
+{
+"x": 5,
+"y": 0,
+"dest": "CHAMPIONS_ROOM",
+"idx": "1"
+},
+{
+"x": 6,
+"y": 0,
+"dest": "CHAMPIONS_ROOM",
+"idx": "1"
+}
+]
+},
+"115": {
+"const": "LancesRoom",
+"file": "LancesRoom",
+"warps": [
+{
+"x": 24,
+"y": 16,
+"dest": "AGATHAS_ROOM",
+"idx": "3"
+},
+{
+"x": 5,
+"y": 0,
+"dest": "CHAMPIONS_ROOM",
+"idx": "1"
+},
+{
+"x": 6,
+"y": 0,
+"dest": "CHAMPIONS_ROOM",
+"idx": "1"
+}
+]
+},
+"116": {
+"const": "LancesRoom",
+"file": "LancesRoom",
+"warps": [
+{
+"x": 24,
+"y": 16,
+"dest": "AGATHAS_ROOM",
+"idx": "3"
+},
+{
+"x": 5,
+"y": 0,
+"dest": "CHAMPIONS_ROOM",
+"idx": "1"
+},
+{
+"x": 6,
+"y": 0,
+"dest": "CHAMPIONS_ROOM",
+"idx": "1"
+}
+]
+},
+"117": {
+"const": "LancesRoom",
+"file": "LancesRoom",
+"warps": [
+{
+"x": 24,
+"y": 16,
+"dest": "AGATHAS_ROOM",
+"idx": "3"
+},
+{
+"x": 5,
+"y": 0,
+"dest": "CHAMPIONS_ROOM",
+"idx": "1"
+},
+{
+"x": 6,
+"y": 0,
+"dest": "CHAMPIONS_ROOM",
+"idx": "1"
+}
+]
+},
+"118": {
+"const": "HallOfFame",
+"file": "HallOfFame",
+"warps": [
+{
+"x": 4,
+"y": 7,
+"dest": "CHAMPIONS_ROOM",
+"idx": "3"
+},
+{
+"x": 5,
+"y": 7,
+"dest": "CHAMPIONS_ROOM",
+"idx": "4"
+}
+]
+},
+"119": {
+"const": "UndergroundPathNorthSouth",
+"file": "UndergroundPathNorthSouth",
+"warps": [
+{
+"x": 5,
+"y": 4,
+"dest": "UNDERGROUND_PATH_ROUTE_5",
+"idx": "3"
+},
+{
+"x": 2,
+"y": 41,
+"dest": "UNDERGROUND_PATH_ROUTE_6",
+"idx": "3"
+}
+]
+},
+"120": {
+"const": "ChampionsRoom",
+"file": "ChampionsRoom",
+"warps": [
+{
+"x": 3,
+"y": 7,
+"dest": "LANCES_ROOM",
+"idx": "2"
+},
+{
+"x": 4,
+"y": 7,
+"dest": "LANCES_ROOM",
+"idx": "3"
+},
+{
+"x": 3,
+"y": 0,
+"dest": "HALL_OF_FAME",
+"idx": "1"
+},
+{
+"x": 4,
+"y": 0,
+"dest": "HALL_OF_FAME",
+"idx": "1"
+}
+]
+},
+"121": {
+"const": "UndergroundPathWestEast",
+"file": "UndergroundPathWestEast",
+"warps": [
+{
+"x": 2,
+"y": 5,
+"dest": "UNDERGROUND_PATH_ROUTE_7",
+"idx": "3"
+},
+{
+"x": 47,
+"y": 2,
+"dest": "UNDERGROUND_PATH_ROUTE_8",
+"idx": "3"
+}
+]
+},
+"122": {
+"const": "CeladonMart1F",
+"file": "CeladonMart1F",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 16,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "2"
+},
+{
+"x": 17,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "2"
+},
+{
+"x": 12,
+"y": 1,
+"dest": "CELADON_MART_2F",
+"idx": "1"
+},
+{
+"x": 1,
+"y": 1,
+"dest": "CELADON_MART_ELEVATOR",
+"idx": "1"
+}
+]
+},
+"123": {
+"const": "CeladonMart2F",
+"file": "CeladonMart2F",
+"warps": [
+{
+"x": 12,
+"y": 1,
+"dest": "CELADON_MART_1F",
+"idx": "5"
+},
+{
+"x": 16,
+"y": 1,
+"dest": "CELADON_MART_3F",
+"idx": "2"
+},
+{
+"x": 1,
+"y": 1,
+"dest": "CELADON_MART_ELEVATOR",
+"idx": "1"
+}
+]
+},
+"124": {
+"const": "CeladonMart3F",
+"file": "CeladonMart3F",
+"warps": [
+{
+"x": 12,
+"y": 1,
+"dest": "CELADON_MART_4F",
+"idx": "1"
+},
+{
+"x": 16,
+"y": 1,
+"dest": "CELADON_MART_2F",
+"idx": "2"
+},
+{
+"x": 1,
+"y": 1,
+"dest": "CELADON_MART_ELEVATOR",
+"idx": "1"
+}
+]
+},
+"125": {
+"const": "CeladonMart4F",
+"file": "CeladonMart4F",
+"warps": [
+{
+"x": 12,
+"y": 1,
+"dest": "CELADON_MART_3F",
+"idx": "1"
+},
+{
+"x": 16,
+"y": 1,
+"dest": "CELADON_MART_5F",
+"idx": "2"
+},
+{
+"x": 1,
+"y": 1,
+"dest": "CELADON_MART_ELEVATOR",
+"idx": "1"
+}
+]
+},
+"126": {
+"const": "CeladonMartRoof",
+"file": "CeladonMartRoof",
+"warps": [
+{
+"x": 15,
+"y": 2,
+"dest": "CELADON_MART_5F",
+"idx": "1"
+}
+]
+},
+"127": {
+"const": "CeladonMartElevator",
+"file": "CeladonMartElevator",
+"warps": [
+{
+"x": 1,
+"y": 3,
+"dest": "CELADON_MART_1F",
+"idx": "6"
+},
+{
+"x": 2,
+"y": 3,
+"dest": "CELADON_MART_1F",
+"idx": "6"
+}
+]
+},
+"128": {
+"const": "CeladonMansion1F",
+"file": "CeladonMansion1F",
+"warps": [
+{
+"x": 4,
+"y": 11,
+"dest": "LAST_MAP",
+"idx": "3"
+},
+{
+"x": 5,
+"y": 11,
+"dest": "LAST_MAP",
+"idx": "3"
+},
+{
+"x": 4,
+"y": 0,
+"dest": "LAST_MAP",
+"idx": "5"
+},
+{
+"x": 7,
+"y": 1,
+"dest": "CELADON_MANSION_2F",
+"idx": "2"
+},
+{
+"x": 2,
+"y": 1,
+"dest": "CELADON_MANSION_2F",
+"idx": "3"
+}
+]
+},
+"129": {
+"const": "CeladonMansion2F",
+"file": "CeladonMansion2F",
+"warps": [
+{
+"x": 6,
+"y": 1,
+"dest": "CELADON_MANSION_3F",
+"idx": "1"
+},
+{
+"x": 7,
+"y": 1,
+"dest": "CELADON_MANSION_1F",
+"idx": "4"
+},
+{
+"x": 2,
+"y": 1,
+"dest": "CELADON_MANSION_1F",
+"idx": "5"
+},
+{
+"x": 4,
+"y": 1,
+"dest": "CELADON_MANSION_3F",
+"idx": "4"
+}
+]
+},
+"130": {
+"const": "CeladonMansion3F",
+"file": "CeladonMansion3F",
+"warps": [
+{
+"x": 6,
+"y": 1,
+"dest": "CELADON_MANSION_2F",
+"idx": "1"
+},
+{
+"x": 7,
+"y": 1,
+"dest": "CELADON_MANSION_ROOF",
+"idx": "1"
+},
+{
+"x": 2,
+"y": 1,
+"dest": "CELADON_MANSION_ROOF",
+"idx": "2"
+},
+{
+"x": 4,
+"y": 1,
+"dest": "CELADON_MANSION_2F",
+"idx": "4"
+}
+]
+},
+"131": {
+"const": "CeladonMansionRoof",
+"file": "CeladonMansionRoof",
+"warps": [
+{
+"x": 6,
+"y": 1,
+"dest": "CELADON_MANSION_3F",
+"idx": "2"
+},
+{
+"x": 2,
+"y": 1,
+"dest": "CELADON_MANSION_3F",
+"idx": "3"
+},
+{
+"x": 2,
+"y": 7,
+"dest": "CELADON_MANSION_ROOF_HOUSE",
+"idx": "1"
+}
+]
+},
+"132": {
+"const": "CeladonMansionRoofHouse",
+"file": "CeladonMansionRoofHouse",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "CELADON_MANSION_ROOF",
+"idx": "3"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "CELADON_MANSION_ROOF",
+"idx": "3"
+}
+]
+},
+"133": {
+"const": "CeladonPokecenter",
+"file": "CeladonPokecenter",
+"warps": [
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "6"
+},
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "6"
+}
+]
+},
+"134": {
+"const": "CeladonGym",
+"file": "CeladonGym",
+"warps": [
+{
+"x": 4,
+"y": 17,
+"dest": "LAST_MAP",
+"idx": "7"
+},
+{
+"x": 5,
+"y": 17,
+"dest": "LAST_MAP",
+"idx": "7"
+}
+]
+},
+"135": {
+"const": "GameCorner",
+"file": "GameCorner",
+"warps": [
+{
+"x": 15,
+"y": 17,
+"dest": "LAST_MAP",
+"idx": "8"
+},
+{
+"x": 16,
+"y": 17,
+"dest": "LAST_MAP",
+"idx": "8"
+},
+{
+"x": 17,
+"y": 4,
+"dest": "ROCKET_HIDEOUT_B1F",
+"idx": "2"
+}
+]
+},
+"136": {
+"const": "CeladonMart5F",
+"file": "CeladonMart5F",
+"warps": [
+{
+"x": 12,
+"y": 1,
+"dest": "CELADON_MART_ROOF",
+"idx": "1"
+},
+{
+"x": 16,
+"y": 1,
+"dest": "CELADON_MART_4F",
+"idx": "2"
+},
+{
+"x": 1,
+"y": 1,
+"dest": "CELADON_MART_ELEVATOR",
+"idx": "1"
+}
+]
+},
+"137": {
+"const": "GameCornerPrizeRoom",
+"file": "GameCornerPrizeRoom",
+"warps": [
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "10"
+},
+{
+"x": 5,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "10"
+}
+]
+},
+"138": {
+"const": "CeladonDiner",
+"file": "CeladonDiner",
+"warps": [
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "11"
+},
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "11"
+}
+]
+},
+"139": {
+"const": "CeladonChiefHouse",
+"file": "CeladonChiefHouse",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "12"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "12"
+}
+]
+},
+"140": {
+"const": "CeladonHotel",
+"file": "CeladonHotel",
+"warps": [
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "13"
+},
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "13"
+}
+]
+},
+"141": {
+"const": "LavenderPokecenter",
+"file": "LavenderPokecenter",
+"warps": [
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "1"
+}
+]
+},
+"142": {
+"const": "PokemonTower1F",
+"file": "PokemonTower1F",
+"warps": [
+{
+"x": 10,
+"y": 17,
+"dest": "LAST_MAP",
+"idx": "2"
+},
+{
+"x": 11,
+"y": 17,
+"dest": "LAST_MAP",
+"idx": "2"
+},
+{
+"x": 18,
+"y": 9,
+"dest": "POKEMON_TOWER_2F",
+"idx": "2"
+}
+]
+},
+"143": {
+"const": "PokemonTower2F",
+"file": "PokemonTower2F",
+"warps": [
+{
+"x": 3,
+"y": 9,
+"dest": "POKEMON_TOWER_3F",
+"idx": "1"
+},
+{
+"x": 18,
+"y": 9,
+"dest": "POKEMON_TOWER_1F",
+"idx": "3"
+}
+]
+},
+"144": {
+"const": "PokemonTower3F",
+"file": "PokemonTower3F",
+"warps": [
+{
+"x": 3,
+"y": 9,
+"dest": "POKEMON_TOWER_2F",
+"idx": "1"
+},
+{
+"x": 18,
+"y": 9,
+"dest": "POKEMON_TOWER_4F",
+"idx": "2"
+}
+]
+},
+"145": {
+"const": "PokemonTower4F",
+"file": "PokemonTower4F",
+"warps": [
+{
+"x": 3,
+"y": 9,
+"dest": "POKEMON_TOWER_5F",
+"idx": "1"
+},
+{
+"x": 18,
+"y": 9,
+"dest": "POKEMON_TOWER_3F",
+"idx": "2"
+}
+]
+},
+"146": {
+"const": "PokemonTower5F",
+"file": "PokemonTower5F",
+"warps": [
+{
+"x": 3,
+"y": 9,
+"dest": "POKEMON_TOWER_4F",
+"idx": "1"
+},
+{
+"x": 18,
+"y": 9,
+"dest": "POKEMON_TOWER_6F",
+"idx": "1"
+}
+]
+},
+"147": {
+"const": "PokemonTower6F",
+"file": "PokemonTower6F",
+"warps": [
+{
+"x": 18,
+"y": 9,
+"dest": "POKEMON_TOWER_5F",
+"idx": "2"
+},
+{
+"x": 9,
+"y": 16,
+"dest": "POKEMON_TOWER_7F",
+"idx": "1"
+}
+]
+},
+"148": {
+"const": "PokemonTower7F",
+"file": "PokemonTower7F",
+"warps": [
+{
+"x": 9,
+"y": 16,
+"dest": "POKEMON_TOWER_6F",
+"idx": "2"
+}
+]
+},
+"149": {
+"const": "MrFujisHouse",
+"file": "MrFujisHouse",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "3"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "3"
+}
+]
+},
+"150": {
+"const": "LavenderMart",
+"file": "LavenderMart",
+"warps": [
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "4"
+},
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "4"
+}
+]
+},
+"151": {
+"const": "LavenderCuboneHouse",
+"file": "LavenderCuboneHouse",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "5"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "5"
+}
+]
+},
+"152": {
+"const": "FuchsiaMart",
+"file": "FuchsiaMart",
+"warps": [
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "1"
+}
+]
+},
+"153": {
+"const": "FuchsiaBillsGrandpasHouse",
+"file": "FuchsiaBillsGrandpasHouse",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "2"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "2"
+}
+]
+},
+"154": {
+"const": "FuchsiaPokecenter",
+"file": "FuchsiaPokecenter",
+"warps": [
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "3"
+},
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "3"
+}
+]
+},
+"155": {
+"const": "WardensHouse",
+"file": "WardensHouse",
+"warps": [
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "4"
+},
+{
+"x": 5,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "4"
+}
+]
+},
+"156": {
+"const": "SafariZoneGate",
+"file": "SafariZoneGate",
+"warps": [
+{
+"x": 3,
+"y": 5,
+"dest": "LAST_MAP",
+"idx": "5"
+},
+{
+"x": 4,
+"y": 5,
+"dest": "LAST_MAP",
+"idx": "5"
+},
+{
+"x": 3,
+"y": 0,
+"dest": "SAFARI_ZONE_CENTER",
+"idx": "1"
+},
+{
+"x": 4,
+"y": 0,
+"dest": "SAFARI_ZONE_CENTER",
+"idx": "2"
+}
+]
+},
+"157": {
+"const": "FuchsiaGym",
+"file": "FuchsiaGym",
+"warps": [
+{
+"x": 4,
+"y": 17,
+"dest": "LAST_MAP",
+"idx": "6"
+},
+{
+"x": 5,
+"y": 17,
+"dest": "LAST_MAP",
+"idx": "6"
+}
+]
+},
+"158": {
+"const": "FuchsiaMeetingRoom",
+"file": "FuchsiaMeetingRoom",
+"warps": [
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "7"
+},
+{
+"x": 5,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "7"
+}
+]
+},
+"159": {
+"const": "SeafoamIslandsB1F",
+"file": "SeafoamIslandsB1F",
+"warps": [
+{
+"x": 4,
+"y": 2,
+"dest": "SEAFOAM_ISLANDS_B2F",
+"idx": "1"
+},
+{
+"x": 7,
+"y": 5,
+"dest": "SEAFOAM_ISLANDS_1F",
+"idx": "5"
+},
+{
+"x": 13,
+"y": 7,
+"dest": "SEAFOAM_ISLANDS_B2F",
+"idx": "3"
+},
+{
+"x": 19,
+"y": 15,
+"dest": "SEAFOAM_ISLANDS_B2F",
+"idx": "4"
+},
+{
+"x": 23,
+"y": 15,
+"dest": "SEAFOAM_ISLANDS_1F",
+"idx": "7"
+},
+{
+"x": 25,
+"y": 11,
+"dest": "SEAFOAM_ISLANDS_B2F",
+"idx": "6"
+},
+{
+"x": 25,
+"y": 3,
+"dest": "SEAFOAM_ISLANDS_1F",
+"idx": "6"
+}
+]
+},
+"160": {
+"const": "SeafoamIslandsB2F",
+"file": "SeafoamIslandsB2F",
+"warps": [
+{
+"x": 5,
+"y": 3,
+"dest": "SEAFOAM_ISLANDS_B1F",
+"idx": "1"
+},
+{
+"x": 5,
+"y": 13,
+"dest": "SEAFOAM_ISLANDS_B3F",
+"idx": "1"
+},
+{
+"x": 13,
+"y": 7,
+"dest": "SEAFOAM_ISLANDS_B1F",
+"idx": "3"
+},
+{
+"x": 19,
+"y": 15,
+"dest": "SEAFOAM_ISLANDS_B1F",
+"idx": "4"
+},
+{
+"x": 25,
+"y": 3,
+"dest": "SEAFOAM_ISLANDS_B3F",
+"idx": "4"
+},
+{
+"x": 25,
+"y": 11,
+"dest": "SEAFOAM_ISLANDS_B1F",
+"idx": "6"
+},
+{
+"x": 25,
+"y": 14,
+"dest": "SEAFOAM_ISLANDS_B3F",
+"idx": "5"
+}
+]
+},
+"161": {
+"const": "SeafoamIslandsB3F",
+"file": "SeafoamIslandsB3F",
+"warps": [
+{
+"x": 5,
+"y": 12,
+"dest": "SEAFOAM_ISLANDS_B2F",
+"idx": "2"
+},
+{
+"x": 8,
+"y": 6,
+"dest": "SEAFOAM_ISLANDS_B4F",
+"idx": "3"
+},
+{
+"x": 25,
+"y": 4,
+"dest": "SEAFOAM_ISLANDS_B4F",
+"idx": "4"
+},
+{
+"x": 25,
+"y": 3,
+"dest": "SEAFOAM_ISLANDS_B2F",
+"idx": "5"
+},
+{
+"x": 25,
+"y": 14,
+"dest": "SEAFOAM_ISLANDS_B2F",
+"idx": "7"
+},
+{
+"x": 20,
+"y": 17,
+"dest": "SEAFOAM_ISLANDS_B4F",
+"idx": "1"
+},
+{
+"x": 21,
+"y": 17,
+"dest": "SEAFOAM_ISLANDS_B4F",
+"idx": "2"
+}
+]
+},
+"162": {
+"const": "SeafoamIslandsB4F",
+"file": "SeafoamIslandsB4F",
+"warps": [
+{
+"x": 20,
+"y": 17,
+"dest": "SEAFOAM_ISLANDS_B3F",
+"idx": "6"
+},
+{
+"x": 21,
+"y": 17,
+"dest": "SEAFOAM_ISLANDS_B3F",
+"idx": "7"
+},
+{
+"x": 11,
+"y": 7,
+"dest": "SEAFOAM_ISLANDS_B3F",
+"idx": "2"
+},
+{
+"x": 25,
+"y": 4,
+"dest": "SEAFOAM_ISLANDS_B3F",
+"idx": "3"
+}
+]
+},
+"163": {
+"const": "VermilionOldRodHouse",
+"file": "VermilionOldRodHouse",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "9"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "9"
+}
+]
+},
+"164": {
+"const": "FuchsiaGoodRodHouse",
+"file": "FuchsiaGoodRodHouse",
+"warps": [
+{
+"x": 2,
+"y": 0,
+"dest": "LAST_MAP",
+"idx": "9"
+},
+{
+"x": 2,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "8"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "8"
+}
+]
+},
+"165": {
+"const": "PokemonMansion1F",
+"file": "PokemonMansion1F",
+"warps": [
+{
+"x": 4,
+"y": 27,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 5,
+"y": 27,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 6,
+"y": 27,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 7,
+"y": 27,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 5,
+"y": 10,
+"dest": "POKEMON_MANSION_2F",
+"idx": "1"
+},
+{
+"x": 21,
+"y": 23,
+"dest": "POKEMON_MANSION_B1F",
+"idx": "1"
+},
+{
+"x": 26,
+"y": 27,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 27,
+"y": 27,
+"dest": "LAST_MAP",
+"idx": "1"
+}
+]
+},
+"166": {
+"const": "CinnabarGym",
+"file": "CinnabarGym",
+"warps": [
+{
+"x": 16,
+"y": 17,
+"dest": "LAST_MAP",
+"idx": "2"
+},
+{
+"x": 17,
+"y": 17,
+"dest": "LAST_MAP",
+"idx": "2"
+}
+]
+},
+"167": {
+"const": "CinnabarLab",
+"file": "CinnabarLab",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "3"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "3"
+},
+{
+"x": 8,
+"y": 4,
+"dest": "CINNABAR_LAB_TRADE_ROOM",
+"idx": "1"
+},
+{
+"x": 12,
+"y": 4,
+"dest": "CINNABAR_LAB_METRONOME_ROOM",
+"idx": "1"
+},
+{
+"x": 16,
+"y": 4,
+"dest": "CINNABAR_LAB_FOSSIL_ROOM",
+"idx": "1"
+}
+]
+},
+"168": {
+"const": "CinnabarLabTradeRoom",
+"file": "CinnabarLabTradeRoom",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "CINNABAR_LAB",
+"idx": "3"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "CINNABAR_LAB",
+"idx": "3"
+}
+]
+},
+"169": {
+"const": "CinnabarLabMetronomeRoom",
+"file": "CinnabarLabMetronomeRoom",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "CINNABAR_LAB",
+"idx": "4"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "CINNABAR_LAB",
+"idx": "4"
+}
+]
+},
+"170": {
+"const": "CinnabarLabFossilRoom",
+"file": "CinnabarLabFossilRoom",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "CINNABAR_LAB",
+"idx": "5"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "CINNABAR_LAB",
+"idx": "5"
+}
+]
+},
+"171": {
+"const": "CinnabarPokecenter",
+"file": "CinnabarPokecenter",
+"warps": [
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "4"
+},
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "4"
+}
+]
+},
+"172": {
+"const": "CinnabarMart",
+"file": "CinnabarMart",
+"warps": [
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "5"
+},
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "5"
+}
+]
+},
+"173": {
+"const": "CinnabarMart",
+"file": "CinnabarMart",
+"warps": [
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "5"
+},
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "5"
+}
+]
+},
+"174": {
+"const": "IndigoPlateauLobby",
+"file": "IndigoPlateauLobby",
+"warps": [
+{
+"x": 7,
+"y": 11,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 8,
+"y": 11,
+"dest": "LAST_MAP",
+"idx": "2"
+},
+{
+"x": 8,
+"y": 0,
+"dest": "LORELEIS_ROOM",
+"idx": "1"
+}
+]
+},
+"175": {
+"const": "CopycatsHouse1F",
+"file": "CopycatsHouse1F",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 7,
+"y": 1,
+"dest": "COPYCATS_HOUSE_2F",
+"idx": "1"
+}
+]
+},
+"176": {
+"const": "CopycatsHouse2F",
+"file": "CopycatsHouse2F",
+"warps": [
+{
+"x": 7,
+"y": 1,
+"dest": "COPYCATS_HOUSE_1F",
+"idx": "3"
+}
+]
+},
+"177": {
+"const": "FightingDojo",
+"file": "FightingDojo",
+"warps": [
+{
+"x": 4,
+"y": 11,
+"dest": "LAST_MAP",
+"idx": "2"
+},
+{
+"x": 5,
+"y": 11,
+"dest": "LAST_MAP",
+"idx": "2"
+}
+]
+},
+"178": {
+"const": "SaffronGym",
+"file": "SaffronGym",
+"warps": [
+{
+"x": 8,
+"y": 17,
+"dest": "LAST_MAP",
+"idx": "3"
+},
+{
+"x": 9,
+"y": 17,
+"dest": "LAST_MAP",
+"idx": "3"
+},
+{
+"x": 1,
+"y": 3,
+"dest": "SAFFRON_GYM",
+"idx": "23"
+},
+{
+"x": 5,
+"y": 3,
+"dest": "SAFFRON_GYM",
+"idx": "16"
+},
+{
+"x": 1,
+"y": 5,
+"dest": "SAFFRON_GYM",
+"idx": "19"
+},
+{
+"x": 5,
+"y": 5,
+"dest": "SAFFRON_GYM",
+"idx": "9"
+},
+{
+"x": 1,
+"y": 9,
+"dest": "SAFFRON_GYM",
+"idx": "28"
+},
+{
+"x": 5,
+"y": 9,
+"dest": "SAFFRON_GYM",
+"idx": "17"
+},
+{
+"x": 1,
+"y": 11,
+"dest": "SAFFRON_GYM",
+"idx": "6"
+},
+{
+"x": 5,
+"y": 11,
+"dest": "SAFFRON_GYM",
+"idx": "14"
+},
+{
+"x": 1,
+"y": 15,
+"dest": "SAFFRON_GYM",
+"idx": "24"
+},
+{
+"x": 5,
+"y": 15,
+"dest": "SAFFRON_GYM",
+"idx": "31"
+},
+{
+"x": 1,
+"y": 17,
+"dest": "SAFFRON_GYM",
+"idx": "18"
+},
+{
+"x": 5,
+"y": 17,
+"dest": "SAFFRON_GYM",
+"idx": "10"
+},
+{
+"x": 9,
+"y": 3,
+"dest": "SAFFRON_GYM",
+"idx": "27"
+},
+{
+"x": 11,
+"y": 3,
+"dest": "SAFFRON_GYM",
+"idx": "4"
+},
+{
+"x": 9,
+"y": 5,
+"dest": "SAFFRON_GYM",
+"idx": "8"
+},
+{
+"x": 11,
+"y": 5,
+"dest": "SAFFRON_GYM",
+"idx": "13"
+},
+{
+"x": 11,
+"y": 11,
+"dest": "SAFFRON_GYM",
+"idx": "5"
+},
+{
+"x": 11,
+"y": 15,
+"dest": "SAFFRON_GYM",
+"idx": "32"
+},
+{
+"x": 15,
+"y": 3,
+"dest": "SAFFRON_GYM",
+"idx": "25"
+},
+{
+"x": 19,
+"y": 3,
+"dest": "SAFFRON_GYM",
+"idx": "29"
+},
+{
+"x": 15,
+"y": 5,
+"dest": "SAFFRON_GYM",
+"idx": "3"
+},
+{
+"x": 19,
+"y": 5,
+"dest": "SAFFRON_GYM",
+"idx": "11"
+},
+{
+"x": 15,
+"y": 9,
+"dest": "SAFFRON_GYM",
+"idx": "21"
+},
+{
+"x": 19,
+"y": 9,
+"dest": "SAFFRON_GYM",
+"idx": "30"
+},
+{
+"x": 15,
+"y": 11,
+"dest": "SAFFRON_GYM",
+"idx": "15"
+},
+{
+"x": 19,
+"y": 11,
+"dest": "SAFFRON_GYM",
+"idx": "7"
+},
+{
+"x": 15,
+"y": 15,
+"dest": "SAFFRON_GYM",
+"idx": "22"
+},
+{
+"x": 19,
+"y": 15,
+"dest": "SAFFRON_GYM",
+"idx": "26"
+},
+{
+"x": 15,
+"y": 17,
+"dest": "SAFFRON_GYM",
+"idx": "12"
+},
+{
+"x": 19,
+"y": 17,
+"dest": "SAFFRON_GYM",
+"idx": "20"
+}
+]
+},
+"179": {
+"const": "SaffronPidgeyHouse",
+"file": "SaffronPidgeyHouse",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "4"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "4"
+}
+]
+},
+"180": {
+"const": "SaffronMart",
+"file": "SaffronMart",
+"warps": [
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "5"
+},
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "5"
+}
+]
+},
+"181": {
+"const": "SilphCo1F",
+"file": "SilphCo1F",
+"warps": [
+{
+"x": 10,
+"y": 17,
+"dest": "LAST_MAP",
+"idx": "6"
+},
+{
+"x": 11,
+"y": 17,
+"dest": "LAST_MAP",
+"idx": "6"
+},
+{
+"x": 26,
+"y": 0,
+"dest": "SILPH_CO_2F",
+"idx": "1"
+},
+{
+"x": 20,
+"y": 0,
+"dest": "SILPH_CO_ELEVATOR",
+"idx": "1"
+},
+{
+"x": 16,
+"y": 10,
+"dest": "SILPH_CO_3F",
+"idx": "7"
+}
+]
+},
+"182": {
+"const": "SaffronPokecenter",
+"file": "SaffronPokecenter",
+"warps": [
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "7"
+},
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "7"
+}
+]
+},
+"183": {
+"const": "MrPsychicsHouse",
+"file": "MrPsychicsHouse",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "8"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "8"
+}
+]
+},
+"184": {
+"const": "Route15Gate1F",
+"file": "Route15Gate1F",
+"warps": [
+{
+"x": 0,
+"y": 4,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 0,
+"y": 5,
+"dest": "LAST_MAP",
+"idx": "2"
+},
+{
+"x": 7,
+"y": 4,
+"dest": "LAST_MAP",
+"idx": "3"
+},
+{
+"x": 7,
+"y": 5,
+"dest": "LAST_MAP",
+"idx": "4"
+},
+{
+"x": 6,
+"y": 8,
+"dest": "ROUTE_15_GATE_2F",
+"idx": "1"
+}
+]
+},
+"185": {
+"const": "Route15Gate2F",
+"file": "Route15Gate2F",
+"warps": [
+{
+"x": 7,
+"y": 7,
+"dest": "ROUTE_15_GATE_1F",
+"idx": "5"
+}
+]
+},
+"186": {
+"const": "Route16Gate1F",
+"file": "Route16Gate1F",
+"warps": [
+{
+"x": 0,
+"y": 8,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 0,
+"y": 9,
+"dest": "LAST_MAP",
+"idx": "2"
+},
+{
+"x": 7,
+"y": 8,
+"dest": "LAST_MAP",
+"idx": "3"
+},
+{
+"x": 7,
+"y": 9,
+"dest": "LAST_MAP",
+"idx": "3"
+},
+{
+"x": 0,
+"y": 2,
+"dest": "LAST_MAP",
+"idx": "5"
+},
+{
+"x": 0,
+"y": 3,
+"dest": "LAST_MAP",
+"idx": "6"
+},
+{
+"x": 7,
+"y": 2,
+"dest": "LAST_MAP",
+"idx": "7"
+},
+{
+"x": 7,
+"y": 3,
+"dest": "LAST_MAP",
+"idx": "8"
+},
+{
+"x": 6,
+"y": 12,
+"dest": "ROUTE_16_GATE_2F",
+"idx": "1"
+}
+]
+},
+"187": {
+"const": "Route16Gate2F",
+"file": "Route16Gate2F",
+"warps": [
+{
+"x": 7,
+"y": 7,
+"dest": "ROUTE_16_GATE_1F",
+"idx": "9"
+}
+]
+},
+"188": {
+"const": "Route16FlyHouse",
+"file": "Route16FlyHouse",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "9"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "9"
+}
+]
+},
+"189": {
+"const": "Route12SuperRodHouse",
+"file": "Route12SuperRodHouse",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "4"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "4"
+}
+]
+},
+"190": {
+"const": "Route18Gate1F",
+"file": "Route18Gate1F",
+"warps": [
+{
+"x": 0,
+"y": 4,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 0,
+"y": 5,
+"dest": "LAST_MAP",
+"idx": "2"
+},
+{
+"x": 7,
+"y": 4,
+"dest": "LAST_MAP",
+"idx": "3"
+},
+{
+"x": 7,
+"y": 5,
+"dest": "LAST_MAP",
+"idx": "4"
+},
+{
+"x": 6,
+"y": 8,
+"dest": "ROUTE_18_GATE_2F",
+"idx": "1"
+}
+]
+},
+"191": {
+"const": "Route18Gate2F",
+"file": "Route18Gate2F",
+"warps": [
+{
+"x": 7,
+"y": 7,
+"dest": "ROUTE_18_GATE_1F",
+"idx": "5"
+}
+]
+},
+"192": {
+"const": "SeafoamIslands1F",
+"file": "SeafoamIslands1F",
+"warps": [
+{
+"x": 4,
+"y": 17,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 5,
+"y": 17,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 26,
+"y": 17,
+"dest": "LAST_MAP",
+"idx": "2"
+},
+{
+"x": 27,
+"y": 17,
+"dest": "LAST_MAP",
+"idx": "2"
+},
+{
+"x": 7,
+"y": 5,
+"dest": "SEAFOAM_ISLANDS_B1F",
+"idx": "2"
+},
+{
+"x": 25,
+"y": 3,
+"dest": "SEAFOAM_ISLANDS_B1F",
+"idx": "7"
+},
+{
+"x": 23,
+"y": 15,
+"dest": "SEAFOAM_ISLANDS_B1F",
+"idx": "5"
+}
+]
+},
+"193": {
+"const": "Route22Gate",
+"file": "Route22Gate",
+"warps": [
+{
+"x": 4,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 5,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 4,
+"y": 0,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 5,
+"y": 0,
+"dest": "LAST_MAP",
+"idx": "2"
+}
+]
+},
+"194": {
+"const": "VictoryRoad2F",
+"file": "VictoryRoad2F",
+"warps": [
+{
+"x": 0,
+"y": 8,
+"dest": "VICTORY_ROAD_1F",
+"idx": "3"
+},
+{
+"x": 29,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "4"
+},
+{
+"x": 29,
+"y": 8,
+"dest": "LAST_MAP",
+"idx": "4"
+},
+{
+"x": 23,
+"y": 7,
+"dest": "VICTORY_ROAD_3F",
+"idx": "1"
+},
+{
+"x": 25,
+"y": 14,
+"dest": "VICTORY_ROAD_3F",
+"idx": "3"
+},
+{
+"x": 27,
+"y": 7,
+"dest": "VICTORY_ROAD_3F",
+"idx": "2"
+},
+{
+"x": 1,
+"y": 1,
+"dest": "VICTORY_ROAD_3F",
+"idx": "4"
+}
+]
+},
+"195": {
+"const": "Route12Gate2F",
+"file": "Route12Gate2F",
+"warps": [
+{
+"x": 7,
+"y": 7,
+"dest": "ROUTE_12_GATE_1F",
+"idx": "5"
+}
+]
+},
+"196": {
+"const": "VermilionTradeHouse",
+"file": "VermilionTradeHouse",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "8"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "8"
+}
+]
+},
+"197": {
+"const": "DiglettsCave",
+"file": "DiglettsCave",
+"warps": [
+{
+"x": 5,
+"y": 5,
+"dest": "DIGLETTS_CAVE_ROUTE_2",
+"idx": "3"
+},
+{
+"x": 37,
+"y": 31,
+"dest": "DIGLETTS_CAVE_ROUTE_11",
+"idx": "3"
+}
+]
+},
+"198": {
+"const": "VictoryRoad3F",
+"file": "VictoryRoad3F",
+"warps": [
+{
+"x": 23,
+"y": 7,
+"dest": "VICTORY_ROAD_2F",
+"idx": "4"
+},
+{
+"x": 26,
+"y": 8,
+"dest": "VICTORY_ROAD_2F",
+"idx": "6"
+},
+{
+"x": 27,
+"y": 15,
+"dest": "VICTORY_ROAD_2F",
+"idx": "5"
+},
+{
+"x": 2,
+"y": 0,
+"dest": "VICTORY_ROAD_2F",
+"idx": "7"
+}
+]
+},
+"199": {
+"const": "RocketHideoutB1F",
+"file": "RocketHideoutB1F",
+"warps": [
+{
+"x": 23,
+"y": 2,
+"dest": "ROCKET_HIDEOUT_B2F",
+"idx": "1"
+},
+{
+"x": 21,
+"y": 2,
+"dest": "GAME_CORNER",
+"idx": "3"
+},
+{
+"x": 24,
+"y": 19,
+"dest": "ROCKET_HIDEOUT_ELEVATOR",
+"idx": "1"
+},
+{
+"x": 21,
+"y": 24,
+"dest": "ROCKET_HIDEOUT_B2F",
+"idx": "4"
+},
+{
+"x": 25,
+"y": 19,
+"dest": "ROCKET_HIDEOUT_ELEVATOR",
+"idx": "2"
+}
+]
+},
+"200": {
+"const": "RocketHideoutB2F",
+"file": "RocketHideoutB2F",
+"warps": [
+{
+"x": 27,
+"y": 8,
+"dest": "ROCKET_HIDEOUT_B1F",
+"idx": "1"
+},
+{
+"x": 21,
+"y": 8,
+"dest": "ROCKET_HIDEOUT_B3F",
+"idx": "1"
+},
+{
+"x": 24,
+"y": 19,
+"dest": "ROCKET_HIDEOUT_ELEVATOR",
+"idx": "1"
+},
+{
+"x": 21,
+"y": 22,
+"dest": "ROCKET_HIDEOUT_B1F",
+"idx": "4"
+},
+{
+"x": 25,
+"y": 19,
+"dest": "ROCKET_HIDEOUT_ELEVATOR",
+"idx": "2"
+}
+]
+},
+"201": {
+"const": "RocketHideoutB3F",
+"file": "RocketHideoutB3F",
+"warps": [
+{
+"x": 25,
+"y": 6,
+"dest": "ROCKET_HIDEOUT_B2F",
+"idx": "2"
+},
+{
+"x": 19,
+"y": 18,
+"dest": "ROCKET_HIDEOUT_B4F",
+"idx": "1"
+}
+]
+},
+"202": {
+"const": "RocketHideoutB4F",
+"file": "RocketHideoutB4F",
+"warps": [
+{
+"x": 19,
+"y": 10,
+"dest": "ROCKET_HIDEOUT_B3F",
+"idx": "2"
+},
+{
+"x": 24,
+"y": 15,
+"dest": "ROCKET_HIDEOUT_ELEVATOR",
+"idx": "1"
+},
+{
+"x": 25,
+"y": 15,
+"dest": "ROCKET_HIDEOUT_ELEVATOR",
+"idx": "2"
+}
+]
+},
+"203": {
+"const": "RocketHideoutElevator",
+"file": "RocketHideoutElevator",
+"warps": [
+{
+"x": 2,
+"y": 1,
+"dest": "ROCKET_HIDEOUT_B1F",
+"idx": "3"
+},
+{
+"x": 3,
+"y": 1,
+"dest": "ROCKET_HIDEOUT_B1F",
+"idx": "5"
+}
+]
+},
+"204": {
+"const": "RocketHideoutElevator",
+"file": "RocketHideoutElevator",
+"warps": [
+{
+"x": 2,
+"y": 1,
+"dest": "ROCKET_HIDEOUT_B1F",
+"idx": "3"
+},
+{
+"x": 3,
+"y": 1,
+"dest": "ROCKET_HIDEOUT_B1F",
+"idx": "5"
+}
+]
+},
+"205": {
+"const": "RocketHideoutElevator",
+"file": "RocketHideoutElevator",
+"warps": [
+{
+"x": 2,
+"y": 1,
+"dest": "ROCKET_HIDEOUT_B1F",
+"idx": "3"
+},
+{
+"x": 3,
+"y": 1,
+"dest": "ROCKET_HIDEOUT_B1F",
+"idx": "5"
+}
+]
+},
+"206": {
+"const": "RocketHideoutElevator",
+"file": "RocketHideoutElevator",
+"warps": [
+{
+"x": 2,
+"y": 1,
+"dest": "ROCKET_HIDEOUT_B1F",
+"idx": "3"
+},
+{
+"x": 3,
+"y": 1,
+"dest": "ROCKET_HIDEOUT_B1F",
+"idx": "5"
+}
+]
+},
+"207": {
+"const": "SilphCo2F",
+"file": "SilphCo2F",
+"warps": [
+{
+"x": 24,
+"y": 0,
+"dest": "SILPH_CO_1F",
+"idx": "3"
+},
+{
+"x": 26,
+"y": 0,
+"dest": "SILPH_CO_3F",
+"idx": "1"
+},
+{
+"x": 20,
+"y": 0,
+"dest": "SILPH_CO_ELEVATOR",
+"idx": "1"
+},
+{
+"x": 3,
+"y": 3,
+"dest": "SILPH_CO_3F",
+"idx": "7"
+},
+{
+"x": 13,
+"y": 3,
+"dest": "SILPH_CO_8F",
+"idx": "5"
+},
+{
+"x": 27,
+"y": 15,
+"dest": "SILPH_CO_8F",
+"idx": "6"
+},
+{
+"x": 9,
+"y": 15,
+"dest": "SILPH_CO_6F",
+"idx": "5"
+}
+]
+},
+"208": {
+"const": "SilphCo3F",
+"file": "SilphCo3F",
+"warps": [
+{
+"x": 26,
+"y": 0,
+"dest": "SILPH_CO_2F",
+"idx": "2"
+},
+{
+"x": 24,
+"y": 0,
+"dest": "SILPH_CO_4F",
+"idx": "1"
+},
+{
+"x": 20,
+"y": 0,
+"dest": "SILPH_CO_ELEVATOR",
+"idx": "1"
+},
+{
+"x": 23,
+"y": 11,
+"dest": "SILPH_CO_3F",
+"idx": "10"
+},
+{
+"x": 3,
+"y": 3,
+"dest": "SILPH_CO_5F",
+"idx": "6"
+},
+{
+"x": 3,
+"y": 15,
+"dest": "SILPH_CO_5F",
+"idx": "7"
+},
+{
+"x": 27,
+"y": 3,
+"dest": "SILPH_CO_2F",
+"idx": "4"
+},
+{
+"x": 3,
+"y": 11,
+"dest": "SILPH_CO_9F",
+"idx": "4"
+},
+{
+"x": 11,
+"y": 11,
+"dest": "SILPH_CO_7F",
+"idx": "5"
+},
+{
+"x": 27,
+"y": 15,
+"dest": "SILPH_CO_3F",
+"idx": "4"
+}
+]
+},
+"209": {
+"const": "SilphCo4F",
+"file": "SilphCo4F",
+"warps": [
+{
+"x": 24,
+"y": 0,
+"dest": "SILPH_CO_3F",
+"idx": "2"
+},
+{
+"x": 26,
+"y": 0,
+"dest": "SILPH_CO_5F",
+"idx": "2"
+},
+{
+"x": 20,
+"y": 0,
+"dest": "SILPH_CO_ELEVATOR",
+"idx": "1"
+},
+{
+"x": 11,
+"y": 7,
+"dest": "SILPH_CO_10F",
+"idx": "4"
+},
+{
+"x": 17,
+"y": 3,
+"dest": "SILPH_CO_6F",
+"idx": "4"
+},
+{
+"x": 3,
+"y": 15,
+"dest": "SILPH_CO_10F",
+"idx": "5"
+},
+{
+"x": 17,
+"y": 11,
+"dest": "SILPH_CO_10F",
+"idx": "6"
+}
+]
+},
+"210": {
+"const": "SilphCo5F",
+"file": "SilphCo5F",
+"warps": [
+{
+"x": 24,
+"y": 0,
+"dest": "SILPH_CO_6F",
+"idx": "2"
+},
+{
+"x": 26,
+"y": 0,
+"dest": "SILPH_CO_4F",
+"idx": "2"
+},
+{
+"x": 20,
+"y": 0,
+"dest": "SILPH_CO_ELEVATOR",
+"idx": "1"
+},
+{
+"x": 27,
+"y": 3,
+"dest": "SILPH_CO_7F",
+"idx": "6"
+},
+{
+"x": 9,
+"y": 15,
+"dest": "SILPH_CO_9F",
+"idx": "5"
+},
+{
+"x": 11,
+"y": 5,
+"dest": "SILPH_CO_3F",
+"idx": "5"
+},
+{
+"x": 3,
+"y": 15,
+"dest": "SILPH_CO_3F",
+"idx": "6"
+}
+]
+},
+"211": {
+"const": "SilphCo6F",
+"file": "SilphCo6F",
+"warps": [
+{
+"x": 16,
+"y": 0,
+"dest": "SILPH_CO_7F",
+"idx": "2"
+},
+{
+"x": 14,
+"y": 0,
+"dest": "SILPH_CO_5F",
+"idx": "1"
+},
+{
+"x": 18,
+"y": 0,
+"dest": "SILPH_CO_ELEVATOR",
+"idx": "1"
+},
+{
+"x": 3,
+"y": 3,
+"dest": "SILPH_CO_4F",
+"idx": "5"
+},
+{
+"x": 23,
+"y": 3,
+"dest": "SILPH_CO_2F",
+"idx": "7"
+}
+]
+},
+"212": {
+"const": "SilphCo7F",
+"file": "SilphCo7F",
+"warps": [
+{
+"x": 16,
+"y": 0,
+"dest": "SILPH_CO_8F",
+"idx": "2"
+},
+{
+"x": 22,
+"y": 0,
+"dest": "SILPH_CO_6F",
+"idx": "1"
+},
+{
+"x": 18,
+"y": 0,
+"dest": "SILPH_CO_ELEVATOR",
+"idx": "1"
+},
+{
+"x": 5,
+"y": 7,
+"dest": "SILPH_CO_11F",
+"idx": "4"
+},
+{
+"x": 5,
+"y": 3,
+"dest": "SILPH_CO_3F",
+"idx": "9"
+},
+{
+"x": 21,
+"y": 15,
+"dest": "SILPH_CO_5F",
+"idx": "4"
+}
+]
+},
+"213": {
+"const": "SilphCo8F",
+"file": "SilphCo8F",
+"warps": [
+{
+"x": 16,
+"y": 0,
+"dest": "SILPH_CO_9F",
+"idx": "2"
+},
+{
+"x": 14,
+"y": 0,
+"dest": "SILPH_CO_7F",
+"idx": "1"
+},
+{
+"x": 18,
+"y": 0,
+"dest": "SILPH_CO_ELEVATOR",
+"idx": "1"
+},
+{
+"x": 3,
+"y": 11,
+"dest": "SILPH_CO_8F",
+"idx": "7"
+},
+{
+"x": 3,
+"y": 15,
+"dest": "SILPH_CO_2F",
+"idx": "5"
+},
+{
+"x": 11,
+"y": 5,
+"dest": "SILPH_CO_2F",
+"idx": "6"
+},
+{
+"x": 11,
+"y": 9,
+"dest": "SILPH_CO_8F",
+"idx": "4"
+}
+]
+},
+"214": {
+"const": "PokemonMansion2F",
+"file": "PokemonMansion2F",
+"warps": [
+{
+"x": 5,
+"y": 10,
+"dest": "POKEMON_MANSION_1F",
+"idx": "5"
+},
+{
+"x": 7,
+"y": 10,
+"dest": "POKEMON_MANSION_3F",
+"idx": "1"
+},
+{
+"x": 25,
+"y": 14,
+"dest": "POKEMON_MANSION_3F",
+"idx": "3"
+},
+{
+"x": 6,
+"y": 1,
+"dest": "POKEMON_MANSION_3F",
+"idx": "2"
+}
+]
+},
+"215": {
+"const": "PokemonMansion3F",
+"file": "PokemonMansion3F",
+"warps": [
+{
+"x": 7,
+"y": 10,
+"dest": "POKEMON_MANSION_2F",
+"idx": "2"
+},
+{
+"x": 6,
+"y": 1,
+"dest": "POKEMON_MANSION_2F",
+"idx": "4"
+},
+{
+"x": 25,
+"y": 14,
+"dest": "POKEMON_MANSION_2F",
+"idx": "3"
+}
+]
+},
+"216": {
+"const": "PokemonMansionB1F",
+"file": "PokemonMansionB1F",
+"warps": [
+{
+"x": 23,
+"y": 22,
+"dest": "POKEMON_MANSION_1F",
+"idx": "6"
+}
+]
+},
+"217": {
+"const": "SafariZoneEast",
+"file": "SafariZoneEast",
+"warps": [
+{
+"x": 0,
+"y": 4,
+"dest": "SAFARI_ZONE_NORTH",
+"idx": "7"
+},
+{
+"x": 0,
+"y": 5,
+"dest": "SAFARI_ZONE_NORTH",
+"idx": "8"
+},
+{
+"x": 0,
+"y": 22,
+"dest": "SAFARI_ZONE_CENTER",
+"idx": "7"
+},
+{
+"x": 0,
+"y": 23,
+"dest": "SAFARI_ZONE_CENTER",
+"idx": "7"
+},
+{
+"x": 25,
+"y": 9,
+"dest": "SAFARI_ZONE_EAST_REST_HOUSE",
+"idx": "1"
+}
+]
+},
+"218": {
+"const": "SafariZoneNorth",
+"file": "SafariZoneNorth",
+"warps": [
+{
+"x": 2,
+"y": 35,
+"dest": "SAFARI_ZONE_WEST",
+"idx": "1"
+},
+{
+"x": 3,
+"y": 35,
+"dest": "SAFARI_ZONE_WEST",
+"idx": "2"
+},
+{
+"x": 8,
+"y": 35,
+"dest": "SAFARI_ZONE_WEST",
+"idx": "3"
+},
+{
+"x": 9,
+"y": 35,
+"dest": "SAFARI_ZONE_WEST",
+"idx": "4"
+},
+{
+"x": 20,
+"y": 35,
+"dest": "SAFARI_ZONE_CENTER",
+"idx": "5"
+},
+{
+"x": 21,
+"y": 35,
+"dest": "SAFARI_ZONE_CENTER",
+"idx": "6"
+},
+{
+"x": 39,
+"y": 30,
+"dest": "SAFARI_ZONE_EAST",
+"idx": "1"
+},
+{
+"x": 39,
+"y": 31,
+"dest": "SAFARI_ZONE_EAST",
+"idx": "2"
+},
+{
+"x": 35,
+"y": 3,
+"dest": "SAFARI_ZONE_NORTH_REST_HOUSE",
+"idx": "1"
+}
+]
+},
+"219": {
+"const": "SafariZoneWest",
+"file": "SafariZoneWest",
+"warps": [
+{
+"x": 20,
+"y": 0,
+"dest": "SAFARI_ZONE_NORTH",
+"idx": "1"
+},
+{
+"x": 21,
+"y": 0,
+"dest": "SAFARI_ZONE_NORTH",
+"idx": "2"
+},
+{
+"x": 26,
+"y": 0,
+"dest": "SAFARI_ZONE_NORTH",
+"idx": "3"
+},
+{
+"x": 27,
+"y": 0,
+"dest": "SAFARI_ZONE_NORTH",
+"idx": "4"
+},
+{
+"x": 29,
+"y": 22,
+"dest": "SAFARI_ZONE_CENTER",
+"idx": "3"
+},
+{
+"x": 29,
+"y": 23,
+"dest": "SAFARI_ZONE_CENTER",
+"idx": "4"
+},
+{
+"x": 3,
+"y": 3,
+"dest": "SAFARI_ZONE_SECRET_HOUSE",
+"idx": "1"
+},
+{
+"x": 11,
+"y": 11,
+"dest": "SAFARI_ZONE_WEST_REST_HOUSE",
+"idx": "1"
+}
+]
+},
+"220": {
+"const": "SafariZoneCenter",
+"file": "SafariZoneCenter",
+"warps": [
+{
+"x": 14,
+"y": 25,
+"dest": "SAFARI_ZONE_GATE",
+"idx": "3"
+},
+{
+"x": 15,
+"y": 25,
+"dest": "SAFARI_ZONE_GATE",
+"idx": "4"
+},
+{
+"x": 0,
+"y": 10,
+"dest": "SAFARI_ZONE_WEST",
+"idx": "5"
+},
+{
+"x": 0,
+"y": 11,
+"dest": "SAFARI_ZONE_WEST",
+"idx": "6"
+},
+{
+"x": 14,
+"y": 0,
+"dest": "SAFARI_ZONE_NORTH",
+"idx": "5"
+},
+{
+"x": 15,
+"y": 0,
+"dest": "SAFARI_ZONE_NORTH",
+"idx": "6"
+},
+{
+"x": 29,
+"y": 10,
+"dest": "SAFARI_ZONE_EAST",
+"idx": "3"
+},
+{
+"x": 29,
+"y": 11,
+"dest": "SAFARI_ZONE_EAST",
+"idx": "4"
+},
+{
+"x": 17,
+"y": 19,
+"dest": "SAFARI_ZONE_CENTER_REST_HOUSE",
+"idx": "1"
+}
+]
+},
+"221": {
+"const": "SafariZoneCenterRestHouse",
+"file": "SafariZoneCenterRestHouse",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "SAFARI_ZONE_CENTER",
+"idx": "9"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "SAFARI_ZONE_CENTER",
+"idx": "9"
+}
+]
+},
+"222": {
+"const": "SafariZoneSecretHouse",
+"file": "SafariZoneSecretHouse",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "SAFARI_ZONE_WEST",
+"idx": "7"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "SAFARI_ZONE_WEST",
+"idx": "7"
+}
+]
+},
+"223": {
+"const": "SafariZoneWestRestHouse",
+"file": "SafariZoneWestRestHouse",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "SAFARI_ZONE_WEST",
+"idx": "8"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "SAFARI_ZONE_WEST",
+"idx": "8"
+}
+]
+},
+"224": {
+"const": "SafariZoneEastRestHouse",
+"file": "SafariZoneEastRestHouse",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "SAFARI_ZONE_EAST",
+"idx": "5"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "SAFARI_ZONE_EAST",
+"idx": "5"
+}
+]
+},
+"225": {
+"const": "SafariZoneNorthRestHouse",
+"file": "SafariZoneNorthRestHouse",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "SAFARI_ZONE_NORTH",
+"idx": "9"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "SAFARI_ZONE_NORTH",
+"idx": "9"
+}
+]
+},
+"226": {
+"const": "CeruleanCave2F",
+"file": "CeruleanCave2F",
+"warps": [
+{
+"x": 29,
+"y": 1,
+"dest": "CERULEAN_CAVE_1F",
+"idx": "3"
+},
+{
+"x": 22,
+"y": 6,
+"dest": "CERULEAN_CAVE_1F",
+"idx": "4"
+},
+{
+"x": 19,
+"y": 7,
+"dest": "CERULEAN_CAVE_1F",
+"idx": "5"
+},
+{
+"x": 9,
+"y": 1,
+"dest": "CERULEAN_CAVE_1F",
+"idx": "6"
+},
+{
+"x": 1,
+"y": 3,
+"dest": "CERULEAN_CAVE_1F",
+"idx": "7"
+},
+{
+"x": 3,
+"y": 11,
+"dest": "CERULEAN_CAVE_1F",
+"idx": "8"
+}
+]
+},
+"227": {
+"const": "CeruleanCaveB1F",
+"file": "CeruleanCaveB1F",
+"warps": [
+{
+"x": 3,
+"y": 6,
+"dest": "CERULEAN_CAVE_1F",
+"idx": "9"
+}
+]
+},
+"228": {
+"const": "CeruleanCave1F",
+"file": "CeruleanCave1F",
+"warps": [
+{
+"x": 24,
+"y": 17,
+"dest": "LAST_MAP",
+"idx": "7"
+},
+{
+"x": 25,
+"y": 17,
+"dest": "LAST_MAP",
+"idx": "7"
+},
+{
+"x": 27,
+"y": 1,
+"dest": "CERULEAN_CAVE_2F",
+"idx": "1"
+},
+{
+"x": 23,
+"y": 7,
+"dest": "CERULEAN_CAVE_2F",
+"idx": "2"
+},
+{
+"x": 18,
+"y": 9,
+"dest": "CERULEAN_CAVE_2F",
+"idx": "3"
+},
+{
+"x": 7,
+"y": 1,
+"dest": "CERULEAN_CAVE_2F",
+"idx": "4"
+},
+{
+"x": 1,
+"y": 3,
+"dest": "CERULEAN_CAVE_2F",
+"idx": "5"
+},
+{
+"x": 3,
+"y": 11,
+"dest": "CERULEAN_CAVE_2F",
+"idx": "6"
+},
+{
+"x": 0,
+"y": 6,
+"dest": "CERULEAN_CAVE_B1F",
+"idx": "1"
+}
+]
+},
+"229": {
+"const": "NameRatersHouse",
+"file": "NameRatersHouse",
+"warps": [
+{
+"x": 2,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "6"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "6"
+}
+]
+},
+"230": {
+"const": "CeruleanBadgeHouse",
+"file": "CeruleanBadgeHouse",
+"warps": [
+{
+"x": 2,
+"y": 0,
+"dest": "LAST_MAP",
+"idx": "10"
+},
+{
+"x": 2,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "9"
+},
+{
+"x": 3,
+"y": 7,
+"dest": "LAST_MAP",
+"idx": "9"
+}
+]
+},
+"231": {
+"const": "Route16Gate1F",
+"file": "Route16Gate1F",
+"warps": [
+{
+"x": 0,
+"y": 8,
+"dest": "LAST_MAP",
+"idx": "1"
+},
+{
+"x": 0,
+"y": 9,
+"dest": "LAST_MAP",
+"idx": "2"
+},
+{
+"x": 7,
+"y": 8,
+"dest": "LAST_MAP",
+"idx": "3"
+},
+{
+"x": 7,
+"y": 9,
+"dest": "LAST_MAP",
+"idx": "3"
+},
+{
+"x": 0,
+"y": 2,
+"dest": "LAST_MAP",
+"idx": "5"
+},
+{
+"x": 0,
+"y": 3,
+"dest": "LAST_MAP",
+"idx": "6"
+},
+{
+"x": 7,
+"y": 2,
+"dest": "LAST_MAP",
+"idx": "7"
+},
+{
+"x": 7,
+"y": 3,
+"dest": "LAST_MAP",
+"idx": "8"
+},
+{
+"x": 6,
+"y": 12,
+"dest": "ROUTE_16_GATE_2F",
+"idx": "1"
+}
+]
+},
+"232": {
+"const": "RockTunnelB1F",
+"file": "RockTunnelB1F",
+"warps": [
+{
+"x": 33,
+"y": 25,
+"dest": "ROCK_TUNNEL_1F",
+"idx": "5"
+},
+{
+"x": 27,
+"y": 3,
+"dest": "ROCK_TUNNEL_1F",
+"idx": "6"
+},
+{
+"x": 23,
+"y": 11,
+"dest": "ROCK_TUNNEL_1F",
+"idx": "7"
+},
+{
+"x": 3,
+"y": 3,
+"dest": "ROCK_TUNNEL_1F",
+"idx": "8"
+}
+]
+},
+"233": {
+"const": "SilphCo9F",
+"file": "SilphCo9F",
+"warps": [
+{
+"x": 14,
+"y": 0,
+"dest": "SILPH_CO_10F",
+"idx": "1"
+},
+{
+"x": 16,
+"y": 0,
+"dest": "SILPH_CO_8F",
+"idx": "1"
+},
+{
+"x": 18,
+"y": 0,
+"dest": "SILPH_CO_ELEVATOR",
+"idx": "1"
+},
+{
+"x": 9,
+"y": 3,
+"dest": "SILPH_CO_3F",
+"idx": "8"
+},
+{
+"x": 17,
+"y": 15,
+"dest": "SILPH_CO_5F",
+"idx": "5"
+}
+]
+},
+"234": {
+"const": "SilphCo10F",
+"file": "SilphCo10F",
+"warps": [
+{
+"x": 8,
+"y": 0,
+"dest": "SILPH_CO_9F",
+"idx": "1"
+},
+{
+"x": 10,
+"y": 0,
+"dest": "SILPH_CO_11F",
+"idx": "1"
+},
+{
+"x": 12,
+"y": 0,
+"dest": "SILPH_CO_ELEVATOR",
+"idx": "1"
+},
+{
+"x": 9,
+"y": 11,
+"dest": "SILPH_CO_4F",
+"idx": "4"
+},
+{
+"x": 13,
+"y": 15,
+"dest": "SILPH_CO_4F",
+"idx": "6"
+},
+{
+"x": 13,
+"y": 7,
+"dest": "SILPH_CO_4F",
+"idx": "7"
+}
+]
+},
+"235": {
+"const": "SilphCo11F",
+"file": "SilphCo11F",
+"warps": [
+{
+"x": 9,
+"y": 0,
+"dest": "SILPH_CO_10F",
+"idx": "2"
+},
+{
+"x": 13,
+"y": 0,
+"dest": "SILPH_CO_ELEVATOR",
+"idx": "1"
+},
+{
+"x": 5,
+"y": 5,
+"dest": "LAST_MAP",
+"idx": "10"
+},
+{
+"x": 3,
+"y": 2,
+"dest": "SILPH_CO_7F",
+"idx": "4"
+}
+]
+},
+"236": {
+"const": "SilphCoElevator",
+"file": "SilphCoElevator",
+"warps": [
+{
+"x": 1,
+"y": 3,
+"dest": "UNUSED_MAP_ED",
+"idx": "1"
+},
+{
+"x": 2,
+"y": 3,
+"dest": "UNUSED_MAP_ED",
+"idx": "1"
+}
+]
+},
+"237": {
+"const": "SilphCo2F",
+"file": "SilphCo2F",
+"warps": [
+{
+"x": 24,
+"y": 0,
+"dest": "SILPH_CO_1F",
+"idx": "3"
+},
+{
+"x": 26,
+"y": 0,
+"dest": "SILPH_CO_3F",
+"idx": "1"
+},
+{
+"x": 20,
+"y": 0,
+"dest": "SILPH_CO_ELEVATOR",
+"idx": "1"
+},
+{
+"x": 3,
+"y": 3,
+"dest": "SILPH_CO_3F",
+"idx": "7"
+},
+{
+"x": 13,
+"y": 3,
+"dest": "SILPH_CO_8F",
+"idx": "5"
+},
+{
+"x": 27,
+"y": 15,
+"dest": "SILPH_CO_8F",
+"idx": "6"
+},
+{
+"x": 9,
+"y": 15,
+"dest": "SILPH_CO_6F",
+"idx": "5"
+}
+]
+},
+"238": {
+"const": "SilphCo2F",
+"file": "SilphCo2F",
+"warps": [
+{
+"x": 24,
+"y": 0,
+"dest": "SILPH_CO_1F",
+"idx": "3"
+},
+{
+"x": 26,
+"y": 0,
+"dest": "SILPH_CO_3F",
+"idx": "1"
+},
+{
+"x": 20,
+"y": 0,
+"dest": "SILPH_CO_ELEVATOR",
+"idx": "1"
+},
+{
+"x": 3,
+"y": 3,
+"dest": "SILPH_CO_3F",
+"idx": "7"
+},
+{
+"x": 13,
+"y": 3,
+"dest": "SILPH_CO_8F",
+"idx": "5"
+},
+{
+"x": 27,
+"y": 15,
+"dest": "SILPH_CO_8F",
+"idx": "6"
+},
+{
+"x": 9,
+"y": 15,
+"dest": "SILPH_CO_6F",
+"idx": "5"
+}
+]
+},
+"239": {
+"const": "TradeCenter",
+"file": "TradeCenter",
+"warps": []
+},
+"240": {
+"const": "Colosseum",
+"file": "Colosseum",
+"warps": []
+},
+"241": {
+"const": "SilphCo2F",
+"file": "SilphCo2F",
+"warps": [
+{
+"x": 24,
+"y": 0,
+"dest": "SILPH_CO_1F",
+"idx": "3"
+},
+{
+"x": 26,
+"y": 0,
+"dest": "SILPH_CO_3F",
+"idx": "1"
+},
+{
+"x": 20,
+"y": 0,
+"dest": "SILPH_CO_ELEVATOR",
+"idx": "1"
+},
+{
+"x": 3,
+"y": 3,
+"dest": "SILPH_CO_3F",
+"idx": "7"
+},
+{
+"x": 13,
+"y": 3,
+"dest": "SILPH_CO_8F",
+"idx": "5"
+},
+{
+"x": 27,
+"y": 15,
+"dest": "SILPH_CO_8F",
+"idx": "6"
+},
+{
+"x": 9,
+"y": 15,
+"dest": "SILPH_CO_6F",
+"idx": "5"
+}
+]
+},
+"242": {
+"const": "SilphCo2F",
+"file": "SilphCo2F",
+"warps": [
+{
+"x": 24,
+"y": 0,
+"dest": "SILPH_CO_1F",
+"idx": "3"
+},
+{
+"x": 26,
+"y": 0,
+"dest": "SILPH_CO_3F",
+"idx": "1"
+},
+{
+"x": 20,
+"y": 0,
+"dest": "SILPH_CO_ELEVATOR",
+"idx": "1"
+},
+{
+"x": 3,
+"y": 3,
+"dest": "SILPH_CO_3F",
+"idx": "7"
+},
+{
+"x": 13,
+"y": 3,
+"dest": "SILPH_CO_8F",
+"idx": "5"
+},
+{
+"x": 27,
+"y": 15,
+"dest": "SILPH_CO_8F",
+"idx": "6"
+},
+{
+"x": 9,
+"y": 15,
+"dest": "SILPH_CO_6F",
+"idx": "5"
+}
+]
+},
+"243": {
+"const": "SilphCo2F",
+"file": "SilphCo2F",
+"warps": [
+{
+"x": 24,
+"y": 0,
+"dest": "SILPH_CO_1F",
+"idx": "3"
+},
+{
+"x": 26,
+"y": 0,
+"dest": "SILPH_CO_3F",
+"idx": "1"
+},
+{
+"x": 20,
+"y": 0,
+"dest": "SILPH_CO_ELEVATOR",
+"idx": "1"
+},
+{
+"x": 3,
+"y": 3,
+"dest": "SILPH_CO_3F",
+"idx": "7"
+},
+{
+"x": 13,
+"y": 3,
+"dest": "SILPH_CO_8F",
+"idx": "5"
+},
+{
+"x": 27,
+"y": 15,
+"dest": "SILPH_CO_8F",
+"idx": "6"
+},
+{
+"x": 9,
+"y": 15,
+"dest": "SILPH_CO_6F",
+"idx": "5"
+}
+]
+},
+"244": {
+"const": "SilphCo2F",
+"file": "SilphCo2F",
+"warps": [
+{
+"x": 24,
+"y": 0,
+"dest": "SILPH_CO_1F",
+"idx": "3"
+},
+{
+"x": 26,
+"y": 0,
+"dest": "SILPH_CO_3F",
+"idx": "1"
+},
+{
+"x": 20,
+"y": 0,
+"dest": "SILPH_CO_ELEVATOR",
+"idx": "1"
+},
+{
+"x": 3,
+"y": 3,
+"dest": "SILPH_CO_3F",
+"idx": "7"
+},
+{
+"x": 13,
+"y": 3,
+"dest": "SILPH_CO_8F",
+"idx": "5"
+},
+{
+"x": 27,
+"y": 15,
+"dest": "SILPH_CO_8F",
+"idx": "6"
+},
+{
+"x": 9,
+"y": 15,
+"dest": "SILPH_CO_6F",
+"idx": "5"
+}
+]
+},
+"245": {
+"const": "LoreleisRoom",
+"file": "LoreleisRoom",
+"warps": [
+{
+"x": 4,
+"y": 11,
+"dest": "INDIGO_PLATEAU_LOBBY",
+"idx": "3"
+},
+{
+"x": 5,
+"y": 11,
+"dest": "INDIGO_PLATEAU_LOBBY",
+"idx": "3"
+},
+{
+"x": 4,
+"y": 0,
+"dest": "BRUNOS_ROOM",
+"idx": "1"
+},
+{
+"x": 5,
+"y": 0,
+"dest": "BRUNOS_ROOM",
+"idx": "2"
+}
+]
+},
+"246": {
+"const": "BrunosRoom",
+"file": "BrunosRoom",
+"warps": [
+{
+"x": 4,
+"y": 11,
+"dest": "LORELEIS_ROOM",
+"idx": "3"
+},
+{
+"x": 5,
+"y": 11,
+"dest": "LORELEIS_ROOM",
+"idx": "4"
+},
+{
+"x": 4,
+"y": 0,
+"dest": "AGATHAS_ROOM",
+"idx": "1"
+},
+{
+"x": 5,
+"y": 0,
+"dest": "AGATHAS_ROOM",
+"idx": "2"
+}
+]
+},
+"247": {
+"const": "AgathasRoom",
+"file": "AgathasRoom",
+"warps": [
+{
+"x": 4,
+"y": 11,
+"dest": "BRUNOS_ROOM",
+"idx": "3"
+},
+{
+"x": 5,
+"y": 11,
+"dest": "BRUNOS_ROOM",
+"idx": "4"
+},
+{
+"x": 4,
+"y": 0,
+"dest": "LANCES_ROOM",
+"idx": "1"
+},
+{
+"x": 5,
+"y": 0,
+"dest": "LANCES_ROOM",
+"idx": "1"
+}
+]
+}
+}

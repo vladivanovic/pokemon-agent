@@ -39,17 +39,19 @@ logger = logging.getLogger("pokemon-agent.collision")
 
 ADDR_TILEMAP       = 0xC3A0   # wTileMap, 20x18 bytes
 ADDR_TILESET       = 0xD367   # wCurMapTileset
+ADDR_MAP_Y         = 0xD361   # wYCoord (same page as the tileset)
+ADDR_MAP_X         = 0xD362   # wXCoord
 ADDR_TILE_IN_FRONT = 0xCFC6   # wTileInFrontOfPlayer
 ADDR_WALK_COUNTER  = 0xCFC5   # wWalkCounter; nonzero = mid-step, camera moving
 ADDR_SPRITE_DATA1  = 0xC100   # wSpriteStateData1, 16 slots x 16 bytes
-# wNumberOfWarps / wWarpEntries verified against pokered ram.asm + layout.link:
-# Main Data section order is ...wMapBackgroundTile (0xD3AE), wNumberOfWarps
-# (0xD3AF), wWarpEntries (0xD3B0). The old values (0xD3AE/0xD3AF) were off by
-# one: n was read from wMapBackgroundTile ($2D=45 > MAX_WARPS -> empty list)
-# and every warp entry was shifted a byte, decoding garbage. This is why
-# warps[] was empty on every outdoor map.
-ADDR_NUM_WARPS     = 0xD3AF   # wNumberOfWarps
-ADDR_WARP_ENTRY    = 0xD3B0   # wWarpEntries: y, x, dest_warp, dest_map
+# wNumberOfWarps / wWarpEntries VERIFIED against live RAM on Viridian Mart:
+#   0xD3AE = wNumberOfWarps = 2
+#   0xD3AF..: Y=7,X=3,dest_warp=1,dest_map=255 / Y=7,X=4,... = the two
+#             warp_event 3,7 / 4,7 LAST_MAP entries from pokered, exactly.
+# An earlier "off-by-one fix" to 0xD3AF/0xD3B0 was WRONG: it read a warp Y
+# byte (7) as the count and decoded seven garbage entries. Do not move these.
+ADDR_NUM_WARPS     = 0xD3AE   # wNumberOfWarps
+ADDR_WARP_ENTRY    = 0xD3AF   # wWarpEntries: y, x, dest_warp, dest_map
 
 # ---------------------------------------------------------------------------
 # Geometry — the single source of truth. overlay.py imports these; do not
@@ -243,7 +245,13 @@ def read_warp_cells(emu, player_x: int, player_y: int) -> List[Dict]:
 
     Warp entries are stored in map coordinates. One overworld block is one
     map tile, so the conversion is a plain delta from the player's tile.
-    Warps outside the visible 10x9 window are dropped.
+    An entry is returned for EVERY warp, with ``on_screen`` marking whether
+    it falls inside the visible 10x9 window; callers that only want the
+    drawn map filter on that flag. Keeping the off-window ones matters: a
+    building's exit door is 5+ tiles away the moment you walk in, and
+    dropping it left the agent with no memory of where the door was - the
+    Viridian Mart pinball. ``map_x``/``map_y`` are always present so the
+    door can be projected back onto the screen from anywhere on the map.
     """
     n = emu.read_u8(ADDR_NUM_WARPS)
     if not 0 < n <= MAX_WARPS:
@@ -255,11 +263,14 @@ def read_warp_cells(emu, player_x: int, player_y: int) -> List[Dict]:
                                           i * WARP_ENTRY_SIZE + WARP_ENTRY_SIZE]
         r = PLAYER_ROW + (wy - player_y)
         c = PLAYER_COL + (wx - player_x)
-        if 0 <= r < BLOCK_ROWS and 0 <= c < BLOCK_COLS:
-            out.append({"row": r, "col": c, "cell": cell_label(c, r),
-                        "map_x": wx, "map_y": wy,
-                        "dest_map": dest_map, "dest_map_name": None,
-                        "dest_warp": dest_warp})
+        on_screen = 0 <= r < BLOCK_ROWS and 0 <= c < BLOCK_COLS
+        out.append({"row": r if on_screen else None,
+                    "col": c if on_screen else None,
+                    "cell": cell_label(c, r) if on_screen else None,
+                    "on_screen": on_screen,
+                    "map_x": wx, "map_y": wy,
+                    "dest_map": dest_map, "dest_map_name": None,
+                    "dest_warp": dest_warp})
     return out
 
 
@@ -317,6 +328,17 @@ def build_collision_grid(emu,
 
     tile_ids = read_block_tile_ids(emu)
     settled = emu.read_u8(ADDR_WALK_COUNTER) == 0
+    # COHERENT POSITION SNAPSHOT: re-read wXCoord/wYCoord immediately after
+    # the tilemap sample. build_game_state reads the player (with the
+    # mid-step fusion) BEFORE this grid; if a step completes between the
+    # two reads, the window centers on the NEW tile while the position
+    # dict holds the OLD one - a permanent ±1 tile drift between what BFS
+    # plans on and what the window actually shows (proven live: the agent
+    # 'standing' on cells the ROM calls solid at maze bends). The settled
+    # pair below shares the instant with tile_ids, so window and coords
+    # can never disagree by more than the mid-step sub-tile slide.
+    sy_c = emu.read_u8(ADDR_MAP_Y)
+    sx_c = emu.read_u8(ADDR_MAP_X)
 
     walkable = [[tile_ids[r][c] in walk_set for c in range(BLOCK_COLS)]
                 for r in range(BLOCK_ROWS)]
@@ -328,6 +350,27 @@ def build_collision_grid(emu,
     walkable[PLAYER_ROW][PLAYER_COL] = True
 
     sprites = read_sprite_cells(emu) if settled else []
+    if settled:
+        # SPRITE DEBOUNCE: NPC sprites bob 2px in place; at tile
+        # boundaries (dy/16 = X.5) that flips the tile rounding, so the
+        # SAME static clerk read as row 7 one turn and row 6 the next
+        # (the Mart counter oscillation's last mystery). Tick a few
+        # frames, re-read, and keep only sprites whose row/col agree
+        # across both samples (the bob is periodic; a half-period gap
+        # decorrelates it).
+        try:
+            emu.tick(8, render_last=False)
+            again = read_sprite_cells(emu)
+            first = {(s["row"], s["col"]): s for s in sprites}
+            stable = []
+            for s in again:
+                t = first.get((s["row"], s["col"]))
+                if t is not None and t.get("who") == s.get("who"):
+                    stable.append(s)
+            if stable:
+                sprites = stable
+        except Exception:
+            pass
     warps: List[Dict] = []
     if player_pos and player_pos.get("x") is not None:
         try:
@@ -384,6 +427,9 @@ def build_collision_grid(emu,
     if player_pos:
         out["player_map_pos"] = {"x": player_pos.get("x"),
                                  "y": player_pos.get("y")}
+    out["settled_position"] = {"x": sx_c, "y": sy_c}
+    out["position_coherent"] = (
+        player_pos.get("x") == sx_c and player_pos.get("y") == sy_c)
     if include_tile_ids:
         out["tile_ids"] = tile_ids
     return out
@@ -412,7 +458,11 @@ def render_ascii_map(collision: Dict, legend: bool = True) -> str:
 
     walkable = collision["walkable"]
     npc = {(s["row"], s["col"]) for s in collision.get("sprites") or []}
-    warp = {(w["row"], w["col"]) for w in collision.get("warps") or []}
+    # Only on-screen warps can be drawn as cells; off-window ones have
+    # row/col None and are reported separately (so the agent still knows the
+    # door exists and where it is in map coordinates).
+    warp = {(w["row"], w["col"]) for w in collision.get("warps") or []
+            if w.get("row") is not None and w.get("col") is not None}
     led = collision.get("ledges") or []
     ledge_set = {(r, c) for r in range(len(led))
                  for c in range(len(led[r])) if led[r][c]}
@@ -439,11 +489,23 @@ def render_ascii_map(collision: Dict, legend: bool = True) -> str:
                      "  v ledge (hop DOWN only)")
         lines.append("walk_up=row-1  walk_down=row+1  "
                      "walk_left=col-1  walk_right=col+1")
-        exits = collision.get("warps") or []
+        exits = [w for w in (collision.get("warps") or [])
+                 if w.get("cell")]
         if exits:
             lines.append("exits: " + ", ".join(
                 f"{w['cell']} -> {w.get('dest_map_name') or 'map ' + str(w['dest_map'])}"
                 for w in exits))
+        offscreen = [w for w in (collision.get("warps") or [])
+                     if not w.get("on_screen", True)]
+        if offscreen:
+            pos = collision.get("player_map_pos") or {}
+            px, py = pos.get("x"), pos.get("y")
+            if px is not None and py is not None:
+                lines.append("off-screen exits (walk toward): " + ", ".join(
+                    f"map({w['map_x']},{w['map_y']}) "
+                    f"[{'N' if w['map_y'] < py else 'S'}"
+                    f"{'W' if w['map_x'] < px else 'E'}]"
+                    for w in offscreen))
         if collision.get("offset_verified") is False:
             lines.append("WARNING: grid alignment check FAILED — "
                          "cell labels may be shifted.")
