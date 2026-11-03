@@ -63,7 +63,7 @@ rewrite is summarised at the bottom.
 ## Run it
 
 ```bash
-python3 -m unittest discover -s tests   # 23 tests
+python3 -m unittest discover -s tests   # 30 tests
 python3 run_demo.py                     # simulated opening: Pallet -> Pewter
 ```
 
@@ -90,17 +90,26 @@ ea9bcae617fdf159b045185467ae58b2e4a48b9a), which is what this was
 verified against on 2026-11-03. The run, from a fresh boot: title
 screen → Oak's intro with both names typed on the letter grid (VLAD /
 GARY) → bedroom → the Oak intercept cutscene → Squirtle picked → rival
-battle won → Route 1 → Viridian Mart parcel scene → back to Oak's Lab,
-at roughly 2,000–2,800 fps headless (about 35–45× real-time; the whole
-opening takes well under a minute).
+battle won → Route 1 → Viridian Mart parcel scene → back to Oak's Lab
+→ **the Pokedex handover scene** → Viridian's north road → Route 2 →
+Viridian Forest → Pewter City → **the Boulder Badge** (the first
+Brock attempt blacked out; the agent re-ran the journey, levelled on
+the way, and won the rematch — all unattended). The executor phase
+runs at roughly 2,300 fps headless (about 40× real-time; the full
+boot-to-badge run takes about 90 seconds of emulation).
 
 Cutscenes are macros, not executor work, by design: the intro/naming
 sequence (a fresh boot is deterministic, so it runs on counted presses
 at a measured cadence — no RAM signal marks the naming screens), the
-Oak intercept, and the starter pick (the lab's Poke Balls are inert
-until the intercept arms them, and the pick crosses a full-screen
-PokeDex page that is not a text box). Each macro uses only verified
-backend primitives and hands control back to the Executor.
+Oak intercept, the starter pick (the lab's Poke Balls are inert until
+the intercept arms them, and the pick crosses a full-screen PokeDex
+page that is not a text box), the Pokedex handover (talk to Oak from
+(5, 3); verified by the EVENT_GOT_POKEDEX flag itself, index 37 —
+event constants have `const_skip` gaps, so never count them naively),
+and the Brock fight (walk the gym's aisle, ride the Jr. Trainer's
+line-of-sight battle, talk to Brock from (4, 2); verified by the
+badge bit in RAM). Each macro uses only verified backend primitives
+and hands control back to the Executor.
 
 For a local model, point `LLMPlanner` at the llama.cpp server
 (`http://localhost:8080`, model name of the served Qwen). Nothing else
@@ -121,20 +130,38 @@ changes: proposals are validated identically whoever makes them.
   handle the interruption first. A determined NPC standing in a one-tile
   corridor can still stall a goal until it wanders off.
 - The story checklist judges some steps by *arrival* (reaching the
-  Mart = parcel picked up; reaching the Lab = parcel delivered). The
-  real game gates progress on the event scenes themselves: Viridian's
-  north road stays blocked ("You can't go through here") until Oak's
-  Pokedex handover scene has actually played, which the arrival-only
-  delivery does not trigger. Playing that scene (walk to Oak, face him,
-  run the dialog) is the known next step toward Pewter on hardware.
+  Mart = parcel picked up; reaching the Lab = parcel delivered), and
+  `run_real.py` pairs the two gated ones with scene macros (the
+  Pokedex handover, the Brock fight) that verify the real event — see
+  above. Any future gated step will need the same treatment: arrival
+  alone does not move the game's flags.
+- Some warp tiles are *land-only*: pressing into them from an adjacent
+  tile never fires them (the Viridian Forest south gate's (4, 0) is
+  one; its sibling (5, 0) is the real door). When a walk's target is a
+  warp tile that refuses, the executor retries via sibling warps to
+  the same destination before reporting stuck.
+- After the Boulder Badge the checklist targets Cerulean Gym, and the
+  portal-level journey planner currently finds **no route** from
+  Pewter Gym to it — the Route 3 / Mt. Moon / Route 4 chain is the
+  known next frontier (that, and a Cerulean gym macro, are what stand
+  between the agent and the Cascade Badge).
 - The Mart's exit mat occasionally needs a second attempt to fire
   (the runner's next round exits cleanly); the retrigger logic is the
   least-hardened part of the hardware path.
 - CAVERN-tileset maps are marked fully open by the data generator (their
   tile ids don't map through the collision lists); interiors there rely
   on warp chains.
-- Battles are a policy seam: the shipped `FightPolicy` mashes A
-  (Fight → first move), which wins the early game and nothing cleverer.
+- Battles are a policy seam. The sim default (`FightPolicy`) still
+  mashes A, but the hardware runner uses `SmartFightPolicy`: it reads
+  the battle menus' cursor state from RAM and fights with the lead
+  mon's last *damaging* move that has PP (for Squirtle: Bubble, then
+  Water Gun — the type-advantage move A-mashing never reaches). Two
+  live-learned subtleties are baked in: the cursor bytes are stale
+  outside live menus, so the policy probes once per menu before
+  trusting them; and a status move must never be the target, or a
+  PP-dry battle can stall forever (Tail Whip vs a Harden-only
+  Metapod). There is still no type chart, no items, no switching —
+  Brock fell to levels and a 4×-effective move, not tactics.
   Dialog handling is real but shallow: advance the box while one is
   verifiably open, never blind-mash (that way lies examining the SNES).
 

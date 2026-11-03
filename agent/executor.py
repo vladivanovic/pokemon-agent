@@ -37,6 +37,160 @@ class FightPolicy:
         return "a"
 
 
+# Non-damaging move ids (Gen 1, from pokered's move_constants.asm):
+# status, stat-stage, healing and escape moves. A battle policy must
+# never *choose* these as its attack - spamming one can stall a
+# battle forever (seen live: with Bubble's PP dry, "last move with
+# PP" fell through to Tail Whip against a Harden-only Metapod and
+# neither side could ever deal damage). Unknown ids are treated as
+# damaging, which is the right bias for a policy that must keep
+# battles moving.
+STATUS_MOVE_IDS = frozenset({
+    28,   # SAND_ATTACK
+    39,   # TAIL_WHIP
+    43,   # LEER
+    45,   # GROWL
+    47,   # SING
+    48,   # SUPERSONIC
+    50,   # DISABLE
+    54,   # MIST
+    77,   # POISONPOWDER
+    78,   # STUN_SPORE
+    79,   # SLEEP_POWDER
+    81,   # STRING_SHOT
+    86,   # THUNDER_WAVE
+    92,   # TOXIC
+    95,   # HYPNOSIS
+    96,   # MEDITATE
+    97,   # AGILITY
+    100,  # TELEPORT
+    103,  # SCREECH
+    104,  # DOUBLE_TEAM
+    105,  # RECOVER
+    106,  # HARDEN
+    107,  # MINIMIZE
+    108,  # SMOKESCREEN
+    109,  # CONFUSE_RAY
+    110,  # WITHDRAW
+    112,  # BARRIER
+    113,  # LIGHT_SCREEN
+    114,  # HAZE
+    115,  # REFLECT
+    116,  # FOCUS_ENERGY
+    133,  # AMNESIA
+    134,  # KINESIS
+    135,  # SOFTBOILED
+    137,  # GLARE
+    139,  # POISON_GAS
+    142,  # LOVELY_KISS
+    147,  # SPORE
+    148,  # FLASH
+    150,  # SPLASH
+    156,  # REST
+    159,  # SHARPEN
+    160,  # CONVERSION
+    164,  # SUBSTITUTE
+})
+
+
+class SmartFightPolicy:
+    """Hardware battle policy: fight with the party leader's LAST
+    damaging move that still has PP - the newest-learned move is
+    usually the strongest, and for a water starter it is the
+    type-advantage one (Bubble, then Water Gun) that pure A-mashing
+    never reaches because the cursor starts on move 1 every battle.
+
+    It drives the real menus by their RAM cursor state (state.py's
+    ADDR_MENU_* reads). The subtlety, learned from a live stall: the
+    menu cursor bytes are only LIVE while a menu waits for input -
+    during battle text and animations they hold stale values (even
+    leftovers from before the battle), and direction presses then are
+    inert while A still advances the turn. So the policy never trusts
+    the bytes blindly. When the move menu appears to be up
+    (menu_top_y == 12, item in range, cursor off target) it PROBES
+    once with a step toward the target: if the cursor moves, the menu
+    is live and it steers the rest of the way and confirms; if not,
+    it was a stale echo and the policy goes back to advancing with A
+    until the main menu (top == 14) has been seen again, which resets
+    the episode. In the main menu it confirms FIGHT. If NO move has
+    PP it just confirms - the engine offers Struggle itself - and it
+    never picks a 0-PP move, which also un-sticks the engine's no-PP
+    rejection loop that an A-mash battle dies in (seen live: Tackle
+    dry by the time the agent reached Brock).
+
+    On the simulator the menu bytes read as 0 and every branch falls
+    through to A, so this degrades to FightPolicy there."""
+
+    def __init__(self) -> None:
+        self._probed = False        # this menu episode probed stale
+        self._live = False          # this menu episode is confirmed live
+        self._probe_from = None     # cursor value when the probe fired
+        self._last_sig = None       # (menu_top_y, menu_item) at last call
+
+    def _reset_episode(self) -> None:
+        self._probed = self._live = False
+        self._probe_from = None
+
+    def choose(self, state: GameState, presses: int) -> str:
+        if not state.in_battle or not state.party:
+            self._reset_episode()
+            self._last_sig = None
+            return "a"
+        # Judge a pending probe: if the cursor moved since the probe
+        # press, the menu was live; if it is unchanged, the bytes were
+        # a stale echo of some earlier menu and presses are inert.
+        if self._probe_from is not None:
+            if state.menu_item != self._probe_from:
+                self._live = True
+            self._probe_from = None
+        sig = (state.menu_top_y, state.menu_item)
+        if sig != self._last_sig:
+            # Seeing the main menu ends any earlier episode.
+            if state.menu_top_y == 14:
+                self._reset_episode()
+            self._last_sig = sig
+        mon = state.party[0]
+        # Target: the LAST damaging move that still has PP. If no
+        # damaging move has PP, burn the smallest-PP move available -
+        # exhausting PP entirely is the only route to the engine's
+        # Struggle, and a status move picked on purpose can otherwise
+        # stall the battle forever (see STATUS_MOVE_IDS).
+        target = None
+        for i in range(len(mon.moves) - 1, -1, -1):
+            if i < len(mon.pp) and mon.pp[i] > 0 \
+                    and mon.moves[i] not in STATUS_MOVE_IDS:
+                target = i
+                break
+        if target is None:
+            usable = [(mon.pp[i], i) for i in range(len(mon.moves))
+                      if i < len(mon.pp) and mon.pp[i] > 0]
+            if usable:
+                target = min(usable)[1]
+        if target is None:
+            return "a"
+        if state.menu_top_y == 14:       # main battle menu
+            return "a" if state.menu_item == 0 else "up"
+        if state.menu_top_y == 12 and 1 <= state.menu_item <= 4:
+            cur = state.menu_item        # 1-based in the move menu
+            if cur == target + 1:
+                return "a"               # on target: confirm the move
+            if self._live and state.move_list_index == target:
+                # The engine has registered the pick; the menu bytes
+                # are stale echoes again until the next main menu.
+                self._reset_episode()
+                self._probed = True
+                return "a"
+            step = "down" if cur < target + 1 else "up"
+            if self._live:
+                return step
+            if not self._probed:
+                self._probed = True
+                self._probe_from = cur   # one probe per menu episode;
+                return step              # it is judged on the next call
+            return "a"                   # probed stale: just advance
+        return "a"
+
+
 @dataclass
 class RunResult:
     status: str                       # complete | blocked | stuck | step_limit
@@ -171,7 +325,33 @@ class Executor:
             kind = step[0]
             if kind == "walk":
                 _, mid, tile = step
-                self._walk_to(mid, tile)
+                try:
+                    self._walk_to(mid, tile)
+                except StuckError:
+                    # Some warp tiles are land-only: the warp event sits
+                    # on a tile the engine will not let you step onto
+                    # (Viridian Forest's south gate: (4, 0) refuses,
+                    # its block-mate (5, 0) is the real door). Try the
+                    # sibling warps to the same destination before
+                    # calling the leg stuck.
+                    gm = self.world.maps[mid]
+                    tw = next((wp for wp in gm.warps
+                               if (wp.x, wp.y) == tile), None)
+                    if tw is None:
+                        raise
+                    landed = None
+                    for wp in gm.warps:
+                        if wp.dest_id == tw.dest_id \
+                                and (wp.x, wp.y) != tile:
+                            try:
+                                self._walk_to(mid, (wp.x, wp.y))
+                                landed = (wp.x, wp.y)
+                                break
+                            except StuckError:
+                                continue
+                    if landed is None:
+                        raise
+                    tile = landed
                 st = self._state()
                 if st.map_id == mid:
                     # If the target was a warp tile, stepping on it should

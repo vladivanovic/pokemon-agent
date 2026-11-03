@@ -37,6 +37,17 @@ PM_HP = 1        # big-endian u16 current HP
 PM_LEVEL = 33    # u8 level (party struct only)
 PM_MAX_HP = 34   # big-endian u16 max HP
 PM_MOVES = 8     # 4 x u8 move ids
+PM_PP = 29       # 4 x u8 PP (top 2 bits are PP Ups; mask 0x3F)
+
+# Battle-menu cursor state (addresses from the pokered .sym file).
+# wTopMenuItemY separates the battle menus: 14 = main (FIGHT/PKMN/
+# ITEM/RUN), 12 = move selection. wCurrentMenuItem is the highlighted
+# item (0-based in the main menu, 1-based in the move menu, where it
+# is initialised from wPlayerMoveListIndex + 1 - the engine remembers
+# the last move you picked).
+ADDR_MENU_TOP_Y        = 0xCC24   # wTopMenuItemY
+ADDR_CURRENT_MENU_ITEM = 0xCC26   # wCurrentMenuItem
+ADDR_MOVE_LIST_INDEX   = 0xCC2E   # wPlayerMoveListIndex
 
 BADGE_NAMES = ["Boulder", "Cascade", "Thunder", "Rainbow",
                "Soul", "Marsh", "Volcano", "Earth"]
@@ -59,6 +70,9 @@ class PartyMon:
     hp: int
     max_hp: int
     moves: List[int] = field(default_factory=list)
+    # Current PP per move, aligned with `moves` (moves are packed from
+    # slot 0, so the first len(moves) PP slots correspond).
+    pp: List[int] = field(default_factory=list)
 
     @property
     def hp_frac(self) -> float:
@@ -76,6 +90,12 @@ class GameState:
     party: List[PartyMon]
     mid_step: bool = False
     in_dialog: Optional[bool] = None  # backend may supply; None = unknown
+    # Battle-menu cursor state (see the ADDR_MENU_* constants); zero on
+    # backends that do not read them, which policies must treat as
+    # "no menu information".
+    menu_top_y: int = 0
+    menu_item: int = 0
+    move_list_index: int = 0
 
     @property
     def pos(self):
@@ -135,11 +155,13 @@ def read_state(read: Reader) -> GameState:
     for i in range(count):
         base = ADDR_PARTY_MONS + i * PARTY_MON_SIZE
         raw = read(base, PARTY_MON_SIZE)
+        moves = [m for m in raw[PM_MOVES:PM_MOVES + 4] if m]
         party.append(PartyMon(
             level=raw[PM_LEVEL],
             hp=int.from_bytes(raw[PM_HP:PM_HP + 2], "big"),
             max_hp=int.from_bytes(raw[PM_MAX_HP:PM_MAX_HP + 2], "big"),
-            moves=[m for m in raw[PM_MOVES:PM_MOVES + 4] if m],
+            moves=moves,
+            pp=[raw[PM_PP + i] & 0x3F for i in range(len(moves))],
         ))
     # Dialog detection, calibrated against the live game: a standard
     # text box puts corner tile 0x79 at tilemap row 12, col 0; when the
@@ -152,6 +174,9 @@ def read_state(read: Reader) -> GameState:
         money=money, party=party,
         mid_step=read(ADDR_WALK_COUNTER, 1)[0] != 0,
         in_dialog=in_dialog,
+        menu_top_y=read(ADDR_MENU_TOP_Y, 1)[0],
+        menu_item=read(ADDR_CURRENT_MENU_ITEM, 1)[0],
+        move_list_index=read(ADDR_MOVE_LIST_INDEX, 1)[0],
     )
 
 

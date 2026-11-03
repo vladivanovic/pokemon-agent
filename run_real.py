@@ -53,7 +53,7 @@ import time
 os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
-from agent.executor import Executor
+from agent.executor import Executor, SmartFightPolicy, StuckError
 from agent.goals import Goal
 from agent.memory import EpisodicMemory
 from agent.planner import ChecklistPlanner
@@ -63,6 +63,18 @@ from agent.world import default_world
 MAP_REDS_HOUSE_2F = 38
 MAP_PALLET = 0
 MAP_OAKS_LAB = 40
+
+# Event flags live in wEventFlags (0xD747), one bit per event constant
+# in pokered's constants/event_constants.asm order - counting the
+# const_skip gaps, which a naive line count misses (the PokeDex flag
+# read as never-set until the skips were counted).
+ADDR_EVENT_FLAGS = 0xD747
+EVENT_GOT_POKEDEX = 37
+
+
+def _event_flag(emu: PyBoyEmulator, event_id: int) -> bool:
+    byte = emu.pb.memory[ADDR_EVENT_FLAGS + event_id // 8]
+    return bool(byte & (1 << (event_id % 8)))
 
 # Gen 1 naming-screen letter grid: (column, row). ED (confirm) sits at
 # (8, 4). Navigation sequences were verified against the real screen.
@@ -113,7 +125,7 @@ def _type_name(emu: PyBoyEmulator, name: str) -> None:
         while row > trow:
             _raw(emu, "up"); row -= 1
 
-    for ch in name.upper()[:7]:
+    for ch in name.upper()[:10]:
         if ch not in LETTER_POS:
             continue
         move_to(*LETTER_POS[ch])
@@ -267,12 +279,134 @@ def pick_starter(emu: PyBoyEmulator, ex: Executor, starter: str) -> None:
     st = emu.read_state()
     if not (st.party and st.party[0].level > 0):
         raise RuntimeError(f"starter {starter} never joined the party")
-    emu.press("down")                    # nickname prompt: YES -> NO
+    # Nickname prompt: YES is the default and a too-early "down" gets
+    # eaten by the receive text, landing on YES - which opens the
+    # naming screen, where dialog-mashing then types AAAAAAA (seen
+    # live). Press down twice with a beat between, then confirm.
+    emu.press("down")
+    emu.tick(30)
+    emu.press("down")
     emu.tick(10)
     emu.press("a")
-    # The rival takes his starter in beats; wait for a long quiet
-    # stretch so the executor doesn't inherit a half-finished scene.
-    emu.wait_free(max_rounds=60, stable_needed=8)
+    # Ride out the rival's pick. If the naming screen DID open (no
+    # dialog, no battle, yet the player never becomes mobile), recover
+    # properly: clear the field and type the species name on the grid.
+    # (The mobility test's four direction presses are cursor-neutral
+    # from the grid's top-left start, so the typer's bearings hold.)
+    static = 0
+    for _ in range(240):
+        st = emu.read_state()
+        if st.in_dialog:
+            emu.close_dialog(max_presses=1)
+            static = 0
+            continue
+        if st.in_battle:
+            break
+        if verify_mobility(emu, rounds=1):
+            break
+        static += 1
+        if static == 12:
+            for _ in range(10):
+                _raw(emu, "b")
+            _type_name(emu, starter)
+            static = 0
+        emu.tick(30)
+
+
+def deliver_parcel_scene(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """The real delivery: walk to Oak (he stands at (5, 2) facing
+    down), talk to him from (5, 3) with the parcel in the bag. His
+    script takes the parcel and starts the rival-arrives scene, at the
+    end of which both trainers get the PokeDex (EVENT_GOT_POKEDEX).
+    The checklist counts delivery by arrival; the *game* counts this
+    scene - Viridian's north road stays blocked until it has played.
+    Returns True when the PokeDex flag is set and the player is free."""
+    if _event_flag(emu, EVENT_GOT_POKEDEX):
+        return True
+    for attempt in range(8):
+        try:
+            ex._walk_to(MAP_OAKS_LAB, (5, 3))
+            break
+        except Exception:
+            if attempt == 7:
+                raise
+            emu.tick(150)
+    emu.press("up")                      # face Oak
+    emu.press("a")                       # talk -> parcel handover
+    quiet = 0
+    last_pos = None
+    for _ in range(400):
+        st = emu.read_state()
+        if st.in_dialog:
+            emu.close_dialog(max_presses=1)
+            quiet = 0
+            continue
+        pos = (st.map_id, st.x, st.y)
+        if pos == last_pos:
+            quiet += 1
+            if quiet >= 12 and _event_flag(emu, EVENT_GOT_POKEDEX) \
+                    and verify_mobility(emu, rounds=2):
+                return True
+        else:
+            quiet = 0
+            last_pos = pos
+        emu.tick(30)
+    return _event_flag(emu, EVENT_GOT_POKEDEX)
+
+
+MAP_PEWTER_GYM = 54
+
+
+def fight_brock(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Win the Boulder Badge. Brock stands at (4, 1) facing down;
+    talk to him from (4, 2). The Jr. Trainer at (3, 6) guards the
+    aisle with a line-of-sight battle that interrupts the walk - the
+    executor's battle policy fights it and the walk resumes. Brock
+    himself (Geodude Lv12, Onix Lv14) against the A-mash policy is a
+    level check more than a tactics check: if the party faints, the
+    game blacks out home, the executor re-runs the journey, and the
+    rematch happens levels higher. Verified by the badge bit itself
+    (state.badges), never by dialog progress."""
+    for _attempt in range(40):
+        st = emu.read_state()
+        if "Boulder" in st.badges:
+            return True
+        if st.in_battle:
+            try:
+                ex._battle()
+            except StuckError:
+                return "Boulder" in emu.read_state().badges
+            continue
+        if st.map_id != MAP_PEWTER_GYM:
+            return "Boulder" in emu.read_state().badges  # blacked out
+        if st.in_dialog:
+            emu.close_dialog()
+            continue
+        try:
+            ex._walk_to(MAP_PEWTER_GYM, (4, 2))
+        except Exception:
+            emu.tick(60)                 # trainer battle / NPC shuffle
+            continue
+        emu.press("up")                  # face Brock
+        emu.press("a")                   # talk -> challenge dialog
+        for _ in range(240):
+            st = emu.read_state()
+            if "Boulder" in st.badges:
+                break
+            if st.in_battle:
+                try:
+                    ex._battle()
+                except StuckError:
+                    break
+                continue
+            if st.in_dialog:
+                emu.close_dialog(max_presses=1)
+                continue
+            emu.tick(30)
+        emu.wait_free(max_rounds=60, stable_needed=6)
+        if "Boulder" in emu.read_state().badges:
+            return True
+    return "Boulder" in emu.read_state().badges
 
 
 def main() -> int:
@@ -290,7 +424,8 @@ def main() -> int:
     world = default_world()
     emu = PyBoyEmulator(args.rom)
     memory = EpisodicMemory()
-    ex = Executor(emu, world, ChecklistPlanner(), memory)
+    ex = Executor(emu, world, ChecklistPlanner(), memory,
+                  battle_policy=SmartFightPolicy())
 
     def shot(name: str) -> None:
         emu.screenshot(os.path.join(args.workdir, name))
@@ -313,6 +448,8 @@ def main() -> int:
         memory.record_visit(MAP_OAKS_LAB)   # the lab step is done by hand
         t0 = time.time()
         f0 = emu.pb.frame_count
+        handover_done = False
+        brock_done = False
         for round_no in range(args.max_rounds):
             result = ex.run(max_goals=1)
             st = emu.read_state()
@@ -323,10 +460,37 @@ def main() -> int:
             shot(f"round-{round_no}-{world.map_name(st.map_id)}.png")
             if result.status == "complete":
                 break
+            # The executor's delivery goal completes on *arrival* at
+            # the Lab; the game wants the handover scene itself. Play
+            # it once, right after the delivery round lands us there.
+            delivered = any(
+                e.get("goal") == "goto:40:None"
+                and "Deliver the parcel" in e.get("reason", "")
+                and "error" not in e and "problems" not in e
+                for e in result.log)
+            if delivered and not handover_done \
+                    and emu.read_state().map_id == MAP_OAKS_LAB:
+                handover_done = deliver_parcel_scene(emu, ex)
+                print(f"pokedex handover scene: {handover_done}",
+                      flush=True)
+                shot("04-pokedex-handover.png")
+            # Same pattern at the next spine step: the gym goal
+            # completes on arrival, but the badge itself is an event.
+            if not brock_done and st.map_id == MAP_PEWTER_GYM \
+                    and "Boulder" not in st.badges:
+                try:
+                    brock_done = fight_brock(emu, ex)
+                except Exception as e:
+                    print(f"brock fight errored: {e}", flush=True)
+                    brock_done = False
+                print(f"brock fight: {brock_done}", flush=True)
+                shot("05-boulder-badge.png")
             if result.status in ("stuck", "blocked"):
                 emu.wait_free()          # ride out any scripted scene
                 if result.log:
-                    memory.forgive(result.log[-1]["goal"])
+                    goal_key = result.log[-1].get("goal")
+                    if goal_key:
+                        memory.forgive(goal_key)
         frames = emu.pb.frame_count - f0
         dt = time.time() - t0
         print(f"executor phase: {frames} frames in {dt:.1f}s "
