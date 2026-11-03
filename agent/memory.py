@@ -61,12 +61,24 @@ class EpisodicMemory:
         return False
 
     def failures(self, goal_key: str, state_signature: str) -> int:
-        """How many times this goal failed under an unchanged situation."""
+        """How many times this goal failed under an unchanged situation,
+        counting only failures since the last forgive() for the goal."""
+        forgiven_at = -1
+        for i, e in enumerate(self.events):
+            if e["kind"] == "forgive" and e["goal"] == goal_key:
+                forgiven_at = i
         return sum(
-            1 for e in self.events
-            if e["kind"] == "goal_result" and e["goal"] == goal_key
+            1 for i, e in enumerate(self.events)
+            if i > forgiven_at
+            and e["kind"] == "goal_result" and e["goal"] == goal_key
             and not e["success"] and e["sig"] == state_signature
         )
+
+    def forgive(self, goal_key: str) -> None:
+        """Reset a goal's failure budget after an outside intervention
+        changed the situation (e.g. a dialog was cleared by hand): the
+        earlier failures no longer describe the current attempt."""
+        self.record("forgive", goal=goal_key)
 
     def succeeded(self, goal_key: str) -> bool:
         return any(

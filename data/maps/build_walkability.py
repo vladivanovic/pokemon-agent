@@ -17,10 +17,15 @@ Gen 1 geometry:
     quadrant; a tile = 2x2 entries
   - map tile size = 2 * block dims (MT_MOON_1F: 20x18 blocks = 40x36 tiles)
   - warp/position coords are in TILES
-  - passability rule (from home/overworld.asm CheckTilePassable: the per-
-    tileset list is a "list of passable tiles"): a tile is WALKABLE iff ALL
-    FOUR of its quadrants are in the tileset's walkable list. Any quadrant
-    outside the list (walls, tree tops, water, sign edges) blocks the tile.
+  - passability rule (home/overworld.asm CheckTilePassable, verified
+    against the engine source 2026-11-03): the per-tileset coll_tiles
+    list is a list of PASSABLE tiles - the tile in front of the player
+    is walkable iff its id IS in the list, and blocked otherwise. The
+    cell's id is its block quadrant sample (bottom-left, see below).
+    NOTE: the first version of this generator had the test inverted
+    (walkable iff NOT in the list), which produced plausible-looking but
+    wrong grids that fragmented interiors (Red's bedroom floor read as
+    solid wall). Do not reintroduce that inversion.
 
 Output: v2/pokered_walkability.json
   { map_id: {"name","file","tileset","w","h","walk":[[0/1..]..],
@@ -42,23 +47,73 @@ def alpha_key(c: str) -> str:
     return re.sub(r"[^a-z0-9]", "", c.lower())
 
 
+def parse_connections(pokered: str, id2const, const2id, const2id_alpha,
+                        file_lut) -> dict:
+    """Map connections WITH their edge offsets, from data/maps/headers/.
+
+    A connection "north, ViridianCity, VIRIDIAN_CITY, -5" in Route 1's
+    header means: crossing Route 1's north edge at column x enters
+    Viridian at column x - 2*offset (= x + 10) - the offset is in
+    BLOCKS (2 tiles), verified against the rendered map (Route 1's
+    x=10 path lands in Viridian's entrance corridor at x=20-21, not
+    the sealed tree pocket at x=15 that the tile-unit reading gives).
+    The inverse connection in Viridian's header carries the opposite
+    offset, consistently.
+    """
+    headers = os.path.join(pokered, "data/maps/headers")
+    by_file = {}
+    for fn in os.listdir(headers):
+        conns = []
+        for m in re.finditer(
+                r"connection\s+(north|south|east|west),\s*(\w+),\s*(\w+),\s*(-?\d+)",
+                open(os.path.join(headers, fn)).read()):
+            dst = const2id.get(m.group(3),
+                               const2id_alpha.get(alpha_key(m.group(3))))
+            if dst is not None:
+                conns.append({"dir": m.group(1), "dst": dst,
+                              "offset": int(m.group(4))})
+        by_file[alpha_key(fn[:-4])] = conns
+    out = {}
+    for i, cn in enumerate(id2const):
+        fname = file_lut.get(alpha_key(cn), "")
+        conns = by_file.get(alpha_key(fname), [])
+        if conns:
+            out[str(i)] = conns
+    return out
+
+
 def main() -> None:
     id2const = re.findall(r"\tdw\s+(\w+)_h",
                           open(f"{POKERED}/data/maps/map_header_pointers.asm").read())
     const2id = {c: i for i, c in enumerate(id2const)}
     const2id_alpha = {alpha_key(c): i for i, c in enumerate(id2const)}
 
-    # tileset name -> collision tile ids
+    # tileset name -> collision (passable) tile ids. Labels stack in the
+    # .asm (Mart_Coll:: Pokecenter_Coll:: share one list), so accumulate
+    # pending labels and bind the next list to ALL of them; a regex that
+    # binds only the last label silently empties the others' lists.
     coll_txt = open(f"{POKERED}/data/tilesets/collision_tile_ids.asm").read()
     coll: dict = {}
-    for m in re.finditer(r"(\w+)_Coll::((?:\s*\n\s*coll_tiles[^\n]+)+)", coll_txt):
-        ids = set()
-        for mm in re.finditer(r"coll_tiles\s+([^\n]+)", m.group(2)):
-            for tok in mm.group(1).split(","):
+    pending_labels: list = []
+    current_ids = None
+    for line in coll_txt.splitlines():
+        s = line.strip()
+        lm = re.match(r"(\w+)_Coll::", s)
+        if lm:
+            pending_labels.append(lm.group(1))
+            current_ids = None
+            continue
+        cm = re.match(r"coll_tiles\s+(.*)", s)
+        if cm:
+            if current_ids is None:
+                current_ids = set()
+                for lab in pending_labels:
+                    coll[alpha_key(lab)] = current_ids
+                pending_labels = []
+            for tok in cm.group(1).split(","):
                 tok = tok.strip()
                 if tok.startswith("$"):
-                    ids.add(int(tok[1:], 16))
-        coll[alpha_key(m.group(1))] = ids
+                    current_ids.add(int(tok[1:], 16))
 
     # tileset name -> blockset file (sequential parse: alias labels share one file)
     block_file: dict = {}
@@ -106,18 +161,16 @@ def main() -> None:
         dims[m.group(1)] = (int(m.group(2)), int(m.group(3)))
         dims_by_alpha[alpha_key(m.group(1))] = (int(m.group(2)), int(m.group(3)))
 
-    # Ledge tiles (data/tilesets/ledge_tiles.asm): hop-down-only tiles.
-    # A tile on a ledge is blocked when walking UP but traversable DOWN -
-    # the driver's ledge machinery handles the one-way constraint, so the
-    # grid marks ledge tiles WALKABLE (any-quadrant rule) to keep paths open.
-    # 0x39 is added: it is the ledge FACE tile (in the blocker list because
-    # you cannot walk THROUGH it, but you land on it hopping down and stand
-    # beside it) - proven live on Route 4 where the hop landing rows are
-    # 0x39 and fully traversable.
-    ledge_tiles: set = {0x39}
-    for m in re.finditer(r"db\s+SPRITE_FACING_\w+,\s*\$([0-9A-Fa-f]+),\s*\$([0-9A-Fa-f]+)",
-                         open(f"{POKERED}/data/tilesets/ledge_tiles.asm").read()):
-        ledge_tiles.add(int(m.group(2), 16))   # the ledge tile id
+    # Ledges need no extraction at all (verified against
+    # data/tilesets/ledge_tiles.asm + the engine, 2026-11-03): a ledge
+    # triple is (facing, tile stood on, FACE tile). The face tiles
+    # ($36/$37 down, $27 left, $0D/$1D right on the overworld) are NOT
+    # in the passable lists, so the grid already treats them as walls,
+    # and a jump is merely a shortcut BFS does not need. The previous
+    # version force-added $39 as a "ledge tile" - $39 is the tile you
+    # STAND ON at a ledge top and a common ground tile; flagging it
+    # diced Pallet Town with 90 phantom one-way tiles. Do not emit
+    # ledge data from this file.
 
     bstdir = f"{POKERED}/gfx/blocksets"
     mapsdir = f"{POKERED}/maps"
@@ -190,33 +243,15 @@ def main() -> None:
         if not ok:
             continue
 
-        # Second pass: passability. A tile is blocked iff its id is in the
-        # tileset blocker list, EXCEPT:
-        #  - the cell directly BELOW a ledge face: hopping down lands there
-        #    (proven live on Route 4: the landing rows render 0x23/0x39 -
-        #    blocker-list ids - yet the agent walks them);
-        #  - warp tiles (stair/door art is never in the walkable list).
-        ledge_cols_by_row: dict = {}
-        for ty in range(TH):
-            cols = [tx for tx in range(TW)
-                    if tiles[ty][tx] in ledge_tiles
-                    ]
-            if cols:
-                ledge_cols_by_row[ty] = set(cols)
-        grid = []
-        for ty in range(TH):
-            row = []
-            for tx in range(TW):
-                t = tiles[ty][tx]
-                if t not in blockers:
-                    row.append(1)
-                    continue
-                below = ledge_cols_by_row.get(ty - 1)
-                if below and tx in below:
-                    row.append(1)      # ledge landing zone
-                    continue
-                row.append(0)
-            grid.append(row)
+        # Second pass: passability. coll_tiles is the PASSABLE list (see
+        # header): a cell is walkable iff its sampled id is in the list.
+        # Ledge-face and landing ids ($39, $23 on the overworld) are in
+        # the list already, so no special-casing is needed. Warp cells
+        # are forced walkable afterwards: a door/stair trigger you can
+        # never step onto would be a data bug, not a wall.
+        passable = blockers  # (misnamed in the original: it is the passable set)
+        grid = [[1 if tiles[ty][tx] in passable else 0
+                 for tx in range(TW)] for ty in range(TH)]
         if not ok or len(grid) != TH:
             continue
         warps = []
@@ -225,16 +260,42 @@ def main() -> None:
             warps.append({"x": wp["x"], "y": wp["y"],
                           "dest_id": -1 if dest == "LAST_MAP" else const2id.get(dest, const2id_alpha.get(alpha_key(dest))),
                           "idx": wp["idx"]})
+        for wp in warps:
+            if 0 <= wp["x"] < TW and 0 <= wp["y"] < TH:
+                grid[wp["y"]][wp["x"]] = 1
+        # Coherence fallback: if a multi-warp map's warps cannot reach
+        # each other at all, the extraction for this map is not trusted;
+        # mark it open (warp chains still route) rather than seal it.
+        if len(warps) > 1:
+            from collections import deque
+            seen = {(warps[0]["x"], warps[0]["y"])}
+            dq = deque(seen)
+            while dq:
+                cx, cy = dq.popleft()
+                for dx, dy in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+                    n = (cx + dx, cy + dy)
+                    if 0 <= n[0] < TW and 0 <= n[1] < TH and n not in seen \
+                            and grid[n[1]][n[0]] == 1:
+                        seen.add(n)
+                        dq.append(n)
+            if not any((wp["x"], wp["y"]) in seen for wp in warps[1:]):
+                print(f"  ! {cn}: warps unreachable in extracted grid; "
+                      "falling back to open grid")
+                grid = [[1] * TW for _ in range(TH)]
         out[i] = {"name": cn, "file": fname, "tileset": ts_const,
-                  "w": TW, "h": TH, "walk": grid, "warps": warps,
-                  "ledges": [{"x": tx, "y": ty}
-                             for ty in range(TH)
-                             for tx in range(TW)
-                             if tiles[ty][tx] in ledge_tiles]}
+                  "w": TW, "h": TH, "walk": grid, "warps": warps}
 
     with open(OUT, "w") as f:
         json.dump(out, f)
     print(f"wrote {OUT}: {len(out)} maps")
+
+    conns = parse_connections(POKERED, id2const, const2id, const2id_alpha,
+                              file_lut)
+    conn_out = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "pokered_connections.json")
+    with open(conn_out, "w") as f:
+        json.dump(conns, f)
+    print(f"wrote {conn_out}: {len(conns)} maps with connections")
 
 
 if __name__ == "__main__":

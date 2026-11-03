@@ -34,7 +34,9 @@ class SimEmulator:
         self.map_id = start_map
         self.x, self.y = start_xy
         self.in_battle = False
-        self._entry: Optional[Tuple[int, int, int]] = None  # LAST_MAP memory
+        # wLastMap: LAST_MAP exit warps return to the last OUTSIDE map;
+        # set when leaving an outside map, never updated by indoor maps.
+        self.last_outside: Optional[int] = world.default_last_outside(start_map)
         self._battle_presses_left = 0
         self.blocked: Set[Tuple[int, int, int]] = set()  # (map, x, y) test hooks
         self.press_count = 0
@@ -112,35 +114,42 @@ class SimEmulator:
         for wp in gm.warps:
             if wp.x == nx and wp.y == ny:
                 if wp.is_exit:
-                    if self._entry is not None:
-                        em, ex, ey = self._entry
-                        self.map_id, self.x, self.y = em, ex, ey
-                        self._entry = None
+                    lo = self.last_outside
+                    if lo is not None and 1 <= wp.idx <= len(self.world.maps[lo].warps):
+                        lw = self.world.maps[lo].warps[wp.idx - 1]
+                        self.map_id, self.x, self.y = lo, lw.x, lw.y
                     return
+                if self.world.is_outside(self.map_id):
+                    self.last_outside = self.map_id
                 landing = self.world.warp_landing(wp)
                 if landing is not None:
-                    self._entry = (self.map_id, nx, ny)
                     self.map_id = wp.dest_id
                     self.x, self.y = landing
                 return
 
     def _cross_edge(self, dx: int, dy: int) -> None:
         direction = _DIR_NAME[(dx, dy)]
-        for d, dst in self.world.connections.get(self.map_id, []):
+        for d, dst, offset in self.world.connections.get(self.map_id, []):
             if d != direction:
                 continue
             gm = self.world.maps[dst]
-            # Enter at the opposite edge, nearest walkable tile to our axis.
+            # Header geometry: the offset is in BLOCKS (2 tiles);
+            # entering at (exit axis) - 2*offset. Verified against the
+            # rendered map: Route 1 (offset -5) -> Viridian's entrance
+            # corridor at x=20-21, not the sealed tree pocket at x=15.
+            # Fall back to the nearest walkable edge tile if needed.
             if dx == 0:
                 ey = gm.h - 1 if dy < 0 else 0
-                candidates = sorted(range(gm.w), key=lambda cx: abs(cx - self.x))
+                ideal = self.x - 2 * offset
+                candidates = sorted(range(gm.w), key=lambda cx: abs(cx - ideal))
                 for cx in candidates:
                     if gm.walkable(cx, ey, dx, dy):
                         self.map_id, self.x, self.y = dst, cx, ey
                         return
             else:
                 ex = gm.w - 1 if dx < 0 else 0
-                candidates = sorted(range(gm.h), key=lambda cy: abs(cy - self.y))
+                ideal = self.y - 2 * offset
+                candidates = sorted(range(gm.h), key=lambda cy: abs(cy - ideal))
                 for cy in candidates:
                     if gm.walkable(ex, cy, dx, dy):
                         self.map_id, self.x, self.y = dst, ex, cy
@@ -157,6 +166,7 @@ class SimEmulator:
         else:
             self.x, self.y = gm.w // 2, gm.h // 2
         self.map_id = dest_map
+        self.last_outside = dest_map
         self._sync()
 
     # -- save states --------------------------------------------------------------

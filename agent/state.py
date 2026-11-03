@@ -20,6 +20,10 @@ ADDR_CUR_MAP       = 0xD35E   # wCurMap
 ADDR_MAP_Y         = 0xD361   # wYCoord            VERIFIED (legacy collision.py)
 ADDR_MAP_X         = 0xD362   # wXCoord            VERIFIED (legacy collision.py)
 ADDR_WALK_COUNTER  = 0xCFC5   # wWalkCounter; nonzero = mid-step
+ADDR_TILEMAP       = 0xC3A0   # wTileMap: 20x18 screen tilemap
+TEXTBOX_CORNER_TILE = 0x79    # top-left corner of the standard text box,
+                              # found at tilemap row 12 col 0 while a box
+                              # is open (calibrated live 2026-11-03)
 ADDR_TILE_IN_FRONT = 0xCFC6   # wTileInFrontOfPlayer
 ADDR_IS_IN_BATTLE  = 0xD057   # wIsInBattle; 0 = overworld, >0 = battle type
 ADDR_BADGES        = 0xD356   # wObtainedBadges bitfield
@@ -137,10 +141,17 @@ def read_state(read: Reader) -> GameState:
             max_hp=int.from_bytes(raw[PM_MAX_HP:PM_MAX_HP + 2], "big"),
             moves=[m for m in raw[PM_MOVES:PM_MOVES + 4] if m],
         ))
+    # Dialog detection, calibrated against the live game: a standard
+    # text box puts corner tile 0x79 at tilemap row 12, col 0; when the
+    # box closes, the map tiles return. (Blind A-mashing is not a
+    # substitute - in front of an examinable object like the bedroom
+    # SNES, the press after the box closes just reopens it.)
+    in_dialog = read(ADDR_TILEMAP + 12 * 20, 1)[0] == TEXTBOX_CORNER_TILE
     return GameState(
         map_id=map_id, x=x, y=y, in_battle=in_battle, badges=badges,
         money=money, party=party,
         mid_step=read(ADDR_WALK_COUNTER, 1)[0] != 0,
+        in_dialog=in_dialog,
     )
 
 

@@ -23,9 +23,10 @@ class TestWorld(unittest.TestCase):
             self.w.map_id(name)  # raises KeyError if missing
 
     def test_pallet_is_connected(self):
-        # From outside Red's house to the lab door, and to the north exit.
+        # From outside Red's house to the lab door, and to the north exit
+        # (the gap in the fence line is at x=10-11).
         self.assertIsNotNone(self.w.tile_path(0, (5, 6), (12, 11)))
-        path = self.w.tile_path(0, (5, 6), (9, 0))
+        path = self.w.tile_path(0, (5, 6), (10, 0))
         self.assertIsNotNone(path)
 
     def test_route_pallet_to_pewter(self):
@@ -57,21 +58,33 @@ class TestWorld(unittest.TestCase):
         self.assertIsNone(self.w.route(r10, pp))
         self.assertIsNotNone(self.w.route(r10, pp, frozenset({"surf"})))
 
-    def test_ledge_data_is_recorded(self):
-        # Ledge positions are preserved in the model even though the
-        # static layer does not enforce one-way movement (see world.py).
-        total = sum(len(gm.ledges) for gm in self.w.maps.values())
-        self.assertGreater(total, 0)
+    def test_route1_walks_around_ledges(self):
+        # Route 1's ledge rows block the direct line north, but a walking
+        # route exists around them (their face tiles are impassable in
+        # the grid; the side paths are not).
+        r1 = self.w.map_id("Route1")
+        gm = self.w.maps[r1]
+        south = (10, gm.h - 2)
+        north = (10, 1)
+        self.assertIsNotNone(self.w.tile_path(r1, south, north))
 
     def test_paths_do_not_step_through_doors(self):
         # Red's house door is a warp tile at (5, 5) in Pallet Town: a path
         # from below the house to the north exit must go around it, not
         # through it (stepping on it would teleport into the house).
-        path = self.w.tile_path(0, (5, 6), (9, 0))
+        path = self.w.tile_path(0, (5, 6), (10, 0))
         self.assertIsNotNone(path)
         self.assertNotIn((5, 5), path[1:-1])
         # ...but a path may END on a door (that's how you enter).
         self.assertEqual(self.w.tile_path(0, (5, 6), (12, 11))[-1], (12, 11))
+
+    def test_journey_to_pewter_goes_through_the_forest(self):
+        # Route 2's north edge cannot be walked to directly: the journey
+        # must chain through the Viridian Forest gatehouses and forest.
+        j = self.w.journey(0, (5, 6), self.w.map_id("PewterCity"))
+        self.assertIsNotNone(j)
+        maps_walked = {s[1] for s in j if s[0] == "walk"}
+        self.assertIn(self.w.map_id("ViridianForest"), maps_walked)
 
 
 if __name__ == "__main__":

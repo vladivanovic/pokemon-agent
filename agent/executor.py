@@ -57,6 +57,7 @@ class Executor:
         self.battle_policy = battle_policy or FightPolicy()
         self.presses = 0
         self.log: List[dict] = []
+        self._blocked_tile = None  # set by _follow_tiles on a refused step
 
     # -- primitives -----------------------------------------------------------
     def _press(self, button: str) -> None:
@@ -78,6 +79,14 @@ class Executor:
                 st = self._state()
                 if st.map_id != map_id:
                     return  # a warp carried us elsewhere: leg complete
+                if st.in_battle:
+                    # A wild battle mid-walk eats presses exactly like a
+                    # blocked tile; it must not be recorded as one. Abort
+                    # the walk - run() fights the battle first, then the
+                    # goal is retried on a fresh round.
+                    raise StuckError("battle interrupted walk")
+                if st.in_dialog:
+                    raise StuckError("dialog interrupted walk")
                 if (st.x, st.y) == target:
                     break
                 dx = target[0] - st.x
@@ -90,100 +99,101 @@ class Executor:
                 if after.pos == before:
                     no_move += 1
                     if no_move >= self.stuck_threshold:
+                        # The tile we cannot enter (an NPC is standing
+                        # on it, most likely): _walk_to replans around
+                        # it as a transient obstacle.
+                        self._blocked_tile = target
                         raise StuckError(f"no movement toward {target}")
                 else:
                     no_move = 0
 
     def _walk_to(self, map_id: int, xy) -> None:
-        st = self._state()
-        path = self.world.tile_path(map_id, (st.x, st.y), xy)
-        if path is None:
-            raise StuckError(f"no tile path to {xy} in map {map_id}")
-        self._follow_tiles(map_id, path)
-
-    def _cross_connection(self, direction: str, dst: int) -> None:
-        st = self._state()
-        gm = self.world.maps[st.map_id]
-        dx, dy = _BUTTON_TO_DELTA[{"north": "up", "south": "down",
-                                   "west": "left", "east": "right"}[direction]]
-        # Candidate exit tiles: walkable tiles on the named edge.
-        if dy != 0:
-            ey = 0 if dy < 0 else gm.h - 1
-            exits = [(x, ey) for x in range(gm.w) if gm.walkable(x, ey, dx, dy)]
-        else:
-            ex = 0 if dx < 0 else gm.w - 1
-            exits = [(ex, y) for y in range(gm.h) if gm.walkable(ex, y, dx, dy)]
-        exits.sort(key=lambda t: abs(t[0] - st.x) + abs(t[1] - st.y))
-        last_err: Optional[Exception] = None
-        for ex in exits:
+        blocked = set()
+        last_error: Optional[StuckError] = None
+        for _attempt in range(6):
+            st = self._state()
+            path = self.world.tile_path(map_id, (st.x, st.y), xy,
+                                         blocked=frozenset(blocked))
+            if path is None:
+                raise StuckError(f"no tile path to {xy} in map {map_id}")
             try:
-                self._walk_to(st.map_id, ex)
-                before = self._state()
-                self._press(_DELTA_TO_BUTTON[(dx, dy)])
-                if self._state().map_id == dst:
-                    return
-                last_err = StuckError(f"crossing {direction} did not change map")
+                self._follow_tiles(map_id, path)
+                return
             except StuckError as e:
-                last_err = e
-        raise last_err or StuckError(f"no exit tile for {direction}")
+                # A transient desync (e.g. a state read caught mid-warp)
+                # invalidates the path, not the goal: replan from the
+                # settled position. A tile that refuses entry (an NPC
+                # standing on it) invalidates only that tile: exclude it
+                # and route around. Either way the goal survives a few
+                # replans before we call it stuck - and if every replan
+                # fails, the last error is raised, never swallowed.
+                last_error = e
+                if "non-adjacent" in str(e):
+                    continue
+                if "no movement" in str(e) and self._blocked_tile is not None:
+                    blocked.add(self._blocked_tile)
+                    self._blocked_tile = None
+                    continue
+                raise
+        raise last_error or StuckError(f"walk to {xy} in map {map_id} failed")
 
-    def _take_warp(self, dst: int) -> None:
-        st = self._state()
-        gm = self.world.maps[st.map_id]
-        candidates = [wp for wp in gm.warps if wp.dest_id == dst]
-        if not candidates:
-            # Exit warp (LAST_MAP): leads back to the entrance map.
-            candidates = [wp for wp in gm.warps if wp.is_exit]
-        for wp in candidates:
-            if (st.x, st.y) == (wp.x, wp.y):
-                # Arriving via a warp leaves you standing ON the exit mat,
-                # and warps only fire when stepped onto: step off, step back.
-                self._retrigger_warp(dst)
-                return
-            self._walk_to(st.map_id, (wp.x, wp.y))
-            if self._state().map_id == dst:
-                return
-            # Some doors need one more step onto the mat.
-            self._press("down")
-            if self._state().map_id == dst:
-                return
-            raise StuckError(f"warp to {dst} did not trigger")
-        raise StuckError(f"no warp to {dst} in map {st.map_id}")
-
-    def _retrigger_warp(self, dst: int) -> None:
+    def _retrigger_warp(self) -> None:
+        """Standing on a warp mat that has not fired (you arrive on one):
+        step off and back on."""
+        start_map = self._state().map_id
         opposite = {"up": "down", "down": "up", "left": "right", "right": "left"}
         for button, back in opposite.items():
             before = self._state()
             self._press(button)
             mid = self._state()
-            if mid.map_id == dst:
+            if mid.map_id != start_map:
                 return
             if mid.pos != before.pos:
                 self._press(back)
-                if self._state().map_id == dst:
+                if self._state().map_id != start_map:
                     return
-        raise StuckError(f"could not retrigger warp to {dst}")
+        raise StuckError("could not retrigger warp")
+
+    def _clear_dialog(self, max_presses: int = 60) -> None:
+        for _ in range(max_presses):
+            if not self._state().in_dialog:
+                return
+            self._press("a")
 
     # -- goal execution -----------------------------------------------------------
     def _goto(self, goal: Goal, state: GameState) -> None:
         caps = state.capabilities()
-        route = self.world.route(state.map_id, goal.target_map, caps)
-        if route is None:
-            raise StuckError("route disappeared between validation and execution")
-        for leg in route.legs:
-            if leg.via == "fly":
-                self.emu.fly_to(leg.dst)
-            elif leg.via.startswith("warp"):
-                self._take_warp(leg.dst)
-            elif leg.via.startswith("connection"):
-                self._cross_connection(leg.via.split(" ", 1)[1], leg.dst)
+        steps = self.world.journey(state.map_id, (state.x, state.y),
+                                   goal.target_map, goal.target_xy, caps)
+        if steps is None:
+            raise StuckError("no journey (portal-level route) to target")
+        for step in steps:
+            kind = step[0]
+            if kind == "walk":
+                _, mid, tile = step
+                self._walk_to(mid, tile)
+                st = self._state()
+                if st.map_id == mid:
+                    # If the target was a warp tile, stepping on it should
+                    # have changed the map. If we are standing on it and
+                    # nothing fired, retrigger by stepping off and back on.
+                    gm = self.world.maps[mid]
+                    if any((wp.x, wp.y) == tile for wp in gm.warps) \
+                            and (st.x, st.y) == tile:
+                        self._retrigger_warp()
+            elif kind == "cross":
+                _, direction, dst = step
+                button = {"north": "up", "south": "down",
+                          "west": "left", "east": "right"}[direction]
+                self._press(button)
+                if self._state().map_id != dst:
+                    raise StuckError(f"crossing {direction} did not reach {dst}")
+            elif kind == "fly":
+                self.emu.fly_to(step[1])
             else:
-                raise StuckError(f"unknown leg type: {leg.via}")
-            st = self._state()
-            if st.in_battle:
+                raise StuckError(f"unknown journey step: {step}")
+            if self._state().in_battle:
                 self._battle()
-        if goal.target_xy is not None:
-            self._walk_to(goal.target_map, goal.target_xy)
 
     def _battle(self) -> None:
         n = 0
@@ -201,6 +211,14 @@ class Executor:
                 state = self._state()
                 if state.in_battle:
                     self._battle()
+                    state = self._state()
+                if state.in_dialog:
+                    # A scripted scene (a clerk, a rival, a delivery) is
+                    # holding the game: advance it until the box closes,
+                    # then re-observe. Pressing A only while a box is
+                    # verifiably open is what keeps this from examining
+                    # furniture (see state.py's dialog calibration).
+                    self._clear_dialog()
                     state = self._state()
                 goal = self.planner.propose(state, self.world, self.memory)
                 if goal is None:

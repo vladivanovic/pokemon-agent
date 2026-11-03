@@ -63,24 +63,44 @@ rewrite is summarised at the bottom.
 ## Run it
 
 ```bash
-python3 -m unittest discover -s tests   # 22 tests
+python3 -m unittest discover -s tests   # 23 tests
 python3 run_demo.py                     # simulated opening: Pallet -> Pewter
 ```
 
 The demo walks the actual opening of the game — starter from Oak's Lab,
 Oak's Parcel from Viridian Mart, delivery, then north to Pewter City — in
-~360 simulated button presses.
+530 simulated button presses.
 
-## Wiring it to a real emulator (Orin)
+## On a real ROM (PyBoy)
 
-Implement three verbs against PyBoy and pass the object to `Executor`:
+`agent/pyboy_emu.py` is the hardware backend the wiring notes used to
+sketch: tile-step press semantics (hold until the RAM coordinates
+change), state reads that settle out warp-transition desyncs before
+trusting a position, screenshot/save/load, a dialog signal calibrated
+against the real text box, and `wait_free()` for riding out scripted
+scenes. `run_real.py` drives the whole opening unattended:
 
-- `press(button)` → `pyboy.button(...)` / tick
-- `read_state()` → `agent.state.read_state(...)` over a reader backed by
-  PyBoy memory (addresses in `state.py`; `ADDR_PARTY_MONS` is a named
-  constant so it can be recalibrated in one place against the live game)
-- `save_state()` / `load_state()` → PyBoy state files; snapshot before any
-  planner-chosen venture (e.g. a legendary hunt) so failures are reversible.
+```bash
+python3 run_real.py --rom /path/to/pokered.gbc --workdir run
+```
+
+The ROM is not in this repo; building pret/pokered from source (RGBDS)
+produces a byte-identical retail Red (SHA1
+ea9bcae617fdf159b045185467ae58b2e4a48b9a), which is what this was
+verified against on 2026-11-03. The run, from a fresh boot: title
+screen → Oak's intro with both names typed on the letter grid (VLAD /
+GARY) → bedroom → the Oak intercept cutscene → Squirtle picked → rival
+battle won → Route 1 → Viridian Mart parcel scene → back to Oak's Lab,
+at roughly 2,000–2,800 fps headless (about 35–45× real-time; the whole
+opening takes well under a minute).
+
+Cutscenes are macros, not executor work, by design: the intro/naming
+sequence (a fresh boot is deterministic, so it runs on counted presses
+at a measured cadence — no RAM signal marks the naming screens), the
+Oak intercept, and the starter pick (the lab's Poke Balls are inert
+until the intercept arms them, and the pick crosses a full-screen
+PokeDex page that is not a text box). Each macro uses only verified
+backend primitives and hands control back to the Executor.
 
 For a local model, point `LLMPlanner` at the llama.cpp server
 (`http://localhost:8080`, model name of the served Qwen). Nothing else
@@ -88,20 +108,35 @@ changes: proposals are validated identically whoever makes them.
 
 ## Known approximations (read before trusting)
 
-- The walkability JSON stores one quadrant sample per tile; `world.py`
-  collapses each 2×2 block (walkable iff any sampled quadrant is passable)
-  and forces warp tiles walkable. See the `world.py` docstring. On
-  hardware, live RAM collision is the final arbiter and the stuck
-  detector is the safety net.
-- Ledge tiles are recorded but one-way movement is **not** enforced in
-  the static layer (the extracted ledge set also flags fences and city
-  entrances; enforcing it seals Viridian City).
+- The walkability grids were regenerated from the pokered source after
+  the original extraction was found to have the passability test
+  inverted (the engine's `coll_tiles` lists are *passable* tiles — see
+  `data/maps/build_walkability.py`). Two maps (teleporter floors) use
+  an open-grid fallback. Tile-PAIR collisions beyond ledges are not
+  modelled; on hardware the stuck detector is the safety net.
+- NPCs are transient obstacles the static grid cannot see. The executor
+  handles them two ways: a tile that refuses entry is excluded and the
+  walk replans around it, and a battle or dialog that interrupts a walk
+  aborts the walk (never recorded as a blocked tile) so `run()` can
+  handle the interruption first. A determined NPC standing in a one-tile
+  corridor can still stall a goal until it wanders off.
+- The story checklist judges some steps by *arrival* (reaching the
+  Mart = parcel picked up; reaching the Lab = parcel delivered). The
+  real game gates progress on the event scenes themselves: Viridian's
+  north road stays blocked ("You can't go through here") until Oak's
+  Pokedex handover scene has actually played, which the arrival-only
+  delivery does not trigger. Playing that scene (walk to Oak, face him,
+  run the dialog) is the known next step toward Pewter on hardware.
+- The Mart's exit mat occasionally needs a second attempt to fire
+  (the runner's next round exits cleanly); the retrigger logic is the
+  least-hardened part of the hardware path.
 - CAVERN-tileset maps are marked fully open by the data generator (their
   tile ids don't map through the collision lists); interiors there rely
   on warp chains.
-- Battles and dialog are seams, not implementations: `FightPolicy` is
-  where a battle state machine plugs in, and dialog detection is a
-  backend-supplied signal.
+- Battles are a policy seam: the shipped `FightPolicy` mashes A
+  (Fight → first move), which wins the early game and nothing cleverer.
+  Dialog handling is real but shallow: advance the box while one is
+  verifiably open, never blind-mash (that way lies examining the SNES).
 
 ## Why the rewrite (short version)
 
