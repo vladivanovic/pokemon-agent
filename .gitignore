@@ -27,7 +27,10 @@ __pycache__
 *$py.class
 
 # Distribution / build
-.pokemon_agent.egg-info/
+*.egg-info/
+
+# New agent runtime state (episodic memory logs etc.)
+.pokemon-agent/
 build/
 dist/
 
