@@ -27,9 +27,11 @@ Gen 1 geometry:
     wrong grids that fragmented interiors (Red's bedroom floor read as
     solid wall). Do not reintroduce that inversion.
 
-Output: v2/pokered_walkability.json
+Output: pokered_walkability.json next to this script
   { map_id: {"name","file","tileset","w","h","walk":[[0/1..]..],
-             "warps":[{"x","y","dest_id","idx"}...] }   (dest_id -1 = LAST_MAP)
+             "warps":[{"x","y","dest_id","idx"}...],
+             "ledges":{"x,y":[dx,dy]} (overworld maps only) }
+             (dest_id -1 = LAST_MAP)
 
 Usage:  python3 build_walkability.py /path/to/pokered
 """
@@ -161,16 +163,21 @@ def main() -> None:
         dims[m.group(1)] = (int(m.group(2)), int(m.group(3)))
         dims_by_alpha[alpha_key(m.group(1))] = (int(m.group(2)), int(m.group(3)))
 
-    # Ledges need no extraction at all (verified against
-    # data/tilesets/ledge_tiles.asm + the engine, 2026-11-03): a ledge
-    # triple is (facing, tile stood on, FACE tile). The face tiles
-    # ($36/$37 down, $27 left, $0D/$1D right on the overworld) are NOT
-    # in the passable lists, so the grid already treats them as walls,
-    # and a jump is merely a shortcut BFS does not need. The previous
-    # version force-added $39 as a "ledge tile" - $39 is the tile you
-    # STAND ON at a ledge top and a common ground tile; flagging it
-    # diced Pallet Town with 90 phantom one-way tiles. Do not emit
-    # ledge data from this file.
+    # Ledges (data/tilesets/ledge_tiles.asm + HandleLedges in the
+    # engine): a ledge triple is (facing, tile stood on, FACE tile).
+    # The face tiles ($36/$37 down, $27 left, $0D/$1D right, OVERWORLD
+    # tileset only) are NOT in the passable lists, so the grid treats
+    # them as walls - but a jump is NOT always a shortcut: on Route 4
+    # the ledge drops are the ONLY way from Mt. Moon's exit down to
+    # Cerulean, and a walls-only model finds no route at all (verified
+    # live, 2026-11-03). So emit the FACE cells and their jump
+    # directions as "ledges"; world.py's BFS treats a face as a
+    # pass-through node onto the landing tile beyond it. The earlier
+    # disaster came from flagging $39 - the tile you STAND ON at a
+    # ledge top and a common ground tile - which diced Pallet Town
+    # with 90 phantom one-way tiles. Faces only, never $39/$23.
+    LEDGE_FACES = {0x36: (0, 1), 0x37: (0, 1), 0x27: (-1, 0),
+                   0x0D: (1, 0), 0x1D: (1, 0)}
 
     bstdir = f"{POKERED}/gfx/blocksets"
     mapsdir = f"{POKERED}/maps"
@@ -282,8 +289,16 @@ def main() -> None:
                 print(f"  ! {cn}: warps unreachable in extracted grid; "
                       "falling back to open grid")
                 grid = [[1] * TW for _ in range(TH)]
+        ledges = {}
+        if ts_const.upper() == "OVERWORLD":
+            for ty in range(TH):
+                for tx in range(TW):
+                    delta = LEDGE_FACES.get(tiles[ty][tx])
+                    if delta is not None:
+                        ledges[f"{tx},{ty}"] = list(delta)
         out[i] = {"name": cn, "file": fname, "tileset": ts_const,
-                  "w": TW, "h": TH, "walk": grid, "warps": warps}
+                  "w": TW, "h": TH, "walk": grid, "warps": warps,
+                  **({"ledges": ledges} if ledges else {})}
 
     with open(OUT, "w") as f:
         json.dump(out, f)

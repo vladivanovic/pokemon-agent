@@ -63,7 +63,7 @@ rewrite is summarised at the bottom.
 ## Run it
 
 ```bash
-python3 -m unittest discover -s tests   # 30 tests
+python3 -m unittest discover -s tests   # 37 tests
 python3 run_demo.py                     # simulated opening: Pallet -> Pewter
 ```
 
@@ -121,8 +121,14 @@ changes: proposals are validated identically whoever makes them.
   the original extraction was found to have the passability test
   inverted (the engine's `coll_tiles` lists are *passable* tiles — see
   `data/maps/build_walkability.py`). Two maps (teleporter floors) use
-  an open-grid fallback. Tile-PAIR collisions beyond ledges are not
-  modelled; on hardware the stuck detector is the safety net.
+  an open-grid fallback. Ledge jumps ARE modelled: the generator emits
+  the overworld ledge-face tiles from the engine's `LedgeTiles` table
+  (faces only — flagging the tile you *stand on* was the old disaster),
+  and the pathfinder treats a face as a one-way pass-through onto the
+  landing tile. That is what makes Route 4 crossable: its ledge drops
+  are the only way down to Cerulean, not a shortcut. Other tile-PAIR
+  collisions are not modelled; on hardware the stuck detector is the
+  safety net.
 - NPCs are transient obstacles the static grid cannot see. The executor
   handles them two ways: a tile that refuses entry is excluded and the
   walk replans around it, and a battle or dialog that interrupts a walk
@@ -140,17 +146,24 @@ changes: proposals are validated identically whoever makes them.
   one; its sibling (5, 0) is the real door). When a walk's target is a
   warp tile that refuses, the executor retries via sibling warps to
   the same destination before reporting stuck.
-- After the Boulder Badge the checklist targets Cerulean Gym, and the
-  portal-level journey planner currently finds **no route** from
-  Pewter Gym to it — the Route 3 / Mt. Moon / Route 4 chain is the
-  known next frontier (that, and a Cerulean gym macro, are what stand
-  between the agent and the Cascade Badge).
+- After the Boulder Badge the checklist targets Cerulean Gym. The
+  route now plans end to end (Route 3 → Mt. Moon in the west door and
+  out the B1F east exit → Route 4's ledges → Cerulean), and the agent
+  has walked it on hardware as far as Mt. Moon's lower floor. What
+  stands between it and the Cascade Badge: a Misty fight macro of the
+  Brock kind, and the cavern caveat below.
 - The Mart's exit mat occasionally needs a second attempt to fire
   (the runner's next round exits cleanly); the retrigger logic is the
   least-hardened part of the hardware path.
-- CAVERN-tileset maps are marked fully open by the data generator (their
-  tile ids don't map through the collision lists); interiors there rely
-  on warp chains.
+- CAVERN-tileset maps are marked fully open by the data generator
+  (their tile ids don't map through the collision lists), so their
+  interiors contain phantom-open tiles the real game refuses. The
+  executor compensates by *learning*: a refused tile on a CAVERN map
+  is recorded as a wall for the rest of the session and fed into
+  every later plan (outdoors, a refusal is usually an NPC and stays
+  transient). One bump per real wall, then the cave routes honestly.
+  A warp whose destination map is not in the data at all (the
+  Underground Path interior) is likewise treated as a dead end.
 - Battles are a policy seam. The sim default (`FightPolicy`) still
   mashes A, but the hardware runner uses `SmartFightPolicy`: it reads
   the battle menus' cursor state from RAM and fights with the lead

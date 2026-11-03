@@ -86,6 +86,48 @@ class TestWorld(unittest.TestCase):
         maps_walked = {s[1] for s in j if s[0] == "walk"}
         self.assertIn(self.w.map_id("ViridianForest"), maps_walked)
 
+    def test_route4_ledge_drops_reach_cerulean_side(self):
+        # Route 4 east of Mt. Moon: the only way down to the Cerulean
+        # edge is hopping ledges. From the cave-exit landing, a path to
+        # the east edge must exist and must pass through a ledge face.
+        r4 = self.w.map_id("Route4")
+        gm = self.w.maps[r4]
+        self.assertTrue(gm.ledges, "Route 4 ledge data missing")
+        path = self.w.tile_path(r4, (24, 5), (89, 10))
+        self.assertIsNotNone(path)
+        self.assertTrue(any(t in gm.ledges for t in path),
+                        "path east should hop at least one ledge")
+
+    def test_journey_pewter_gym_to_cerulean_gym(self):
+        # The full Cascade approach: out of the gym, Route 3, Mt. Moon
+        # (in the west door, out the B1F east exit), Route 4's ledges,
+        # Cerulean, and into the gym's map.
+        j = self.w.journey(self.w.map_id("PewterGym"), (4, 2),
+                           self.w.map_id("CeruleanGym"))
+        self.assertIsNotNone(j)
+        maps_walked = {s[1] for s in j if s[0] == "walk"}
+        self.assertIn(self.w.map_id("MtMoonB1F"), maps_walked)
+        self.assertIn(self.w.map_id("CeruleanCity"), maps_walked)
+
+    def test_tile_paths_from_honours_blocked_tiles(self):
+        # Learned walls (the Executor's fix for guessed CAVERN grids)
+        # flow through the journey BFS: with (23, 15) walled off, the
+        # Mt. Moon B1F exit must still be reachable, the long way.
+        b1 = self.w.map_id("MtMoonB1F")
+        found = self.w.tile_paths_from(b1, (24, 15), {(27, 3)},
+                                       blocked=frozenset({(23, 15)}))
+        self.assertIn((27, 3), found)
+        self.assertNotIn((23, 15), found[(27, 3)])
+
+    def test_journey_from_inside_mt_moon_tolerates_unmodelled_maps(self):
+        # Regression (found live): starting inside Mt. Moon, the BFS
+        # expands far enough to meet warps whose destination map is
+        # not in the data (the Underground Path interior, id 119).
+        # That must read as a dead end, not raise KeyError.
+        j = self.w.journey(self.w.map_id("MtMoon1F"), (11, 22),
+                           self.w.map_id("CeruleanGym"))
+        self.assertIsNotNone(j)
+
 
 if __name__ == "__main__":
     unittest.main()

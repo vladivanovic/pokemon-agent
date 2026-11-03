@@ -76,17 +76,22 @@ class GameMap:
     h: int
     walk: List[List[int]]
     warps: List[Warp] = field(default_factory=list)
+    # Ledge face tile -> jump direction. A face is not standable
+    # (walk == 0); stepping into it from behind, in the jump
+    # direction, hops the player onto the tile beyond it. Modelled in
+    # the BFS step generator (_bfs_steps), not here.
+    ledges: Dict[Tile, Tuple[int, int]] = field(default_factory=dict)
+    tileset: str = ""
 
     def in_bounds(self, x: int, y: int) -> bool:
         return 0 <= x < self.w and 0 <= y < self.h
 
     def walkable(self, x: int, y: int, dx: int = 0, dy: int = 0) -> bool:
-        """Is tile (x, y) enterable? Ledges need no rule here: their face
-        tiles are absent from the passable lists, so the grid already
-        treats them as walls and BFS routes around via the side paths -
-        a jump is only a shortcut. (Two earlier attempts at ledge
-        modelling were built on misread data and sealed whole towns;
-        see build_walkability.py.)"""
+        """Is tile (x, y) enterable as a standing tile? Ledge faces are
+        absent from the passable lists, so they read as walls here;
+        jumping one is a movement rule, not a property of the face
+        tile, and lives in _bfs_steps (see build_walkability.py for
+        why the face ids, never the standing-tile ids, are the data)."""
         if not self.in_bounds(x, y):
             return False
         return self.walk[y][x] == 1
@@ -131,6 +136,10 @@ class World:
                      int(wp["idx"]))
                 for wp in m.get("warps", [])
             ]
+            ledges = {}
+            for key, delta in m.get("ledges", {}).items():
+                lx, ly = key.split(",")
+                ledges[(int(lx), int(ly))] = (int(delta[0]), int(delta[1]))
             self.maps[mid] = GameMap(
                 map_id=mid,
                 name=m["name"],
@@ -138,6 +147,8 @@ class World:
                 h=m["h"],
                 walk=self._force_warps(m["walk"], m["w"], m["h"], warps),
                 warps=warps,
+                ledges=ledges,
+                tileset=m.get("tileset", ""),
             )
         # Exit warps (dest = LAST_MAP) lead back to wherever warps into this
         # map. Precompute entrance maps for graph edges.
@@ -217,6 +228,41 @@ class World:
         return (w.x, w.y)
 
     # -- tile-level pathfinding ---------------------------------------------
+    def _bfs_steps(self, gm: GameMap, cur: Tile, blocked,
+                   warp_tiles, exempt):
+        """Tiles reachable from `cur` in one step. `exempt` tiles (the
+        goal / the target set) override the blocked and warp-corridor
+        rules. Ledge jumps appear as two unit steps through a virtual
+        node: entering a face tile is allowed only in its jump
+        direction and only when the landing beyond is standable, and
+        the face node's only exit is that landing - so paths stay
+        unit-step and the follower can treat the face entry as "press
+        toward it and land two tiles on" (see Executor._follow_tiles).
+        """
+        cx, cy = cur
+        if cur in gm.ledges:
+            dx, dy = gm.ledges[cur]
+            b = (cx + dx, cy + dy)
+            if gm.in_bounds(*b) and gm.walkable(b[0], b[1], dx, dy) \
+                    and b not in blocked \
+                    and (b not in warp_tiles or b in exempt):
+                yield b
+            return
+        for dx, dy in DIRS.values():
+            n = (cx + dx, cy + dy)
+            if n in blocked and n not in exempt:
+                continue
+            if gm.walkable(n[0], n[1], dx, dy):
+                if n in warp_tiles and n not in exempt:
+                    continue
+                yield n
+            elif gm.ledges.get(n) == (dx, dy):
+                b = (n[0] + dx, n[1] + dy)
+                if gm.in_bounds(*b) and gm.walkable(b[0], b[1], dx, dy) \
+                        and b not in blocked \
+                        and (b not in warp_tiles or b in exempt):
+                    yield n
+
     def tile_path(self, map_id: int, start: Tile, goal: Tile,
                   blocked: FrozenSet[Tile] = frozenset()) -> Optional[List[Tile]]:
         """BFS shortest path within one map. Includes both endpoints;
@@ -232,18 +278,11 @@ class World:
         prev: Dict[Tile, Optional[Tile]] = {start: None}
         q = deque([start])
         while q:
-            cx, cy = q.popleft()
-            for dx, dy in DIRS.values():
-                n = (cx + dx, cy + dy)
+            cur = q.popleft()
+            for n in self._bfs_steps(gm, cur, blocked, warp_tiles, {goal}):
                 if n in prev:
                     continue
-                if n in blocked and n != goal:
-                    continue
-                if not gm.walkable(n[0], n[1], dx, dy):
-                    continue
-                if n in warp_tiles and n != goal:
-                    continue
-                prev[n] = (cx, cy)
+                prev[n] = cur
                 if n == goal:
                     path = [n]
                     while prev[path[-1]] is not None:
@@ -253,10 +292,14 @@ class World:
         return None
 
     def tile_paths_from(self, map_id: int, start: Tile,
-                        targets: Set[Tile]) -> Dict[Tile, List[Tile]]:
+                        targets: Set[Tile],
+                        blocked: FrozenSet[Tile] = frozenset()
+                        ) -> Dict[Tile, List[Tile]]:
         """One BFS from `start`; returns a path for every reachable target.
         Warp tiles are blocked unless they are targets (doors are
-        destinations, not corridors)."""
+        destinations, not corridors). `blocked` tiles are walls for
+        this call (learned walls on guessed grids - see the Executor);
+        targets are exempt."""
         gm = self.maps[map_id]
         warp_tiles = {(wp.x, wp.y) for wp in gm.warps}
         remaining = set(targets) - {start}
@@ -266,16 +309,12 @@ class World:
         prev: Dict[Tile, Optional[Tile]] = {start: None}
         q = deque([start])
         while q and remaining:
-            cx, cy = q.popleft()
-            for dx, dy in DIRS.values():
-                n = (cx + dx, cy + dy)
+            cur = q.popleft()
+            for n in self._bfs_steps(gm, cur, blocked, warp_tiles,
+                                     targets):
                 if n in prev:
                     continue
-                if not gm.walkable(n[0], n[1], dx, dy):
-                    continue
-                if n in warp_tiles and n not in targets:
-                    continue
-                prev[n] = (cx, cy)
+                prev[n] = cur
                 if n in remaining:
                     remaining.discard(n)
                     path = [n]
@@ -288,7 +327,8 @@ class World:
     # -- journey planning (portal level) --------------------------------------
     def journey(self, src_map: int, src_xy: Tile, dst_map: int,
                 dst_xy: Optional[Tile] = None,
-                capabilities: FrozenSet[str] = frozenset()) -> Optional[list]:
+                capabilities: FrozenSet[str] = frozenset(),
+                blocked=None) -> Optional[list]:
         """Plan a full journey as executable steps, chaining within-map
         walks with warps and connection crossings. Map-level route() can
         promise a connection the map's interior geometry cannot honour
@@ -352,7 +392,9 @@ class World:
                 fly_state = (dst_map, -1, -1, dst_map)
                 parents[fly_state] = (state, [("fly", dst_map)])
                 return reconstruct(fly_state)
-            paths = self.tile_paths_from(mid, (mx, my), set(targets))
+            paths = self.tile_paths_from(
+                mid, (mx, my), set(targets),
+                blocked=(blocked or {}).get(mid, frozenset()))
             for tile, action in targets.items():
                 if tile not in paths:
                     continue
@@ -369,6 +411,11 @@ class World:
                             lw = self.maps[lo].warps[wp.idx - 1]
                             arrivals = [(lo, lw.x, lw.y, lo)]
                     else:
+                        if wp.dest_id not in self.maps:
+                            # A warp into a map the data does not model
+                            # (the Underground Path interior) is a dead
+                            # end for routing, not a crash.
+                            continue
                         if self.maps[wp.dest_id].name in SURF_WARP_DESTINATIONS \
                                 and "surf" not in capabilities:
                             continue

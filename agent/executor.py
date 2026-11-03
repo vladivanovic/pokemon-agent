@@ -13,7 +13,7 @@ the validator can suppress an identical retry and break the loop.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional, Set
 
 from .goals import Goal, validate_goal
 from .memory import EpisodicMemory, state_signature
@@ -212,6 +212,15 @@ class Executor:
         self.presses = 0
         self.log: List[dict] = []
         self._blocked_tile = None  # set by _follow_tiles on a refused step
+        # Tiles that refused entry on a GUESSED grid (the CAVERN
+        # tileset's grids are marked fully open - its tile ids do not
+        # decode through the collision lists). A refusal outdoors is
+        # usually an NPC and stays transient; a refusal on a guessed
+        # grid is the map correcting the model, so it is learned for
+        # the rest of the session and fed to every later plan. Without
+        # this, a phantom-open cave loops forever: bump, replan the
+        # same shortcut, bump again (Mt. Moon B1F (23, 15), live).
+        self._learned_walls: Dict[int, Set[tuple]] = {}
 
     # -- primitives -----------------------------------------------------------
     def _press(self, button: str) -> None:
@@ -228,7 +237,10 @@ class Executor:
     def _follow_tiles(self, map_id: int, tiles) -> None:
         """Walk a within-map tile path (list of (x, y), current pos first)."""
         no_move = 0
-        for target in tiles[1:]:
+        ledges = self.world.maps[map_id].ledges
+        idx = 1
+        while idx < len(tiles):
+            target = tiles[idx]
             while True:
                 st = self._state()
                 if st.map_id != map_id:
@@ -242,6 +254,17 @@ class Executor:
                 if st.in_dialog:
                     raise StuckError("dialog interrupted walk")
                 if (st.x, st.y) == target:
+                    idx += 1
+                    break
+                # Ledge hop: pressing toward a face tile makes the game
+                # hop two tiles, landing on the path entry AFTER the
+                # face. Consume both entries when we see that landing.
+                if idx + 1 < len(tiles) \
+                        and (st.x, st.y) == tiles[idx + 1] \
+                        and ledges.get(target) == (
+                            tiles[idx + 1][0] - target[0],
+                            tiles[idx + 1][1] - target[1]):
+                    idx += 2
                     break
                 dx = target[0] - st.x
                 dy = target[1] - st.y
@@ -262,7 +285,7 @@ class Executor:
                     no_move = 0
 
     def _walk_to(self, map_id: int, xy) -> None:
-        blocked = set()
+        blocked = set(self._learned_walls.get(map_id, ()))
         last_error: Optional[StuckError] = None
         for _attempt in range(6):
             st = self._state()
@@ -286,6 +309,9 @@ class Executor:
                     continue
                 if "no movement" in str(e) and self._blocked_tile is not None:
                     blocked.add(self._blocked_tile)
+                    if self.world.maps[map_id].tileset.upper() == "CAVERN":
+                        self._learned_walls.setdefault(map_id, set()).add(
+                            self._blocked_tile)
                     self._blocked_tile = None
                     continue
                 raise
@@ -318,7 +344,8 @@ class Executor:
     def _goto(self, goal: Goal, state: GameState) -> None:
         caps = state.capabilities()
         steps = self.world.journey(state.map_id, (state.x, state.y),
-                                   goal.target_map, goal.target_xy, caps)
+                                   goal.target_map, goal.target_xy, caps,
+                                   blocked=self._learned_walls)
         if steps is None:
             raise StuckError("no journey (portal-level route) to target")
         for step in steps:

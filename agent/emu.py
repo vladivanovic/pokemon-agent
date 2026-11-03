@@ -108,7 +108,17 @@ class SimEmulator:
         if (self.map_id, nx, ny) in self.blocked:
             return
         if not gm.walkable(nx, ny, dx, dy):
-            return
+            # Ledge jump: stepping into a face tile in its jump
+            # direction hops onto the tile beyond it (the engine
+            # simulates the second step itself on hardware).
+            if gm.ledges.get((nx, ny)) != (dx, dy):
+                return
+            bx, by = nx + dx, ny + dy
+            if not gm.in_bounds(bx, by) \
+                    or not gm.walkable(bx, by, dx, dy) \
+                    or (self.map_id, bx, by) in self.blocked:
+                return
+            nx, ny = bx, by
         self.x, self.y = nx, ny
         # Warps fire when stepped on.
         for wp in gm.warps:

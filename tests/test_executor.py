@@ -5,7 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agent.emu import SimEmulator
-from agent.executor import Executor, SmartFightPolicy
+from agent.executor import Executor, SmartFightPolicy, StuckError
 from agent.memory import EpisodicMemory
 from agent.planner import ChecklistPlanner
 from agent.state import GameState, PartyMon
@@ -63,6 +63,62 @@ def battle_state(moves, pp, top_y=0, item=0, move_idx=0):
                      badges=frozenset(), money=0, party=[mon],
                      menu_top_y=top_y, menu_item=item,
                      move_list_index=move_idx)
+
+
+class TestLedgeHop(unittest.TestCase):
+    def test_sim_step_hops_a_ledge(self):
+        # Find a south-facing Route 4 ledge whose standing and landing
+        # tiles are both standable, stand above it, and step down:
+        # the sim must land two tiles on, on the far side of the face.
+        w = default_world()
+        r4 = w.map_id("Route4")
+        gm = w.maps[r4]
+        face = delta = None
+        for t, d in sorted(gm.ledges.items()):
+            if d != (0, 1):
+                continue
+            stand = (t[0], t[1] - 1)
+            land = (t[0], t[1] + 1)
+            if gm.walkable(*stand) and gm.walkable(*land):
+                face, delta = t, d
+                break
+        self.assertIsNotNone(face, "no usable Route 4 ledge found")
+        emu = SimEmulator(w, r4, (face[0], face[1] - 1))
+        emu.press("down")
+        self.assertEqual((emu.x, emu.y), (face[0], face[1] + 1))
+
+
+class TestLearnedWalls(unittest.TestCase):
+    def test_refusal_on_cavern_grid_is_learned_and_routed_around(self):
+        # Mt. Moon B1F's grid is a guess (CAVERN tileset = marked
+        # open). Wall off (23, 15) in the sim: the first walk bumps
+        # it, the executor must learn it permanently and still reach
+        # the exit ladder by another line.
+        w = default_world()
+        b1 = w.map_id("MtMoonB1F")
+        emu = SimEmulator(w, b1, (24, 15))
+        emu.blocked.add((b1, 23, 15))
+        ex = Executor(emu, w, ChecklistPlanner(), EpisodicMemory(),
+                      stuck_threshold=3)
+        # Force the bump: the straight line west crosses (23, 15).
+        ex._walk_to(b1, (21, 15))
+        self.assertEqual((emu.x, emu.y), (21, 15))
+        self.assertIn((23, 15), ex._learned_walls.get(b1, set()))
+        # And the exit ladder is still reachable afterwards.
+        ex._walk_to(b1, (27, 3))
+        # (27, 3) is the exit warp: arriving warps out to Route 4.
+        self.assertEqual(emu.map_id, w.map_id("Route4"))
+
+    def test_refusal_on_a_real_grid_stays_transient(self):
+        # Outdoors a refusal is usually an NPC: nothing is learned.
+        w = default_world()
+        emu = SimEmulator(w, 0, (5, 6))
+        emu.blocked.add((0, 12, 11))  # the lab door (OVERWORLD map)
+        ex = Executor(emu, w, ChecklistPlanner(), EpisodicMemory(),
+                      stuck_threshold=3)
+        with self.assertRaises(StuckError):
+            ex._walk_to(0, (12, 11))
+        self.assertEqual(ex._learned_walls, {})
 
 
 class TestSmartFightPolicy(unittest.TestCase):
