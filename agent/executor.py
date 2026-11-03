@@ -287,11 +287,23 @@ class Executor:
     def _walk_to(self, map_id: int, xy) -> None:
         blocked = set(self._learned_walls.get(map_id, ()))
         last_error: Optional[StuckError] = None
+        cleared = False
         for _attempt in range(6):
             st = self._state()
             path = self.world.tile_path(map_id, (st.x, st.y), xy,
                                          blocked=frozenset(blocked))
             if path is None:
+                # Fail-soft: learned walls are beliefs, and a belief
+                # that seals the map must not brick the agent (one
+                # false wall - an NPC on a chokepoint - did exactly
+                # that on Mt. Moon B1F). Forget this map's walls once
+                # and replan with fresh eyes; real walls re-teach
+                # themselves with one bump each.
+                if not cleared and blocked:
+                    self._learned_walls.pop(map_id, None)
+                    blocked = set()
+                    cleared = True
+                    continue
                 raise StuckError(f"no tile path to {xy} in map {map_id}")
             try:
                 self._follow_tiles(map_id, path)
@@ -346,6 +358,14 @@ class Executor:
         steps = self.world.journey(state.map_id, (state.x, state.y),
                                    goal.target_map, goal.target_xy, caps,
                                    blocked=self._learned_walls)
+        if steps is None and self._learned_walls:
+            # Same fail-soft as _walk_to, at journey scale: if the
+            # learned walls are the only thing sealing the route,
+            # forget them all and plan once more unlearned.
+            self._learned_walls.clear()
+            steps = self.world.journey(state.map_id, (state.x, state.y),
+                                       goal.target_map, goal.target_xy,
+                                       caps, blocked=self._learned_walls)
         if steps is None:
             raise StuckError("no journey (portal-level route) to target")
         for step in steps:

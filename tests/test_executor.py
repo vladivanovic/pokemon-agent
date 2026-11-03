@@ -109,6 +109,36 @@ class TestLearnedWalls(unittest.TestCase):
         # (27, 3) is the exit warp: arriving warps out to Route 4.
         self.assertEqual(emu.map_id, w.map_id("Route4"))
 
+    def test_learned_wall_seal_clears_and_retries(self):
+        # A false learned wall sealing the start must not brick the
+        # walk: on 'no tile path' the executor forgets the map's
+        # learned walls once and replans (Mt. Moon B1F, live).
+        w = default_world()
+        b1 = w.map_id("MtMoonB1F")
+        emu = SimEmulator(w, b1, (24, 15))
+        ex = Executor(emu, w, ChecklistPlanner(), EpisodicMemory(),
+                      stuck_threshold=3)
+        ex._learned_walls[b1] = {(23, 15), (25, 15), (24, 14), (24, 16)}
+        ex._walk_to(b1, (27, 3))
+        self.assertEqual(emu.map_id, w.map_id("Route4"))
+        self.assertNotIn(b1, ex._learned_walls)
+
+    def test_real_seal_still_raises(self):
+        # With every neighbour genuinely blocked, clearing cannot
+        # invent a path: the walk still reports stuck (and does not
+        # loop forever).
+        w = default_world()
+        b1 = w.map_id("MtMoonB1F")
+        emu = SimEmulator(w, b1, (24, 15))
+        ring = {(23, 15), (25, 15), (24, 14), (24, 16)}
+        for t in ring:
+            emu.blocked.add((b1, t[0], t[1]))
+        ex = Executor(emu, w, ChecklistPlanner(), EpisodicMemory(),
+                      stuck_threshold=3)
+        ex._learned_walls[b1] = set(ring)
+        with self.assertRaises(StuckError):
+            ex._walk_to(b1, (27, 3))
+
     def test_refusal_on_a_real_grid_stays_transient(self):
         # Outdoors a refusal is usually an NPC: nothing is learned.
         w = default_world()
