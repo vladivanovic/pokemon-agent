@@ -496,6 +496,19 @@ class Executor:
             if n > 500:
                 raise StuckError("battle did not end")
 
+    def _record_outcome(self, goal: Goal, state: GameState, success: bool,
+                        note: str = "", executed: bool = True) -> None:
+        """Single funnel for goal outcomes: episodic memory (which the
+        validator's loop-suppression reads) plus the planner's optional
+        outcome hook - the LLM supervisor's training log implements it,
+        the checklist planner does not, so deterministic runs are
+        untouched."""
+        self.memory.record_goal_result(
+            goal.key(), success, state_signature(state), note)
+        hook = getattr(self.planner, "note_outcome", None)
+        if hook is not None:
+            hook(goal, success, note, executed=executed)
+
     # -- main loop ------------------------------------------------------------------
     def run(self, max_goals: int = 50) -> RunResult:
         result = RunResult(status="complete")
@@ -524,9 +537,9 @@ class Executor:
                 self.memory.record("goal_proposed", goal=goal.key(),
                                    ok=verdict.ok)
                 if not verdict.ok:
-                    self.memory.record_goal_result(
-                        goal.key(), False, state_signature(state),
-                        "; ".join(verdict.problems))
+                    self._record_outcome(
+                        goal, state, False, "; ".join(verdict.problems),
+                        executed=False)
                     result.status = "blocked"
                     entry["problems"] = verdict.problems
                     break
@@ -534,22 +547,21 @@ class Executor:
                     # Already there and nothing to walk to: completing this
                     # goal is an *event* (a battle, a conversation), not
                     # movement. Say so instead of fake-succeeding in a loop.
-                    self.memory.record_goal_result(
-                        goal.key(), False, state_signature(state),
-                        "already at destination; goal needs an event/macro")
+                    self._record_outcome(
+                        goal, state, False,
+                        "already at destination; goal needs an event/macro",
+                        executed=False)
                     result.status = "blocked"
                     entry["problems"] = ["event/macro required, not movement"]
                     break
                 try:
                     self._goto(goal, state)
                 except StuckError as e:
-                    self.memory.record_goal_result(
-                        goal.key(), False, state_signature(state), str(e))
+                    self._record_outcome(goal, state, False, str(e))
                     result.status = "stuck"
                     entry["error"] = str(e)
                     break
-                self.memory.record_goal_result(
-                    goal.key(), True, state_signature(state))
+                self._record_outcome(goal, state, True)
                 result.goals_done += 1
             else:
                 result.status = "step_limit"

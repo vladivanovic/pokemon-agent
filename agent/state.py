@@ -73,6 +73,9 @@ class PartyMon:
     # Current PP per move, aligned with `moves` (moves are packed from
     # slot 0, so the first len(moves) PP slots correspond).
     pp: List[int] = field(default_factory=list)
+    # Species index (party_mon struct byte 0). Gen 1 internal order,
+    # NOT National Dex order; 0 = unset (e.g. the simulator's starter).
+    species_id: int = 0
 
     @property
     def hp_frac(self) -> float:
@@ -162,6 +165,7 @@ def read_state(read: Reader) -> GameState:
             max_hp=int.from_bytes(raw[PM_MAX_HP:PM_MAX_HP + 2], "big"),
             moves=moves,
             pp=[raw[PM_PP + i] & 0x3F for i in range(len(moves))],
+            species_id=raw[0],
         ))
     # Dialog detection, calibrated against the live game: a standard
     # text box puts corner tile 0x79 at tilemap row 12, col 0; when the

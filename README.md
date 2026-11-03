@@ -63,7 +63,7 @@ rewrite is summarised at the bottom.
 ## Run it
 
 ```bash
-python3 -m unittest discover -s tests   # 43 tests
+python3 -m unittest discover -s tests   # 52 tests
 python3 run_demo.py                     # simulated opening: Pallet -> Pewter
 ```
 
@@ -114,6 +114,14 @@ and hands control back to the Executor.
 For a local model, point `LLMPlanner` at the llama.cpp server
 (`http://localhost:8080`, model name of the served Qwen). Nothing else
 changes: proposals are validated identically whoever makes them.
+
+Every `LLMPlanner` round is also logged (proposal, verdict, outcome)
+to `~/workspace/pokemon-play/supervisor_log.jsonl` — that log, plus
+scenarios synthesized from the world model, is the training set for a
+fine-tuned supervisor. The full pipeline (log → dataset → LoRA on the
+Orin → stuck-state battery eval) is in
+[`docs/supervisor-training.md`](docs/supervisor-training.md);
+builders/trainers live in `scripts/`.
 
 ## Known approximations (read before trusting)
 
