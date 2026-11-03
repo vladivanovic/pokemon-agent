@@ -63,7 +63,7 @@ rewrite is summarised at the bottom.
 ## Run it
 
 ```bash
-python3 -m unittest discover -s tests   # 40 tests
+python3 -m unittest discover -s tests   # 42 tests
 python3 run_demo.py                     # simulated opening: Pallet -> Pewter
 ```
 

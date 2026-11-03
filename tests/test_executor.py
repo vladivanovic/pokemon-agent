@@ -191,6 +191,41 @@ class TestSmartFightPolicy(unittest.TestCase):
         s = battle_state([33, 145], [35, 30], top_y=14, item=2)
         self.assertEqual(pol.choose(s, 1), "up")
 
+    def test_disabled_move_is_blacklisted_after_two_rejections(self):
+        # Grimer's Disable on Water Gun (live, Mt. Moon B2F): the
+        # engine rejects the selection, PP never moves, the move menu
+        # reopens on the same move. After two such cycles the policy
+        # must give up on Water Gun (index 3) and steer to Bubble.
+        pol = SmartFightPolicy()
+        moves, pp = [33, 39, 145, 55], [35, 30, 30, 17]
+        s = battle_state(moves, pp, top_y=12, item=1)
+        self.assertEqual(pol.choose(s, 0), "down")   # probe
+        s = battle_state(moves, pp, top_y=12, item=2)
+        self.assertEqual(pol.choose(s, 1), "down")   # live steering
+        s = battle_state(moves, pp, top_y=12, item=3)
+        self.assertEqual(pol.choose(s, 2), "down")
+        s = battle_state(moves, pp, top_y=12, item=4)
+        self.assertEqual(pol.choose(s, 3), "a")      # confirm Water Gun
+        # Rejected: menu reopens on Water Gun, PP untouched.
+        s = battle_state(moves, pp, top_y=12, item=4)
+        self.assertEqual(pol.choose(s, 4), "a")      # confirm again
+        # Rejected again: now Bubble (index 2, item 3) is the target.
+        s = battle_state(moves, pp, top_y=12, item=4)
+        self.assertEqual(pol.choose(s, 5), "up")
+
+    def test_executed_move_is_not_mistaken_for_rejected(self):
+        # PP dropping after a confirmation means the move went off:
+        # no rejection is recorded and the target stays Water Gun.
+        pol = SmartFightPolicy()
+        moves = [33, 39, 145, 55]
+        s = battle_state(moves, [35, 30, 30, 17], top_y=12, item=4)
+        self.assertEqual(pol.choose(s, 0), "a")      # confirm (probe-less
+        # stale path may confirm immediately; either way PP tells truth)
+        s = battle_state(moves, [35, 30, 30, 16], top_y=12, item=4)
+        pol.choose(s, 1)
+        self.assertEqual(pol._rejected, set())
+        self.assertEqual(pol._reject_count, 0)
+
     def test_stale_menu_echo_gets_one_probe_only(self):
         # Menu bytes frozen mid-animation: one probe, then back to A
         # (the live stall this design replaced pressed on forever).

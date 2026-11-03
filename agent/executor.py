@@ -126,6 +126,18 @@ class SmartFightPolicy:
         self._live = False          # this menu episode is confirmed live
         self._probe_from = None     # cursor value when the probe fired
         self._last_sig = None       # (menu_top_y, menu_item) at last call
+        # Rejection tracking, per battle. The engine rejects a
+        # DISABLED move's selection without consuming the turn or the
+        # move's PP and reopens the move menu on the same move - a
+        # policy that keeps targeting it loops forever (live: a
+        # Grimer's Disable on Water Gun, Mt. Moon B2F). A confirmed
+        # move whose PP has not moved when the move menu reopens on
+        # it was rejected; twice, and it is blacklisted for the rest
+        # of the battle and the next move takes over.
+        self._rejected: Set[int] = set()
+        self._pending_move: Optional[int] = None
+        self._pending_pp: Optional[int] = None
+        self._reject_count = 0
 
     def _reset_episode(self) -> None:
         self._probed = self._live = False
@@ -135,6 +147,10 @@ class SmartFightPolicy:
         if not state.in_battle or not state.party:
             self._reset_episode()
             self._last_sig = None
+            self._rejected = set()
+            self._pending_move = None
+            self._pending_pp = None
+            self._reject_count = 0
             return "a"
         # Judge a pending probe: if the cursor moved since the probe
         # press, the menu was live; if it is unchanged, the bytes were
@@ -150,6 +166,21 @@ class SmartFightPolicy:
                 self._reset_episode()
             self._last_sig = sig
         mon = state.party[0]
+        # Judge a pending confirmation: PP moved = the move executed
+        # (clear the slate); PP untouched with the move menu reopened
+        # on the same move = the selection was rejected (disabled).
+        if self._pending_move is not None \
+                and self._pending_move < len(mon.pp):
+            if mon.pp[self._pending_move] != self._pending_pp:
+                self._pending_move = None
+                self._reject_count = 0
+            elif state.menu_top_y == 12 \
+                    and state.menu_item == self._pending_move + 1:
+                self._reject_count += 1
+                if self._reject_count >= 2:
+                    self._rejected.add(self._pending_move)
+                    self._pending_move = None
+                    self._reject_count = 0
         # Target: the LAST damaging move that still has PP. If no
         # damaging move has PP, burn the smallest-PP move available -
         # exhausting PP entirely is the only route to the engine's
@@ -158,12 +189,17 @@ class SmartFightPolicy:
         target = None
         for i in range(len(mon.moves) - 1, -1, -1):
             if i < len(mon.pp) and mon.pp[i] > 0 \
-                    and mon.moves[i] not in STATUS_MOVE_IDS:
+                    and mon.moves[i] not in STATUS_MOVE_IDS \
+                    and i not in self._rejected:
                 target = i
                 break
         if target is None:
             usable = [(mon.pp[i], i) for i in range(len(mon.moves))
-                      if i < len(mon.pp) and mon.pp[i] > 0]
+                      if i < len(mon.pp) and mon.pp[i] > 0
+                      and i not in self._rejected]
+            if not usable:  # everything rejected: anything with PP
+                usable = [(mon.pp[i], i) for i in range(len(mon.moves))
+                          if i < len(mon.pp) and mon.pp[i] > 0]
             if usable:
                 target = min(usable)[1]
         if target is None:
@@ -173,6 +209,10 @@ class SmartFightPolicy:
         if state.menu_top_y == 12 and 1 <= state.menu_item <= 4:
             cur = state.menu_item        # 1-based in the move menu
             if cur == target + 1:
+                if self._pending_move != target:
+                    self._pending_move = target
+                    self._pending_pp = mon.pp[target]
+                    self._reject_count = 0
                 return "a"               # on target: confirm the move
             if self._live and state.move_list_index == target:
                 # The engine has registered the pick; the menu bytes
