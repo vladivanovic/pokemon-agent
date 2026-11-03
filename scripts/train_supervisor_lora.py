@@ -132,6 +132,10 @@ def main(argv=None) -> int:
         learning_rate=args.lr,
         lr_scheduler_type="cosine",
         warmup_steps=24,  # 0.03 * 800 examples @ r32; TRL 1.15 dropped warmup_ratio
+        # 4B + fp32 AdamW states = ~40GB on unified memory; the Orin only
+        # has ~20GB free - paged 8-bit optimizer fits (OOM-killed twice,
+        # proven live 2026-10-28).
+        optim="paged_adamw_8bit",
         logging_steps=10,
         save_strategy="epoch",
         save_total_limit=3,

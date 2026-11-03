@@ -106,3 +106,50 @@ Two gates, neither optional:
 A fine-tune that can't beat the stock model behind the validator
 doesn't ship. The validator stays in front either way — training
 improves proposals, it never gets a vote on what executes.
+
+## 5. Orin run notes (2026-10-28): blockers and fixes
+
+First real train on the Orin. The pipeline now runs end to end here;
+what had to change, and why:
+
+- **TRL 1.15 dropped `warmup_ratio`.** `SFTConfig` rejects it; replaced
+  with `warmup_steps=24` (0.03 × the 800-example set). Committed.
+- **fp32 AdamW states don't fit.** 4B base + AdamW keeps ~32 GB of
+  optimizer state alone; the Orin OOM-killed the run twice (once at
+  epoch 2, once at start). `optim="paged_adamw_8bit"` + bitsandbytes
+  fits in ~16 GB total.
+- **Broken Pillow poisoning imports.** The Hermes gateway exports
+  `PYTHONPATH=~/.hermes/installs/<env>/venv/lib/python3.14/site-packages`
+  ahead of everything, and that env's Pillow has no working `_imaging`
+  for python 3.12. Any python that imports PIL here must run with
+  `env -u PYTHONPATH`. (Also fixed by force-installing Pillow 12.3 into
+  that env; do both.)
+- **The Hermes worker cgroup OOM-kills background jobs at ~5 GB.** Two
+  training runs died with exit 137 while the system had 40+ GB free.
+  Long-running or memory-heavy jobs must launch OUTSIDE the worker
+  cgroup: `systemd-run --user --unit=<name> ...` (verified: training
+  peaked ~16 GB, no kills).
+- **Base weights were already local.** The Metasploit project trained
+  the same Qwen3.5-4B; use `--model-dir /home/vlad/models/Qwen3.5-4B`
+  instead of re-downloading (~8.8 GB, both shards verified).
+- **Epoch count.** The oracle task is deterministic; after one epoch
+  eval loss was ~4e-06 with 100% token accuracy. Train with
+  `--epochs 1` — the second epoch adds nothing but OOM risk.
+
+Exact working launch (from the repo root):
+
+    systemd-run --user --unit=pokemon-lora-train \
+      --working-directory=$PWD \
+      env -u PYTHONPATH /home/vlad/hermes_venv/bin/python3 \
+      scripts/train_supervisor_lora.py \
+      --model-dir /home/vlad/models/Qwen3.5-4B \
+      --data-dir dataset/supervisor \
+      --out training_output/qwen_supervisor --epochs 1
+
+Dataset was built with: `scripts/build_supervisor_dataset.py --count
+800 --seed 42` (scenario pool 1560 → 800 examples, 12 distinct target
+maps, no supervisor-log rows yet). Output adapter: 260 MB r=32 under
+`training_output/qwen_supervisor/final/` (gitignored - weights never
+in git). Serving caveat unchanged: the hybrid qwen3_5 arch needs
+vLLM >= 0.32, but transformers-direct works on the Orin and is what
+the battery uses.
