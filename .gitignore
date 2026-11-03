@@ -41,3 +41,6 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
+
+# Training datasets (generated from game ROM data — not for redistribution)
+dataset/
