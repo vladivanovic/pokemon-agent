@@ -63,7 +63,7 @@ rewrite is summarised at the bottom.
 ## Run it
 
 ```bash
-python3 -m unittest discover -s tests   # 42 tests
+python3 -m unittest discover -s tests   # 43 tests
 python3 run_demo.py                     # simulated opening: Pallet -> Pewter
 ```
 
@@ -146,12 +146,16 @@ changes: proposals are validated identically whoever makes them.
   one; its sibling (5, 0) is the real door). When a walk's target is a
   warp tile that refuses, the executor retries via sibling warps to
   the same destination before reporting stuck.
-- After the Boulder Badge the checklist targets Cerulean Gym. The
-  route now plans end to end (Route 3 → Mt. Moon in the west door and
-  out the B1F east exit → Route 4's ledges → Cerulean), and the agent
-  has walked it on hardware as far as Mt. Moon's lower floor. What
-  stands between it and the Cascade Badge: a Misty fight macro of the
-  Brock kind, and the cavern caveat below.
+- After the Boulder Badge the checklist targets Cerulean Gym, and
+  the agent has now walked the whole route on hardware: Route 3 →
+  Mt. Moon (west door in, B1F → B2F detour → out the B1F east exit
+  chamber) → Route 4's ledge drops → Cerulean City → into the gym.
+  Two scene beats on that route have macros in `run_real.py`: the
+  Super Nerd's fossil choice on B2F (the fossils are objects
+  blocking the only door to the exit ladder; take the Helix, he
+  takes the Dome) alongside the parcel handover and Brock. What
+  stands between the agent and the Cascade Badge now is only a
+  Misty fight macro of the Brock kind.
 - The Mart's exit mat occasionally needs a second attempt to fire
   (the runner's next round exits cleanly); the retrigger logic is the
   least-hardened part of the hardware path.

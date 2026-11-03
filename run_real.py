@@ -409,6 +409,37 @@ def fight_brock(emu: PyBoyEmulator, ex: Executor) -> bool:
     return "Boulder" in emu.read_state().badges
 
 
+MAP_MT_MOON_B2F = 61
+
+
+def take_fossil_scene(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Mt. Moon B2F's ladder pocket is reachable only through the
+    Super Nerd's fossil chamber, and the two fossil objects block
+    its only door: after his battle you must TAKE one (he takes the
+    other) before the passage opens. Stand below the Helix Fossil,
+    face it, take it, then prove the door by walking through the
+    tile it stood on. Idempotent: with the fossil already taken the
+    verification walk simply succeeds."""
+    b2 = MAP_MT_MOON_B2F
+    try:
+        ex._walk_to(b2, (13, 7))
+    except StuckError:
+        return False
+    emu.press("up")              # face the Helix Fossil at (13, 6)
+    for i in range(40):
+        st = emu.read_state()
+        if not st.in_dialog and i > 2:
+            break
+        emu.press("a")
+        emu.tick(10)
+    emu.wait_free(max_rounds=6, stable_needed=6)
+    try:
+        ex._walk_to(b2, (13, 5))
+        return True
+    except StuckError:
+        return False
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--rom", required=True, help="path to a Pokemon Red ROM")
@@ -450,6 +481,7 @@ def main() -> int:
         f0 = emu.pb.frame_count
         handover_done = False
         brock_done = False
+        fossil_done = False
         for round_no in range(args.max_rounds):
             result = ex.run(max_goals=1)
             st = emu.read_state()
@@ -485,6 +517,17 @@ def main() -> int:
                     brock_done = False
                 print(f"brock fight: {brock_done}", flush=True)
                 shot("05-boulder-badge.png")
+            # Mt. Moon B2F's exit ladder sits behind the fossil
+            # chamber: the first round that ends on B2F, play the
+            # fossil scene (it is on the way out regardless).
+            if not fossil_done and st.map_id == MAP_MT_MOON_B2F:
+                try:
+                    fossil_done = take_fossil_scene(emu, ex)
+                except Exception as e:
+                    print(f"fossil scene errored: {e}", flush=True)
+                    fossil_done = False
+                print(f"fossil scene: {fossil_done}", flush=True)
+                shot("06-fossil.png")
             if result.status in ("stuck", "blocked"):
                 emu.wait_free()          # ride out any scripted scene
                 if result.log:
