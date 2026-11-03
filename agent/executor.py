@@ -212,14 +212,14 @@ class Executor:
         self.presses = 0
         self.log: List[dict] = []
         self._blocked_tile = None  # set by _follow_tiles on a refused step
-        # Tiles that refused entry on a GUESSED grid (the CAVERN
-        # tileset's grids are marked fully open - its tile ids do not
-        # decode through the collision lists). A refusal outdoors is
-        # usually an NPC and stays transient; a refusal on a guessed
-        # grid is the map correcting the model, so it is learned for
-        # the rest of the session and fed to every later plan. Without
-        # this, a phantom-open cave loops forever: bump, replan the
-        # same shortcut, bump again (Mt. Moon B1F (23, 15), live).
+        # Tiles that refused entry on a CAVERN map. Cave grids are
+        # decoded like everywhere else, but their mixed rock/floor
+        # edge cells are where a one-quadrant sample can still lie,
+        # so a refusal there is the map correcting the model: learned
+        # for the rest of the session and fed to every later plan.
+        # A refusal outdoors is usually an NPC and stays transient.
+        # (This began as the workaround for the era when CAVERN grids
+        # were marked fully open; it stays as the safety net.)
         self._learned_walls: Dict[int, Set[tuple]] = {}
 
     # -- primitives -----------------------------------------------------------
@@ -286,23 +286,35 @@ class Executor:
 
     def _walk_to(self, map_id: int, xy) -> None:
         blocked = set(self._learned_walls.get(map_id, ()))
+        learned_here: Set[tuple] = set()
         last_error: Optional[StuckError] = None
-        cleared = False
+        cleared = 0
         for _attempt in range(6):
             st = self._state()
             path = self.world.tile_path(map_id, (st.x, st.y), xy,
                                          blocked=frozenset(blocked))
             if path is None:
-                # Fail-soft: learned walls are beliefs, and a belief
-                # that seals the map must not brick the agent (one
-                # false wall - an NPC on a chokepoint - did exactly
-                # that on Mt. Moon B1F). Forget this map's walls once
-                # and replan with fresh eyes; real walls re-teach
-                # themselves with one bump each.
-                if not cleared and blocked:
+                # Fail-soft, layered: learned walls are beliefs, and a
+                # belief that seals the map must not brick the agent
+                # (one false wall - an NPC on a chokepoint - did that
+                # on Mt. Moon B1F). But forgetting is lossy too: a
+                # global wipe in probe43 erased a whole floor's
+                # hard-won walls because a DIFFERENT floor sealed.
+                # So forget in layers: first only the walls learned
+                # during this call (the newest beliefs are the most
+                # suspect), then the map's whole learned set, and
+                # only then report stuck.
+                if cleared == 0 and learned_here:
+                    for t in learned_here:
+                        blocked.discard(t)
+                        self._learned_walls.get(map_id, set()).discard(t)
+                    learned_here = set()
+                    cleared = 1
+                    continue
+                if cleared <= 1 and blocked:
                     self._learned_walls.pop(map_id, None)
                     blocked = set()
-                    cleared = True
+                    cleared = 2
                     continue
                 raise StuckError(f"no tile path to {xy} in map {map_id}")
             try:
@@ -324,6 +336,7 @@ class Executor:
                     if self.world.maps[map_id].tileset.upper() == "CAVERN":
                         self._learned_walls.setdefault(map_id, set()).add(
                             self._blocked_tile)
+                        learned_here.add(self._blocked_tile)
                     self._blocked_tile = None
                     continue
                 raise
@@ -358,11 +371,13 @@ class Executor:
         steps = self.world.journey(state.map_id, (state.x, state.y),
                                    goal.target_map, goal.target_xy, caps,
                                    blocked=self._learned_walls)
-        if steps is None and self._learned_walls:
-            # Same fail-soft as _walk_to, at journey scale: if the
-            # learned walls are the only thing sealing the route,
-            # forget them all and plan once more unlearned.
-            self._learned_walls.clear()
+        if steps is None and self._learned_walls.get(state.map_id):
+            # Same fail-soft as _walk_to, scoped to the map the
+            # journey starts in: another map's walls may be sealing a
+            # later leg, but _walk_to's layered forgetting handles
+            # leg-level seals when the agent gets there - a global
+            # wipe here cost a whole floor its learned walls (live).
+            self._learned_walls.pop(state.map_id, None)
             steps = self.world.journey(state.map_id, (state.x, state.y),
                                        goal.target_map, goal.target_xy,
                                        caps, blocked=self._learned_walls)

@@ -110,14 +110,31 @@ class TestWorld(unittest.TestCase):
         self.assertIn(self.w.map_id("CeruleanCity"), maps_walked)
 
     def test_tile_paths_from_honours_blocked_tiles(self):
-        # Learned walls (the Executor's fix for guessed CAVERN grids)
-        # flow through the journey BFS: with (23, 15) walled off, the
-        # Mt. Moon B1F exit must still be reachable, the long way.
+        # Learned walls (the Executor's safety net) flow through the
+        # journey BFS: wall off a cell on the direct line through a
+        # Mt. Moon B1F room and the target must still be reachable,
+        # the long way.
         b1 = self.w.map_id("MtMoonB1F")
-        found = self.w.tile_paths_from(b1, (24, 15), {(27, 3)},
-                                       blocked=frozenset({(23, 15)}))
-        self.assertIn((27, 3), found)
-        self.assertNotIn((23, 15), found[(27, 3)])
+        plain = self.w.tile_path(b1, (20, 8), (20, 11))
+        self.assertIsNotNone(plain)
+        self.assertIn((20, 10), plain)  # the straight line south
+        found = self.w.tile_paths_from(b1, (20, 8), {(20, 11)},
+                                       blocked=frozenset({(20, 10)}))
+        self.assertIn((20, 11), found)
+        self.assertNotIn((20, 10), found[(20, 11)])
+
+    def test_mt_moon_b1f_exit_chamber_only_via_b2f(self):
+        # The B1F exit chamber (27, 3) is walled off from the floor's
+        # south side by solid rock; the only way up is the B2F
+        # detour. (The old open-grid data planned a straight walk
+        # through the rock - the root of the Mt. Moon hardware saga.)
+        b1 = self.w.map_id("MtMoonB1F")
+        self.assertIsNone(self.w.tile_path(b1, (25, 15), (27, 3)))
+        steps = self.w.journey(self.w.map_id("PewterGym"), (4, 2),
+                               self.w.map_id("CeruleanGym"))
+        self.assertIsNotNone(steps)
+        walked = [s[1] for s in steps if s[0] == "walk"]
+        self.assertIn(self.w.map_id("MtMoonB2F"), walked)
 
     def test_journey_from_inside_mt_moon_tolerates_unmodelled_maps(self):
         # Regression (found live): starting inside Mt. Moon, the BFS

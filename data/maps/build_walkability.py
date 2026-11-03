@@ -209,25 +209,20 @@ def main() -> None:
         blk = open(blk_path, "rb").read()
         TW, TH = w * 2, h * 2
 
-        # Cavern/dungeon tilesets: pokered tile ids do NOT map to the live
-        # ROM's collision semantics through any simple offset (validated
-        # live on Mt Moon 1F: floor tile $20 renders walkable yet sits in
-        # the Cavern blocker list; rock $10 blocks yet is absent from it).
-        # Mark these grids OPEN (unknown) - the live collision window stays
-        # the local truth and the stall check corrects walls at walk time.
-        # Warp cells are still forced walkable, so portal-chain routing
-        # works. CAVERN covers Mt Moon/Rock Tunnel/Victory Road interiors.
-        if ts_const.upper() == "CAVERN":
-            out[i] = {"name": cn, "file": fname, "tileset": ts_const,
-                      "w": TW, "h": TH, "walk": [[1] * TW for _ in range(TH)],
-                      "warps": [{"x": wp["x"], "y": wp["y"],
-                                 "dest_id": -1 if wp["dest"] == "LAST_MAP"
-                                 else const2id.get(wp["dest"],
-                                                   const2id_alpha.get(alpha_key(wp["dest"]))),
-                                 "idx": wp["idx"]}
-                                for wp in warp_by_file.get(
-                                    obj_lut.get(alpha_key(cn), ""), [])]}
-            continue
+        # CAVERN maps decode with the same rule as everywhere else.
+        # An earlier version marked them OPEN ("tile ids do not map
+        # through the collision lists") - that verdict was reached
+        # while the passable list was still being read as a BLOCKER
+        # list, i.e. during the inversion confusion: floor $20 being
+        # IN the Cavern list means walkable, rock $10 being absent
+        # means blocked, exactly as the rule predicts. The open grids
+        # did real damage before this was caught: they let the
+        # planner draw straight lines through Mt. Moon's rock and
+        # plan a direct B1F walk to the exit chamber, when the true
+        # route detours through B2F. Verified after the fix: the
+        # decoded grids agree with all 46 cave cells the agent has
+        # ever stood on across Mt. Moon 1F/B1F, and refuse every
+        # confirmed wall.
 
         # First pass: rendered tile per cell = block's BOTTOM-LEFT quadrant
         # (base+4) - validated 70/70 against the emulator's live tile_ids on

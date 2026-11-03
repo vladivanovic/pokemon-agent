@@ -63,7 +63,7 @@ rewrite is summarised at the bottom.
 ## Run it
 
 ```bash
-python3 -m unittest discover -s tests   # 39 tests
+python3 -m unittest discover -s tests   # 40 tests
 python3 run_demo.py                     # simulated opening: Pallet -> Pewter
 ```
 
@@ -155,15 +155,20 @@ changes: proposals are validated identically whoever makes them.
 - The Mart's exit mat occasionally needs a second attempt to fire
   (the runner's next round exits cleanly); the retrigger logic is the
   least-hardened part of the hardware path.
-- CAVERN-tileset maps are marked fully open by the data generator
-  (their tile ids don't map through the collision lists), so their
-  interiors contain phantom-open tiles the real game refuses. The
-  executor compensates by *learning*: a refused tile on a CAVERN map
-  is recorded as a wall for the rest of the session and fed into
-  every later plan (outdoors, a refusal is usually an NPC and stays
-  transient). One bump per real wall, then the cave routes honestly.
-  A warp whose destination map is not in the data at all (the
-  Underground Path interior) is likewise treated as a dead end.
+- CAVERN-tileset maps decode with the same rule as everywhere else.
+  They were marked fully open for a while, on a verdict reached while
+  the passable list was still being misread as a blocker list — and
+  the phantom-open grids did real damage: the planner drew straight
+  lines through Mt. Moon's rock and planned a direct B1F walk to the
+  exit chamber, when the true route detours through B2F. The decoded
+  grids agree with every cave cell the agent has ever stood on. As a
+  safety net for mixed edge cells the sample can still get wrong, a
+  refused tile on a CAVERN map is *learned* as a wall for the rest of
+  the session (outdoors, a refusal is usually an NPC and stays
+  transient), and forgetting is layered/fail-soft so a false wall
+  can never seal a map in the model. A warp whose destination map is
+  not in the data at all (the Underground Path interior) is treated
+  as a dead end.
 - Battles are a policy seam. The sim default (`FightPolicy`) still
   mashes A, but the hardware runner uses `SmartFightPolicy`: it reads
   the battle menus' cursor state from RAM and fights with the lead

@@ -90,24 +90,20 @@ class TestLedgeHop(unittest.TestCase):
 
 class TestLearnedWalls(unittest.TestCase):
     def test_refusal_on_cavern_grid_is_learned_and_routed_around(self):
-        # Mt. Moon B1F's grid is a guess (CAVERN tileset = marked
-        # open). Wall off (23, 15) in the sim: the first walk bumps
-        # it, the executor must learn it permanently and still reach
-        # the exit ladder by another line.
+        # A refusal on a CAVERN map (a mixed edge cell the grid got
+        # wrong, most likely) is learned permanently: wall off
+        # (20, 10) in the sim - the straight line south through a
+        # Mt. Moon B1F room crosses it - and the walk must bump,
+        # learn, and detour.
         w = default_world()
         b1 = w.map_id("MtMoonB1F")
-        emu = SimEmulator(w, b1, (24, 15))
-        emu.blocked.add((b1, 23, 15))
+        emu = SimEmulator(w, b1, (20, 8))
+        emu.blocked.add((b1, 20, 10))
         ex = Executor(emu, w, ChecklistPlanner(), EpisodicMemory(),
                       stuck_threshold=3)
-        # Force the bump: the straight line west crosses (23, 15).
-        ex._walk_to(b1, (21, 15))
-        self.assertEqual((emu.x, emu.y), (21, 15))
-        self.assertIn((23, 15), ex._learned_walls.get(b1, set()))
-        # And the exit ladder is still reachable afterwards.
-        ex._walk_to(b1, (27, 3))
-        # (27, 3) is the exit warp: arriving warps out to Route 4.
-        self.assertEqual(emu.map_id, w.map_id("Route4"))
+        ex._walk_to(b1, (20, 11))
+        self.assertEqual((emu.x, emu.y), (20, 11))
+        self.assertIn((20, 10), ex._learned_walls.get(b1, set()))
 
     def test_learned_wall_seal_clears_and_retries(self):
         # A false learned wall sealing the start must not brick the
@@ -115,12 +111,12 @@ class TestLearnedWalls(unittest.TestCase):
         # learned walls once and replans (Mt. Moon B1F, live).
         w = default_world()
         b1 = w.map_id("MtMoonB1F")
-        emu = SimEmulator(w, b1, (24, 15))
+        emu = SimEmulator(w, b1, (20, 9))
         ex = Executor(emu, w, ChecklistPlanner(), EpisodicMemory(),
                       stuck_threshold=3)
-        ex._learned_walls[b1] = {(23, 15), (25, 15), (24, 14), (24, 16)}
-        ex._walk_to(b1, (27, 3))
-        self.assertEqual(emu.map_id, w.map_id("Route4"))
+        ex._learned_walls[b1] = {(19, 9), (21, 9), (20, 8), (20, 10)}
+        ex._walk_to(b1, (20, 11))
+        self.assertEqual((emu.x, emu.y), (20, 11))
         self.assertNotIn(b1, ex._learned_walls)
 
     def test_real_seal_still_raises(self):
@@ -129,15 +125,15 @@ class TestLearnedWalls(unittest.TestCase):
         # loop forever).
         w = default_world()
         b1 = w.map_id("MtMoonB1F")
-        emu = SimEmulator(w, b1, (24, 15))
-        ring = {(23, 15), (25, 15), (24, 14), (24, 16)}
+        emu = SimEmulator(w, b1, (20, 9))
+        ring = {(19, 9), (21, 9), (20, 8), (20, 10)}
         for t in ring:
             emu.blocked.add((b1, t[0], t[1]))
         ex = Executor(emu, w, ChecklistPlanner(), EpisodicMemory(),
                       stuck_threshold=3)
         ex._learned_walls[b1] = set(ring)
         with self.assertRaises(StuckError):
-            ex._walk_to(b1, (27, 3))
+            ex._walk_to(b1, (20, 11))
 
     def test_refusal_on_a_real_grid_stays_transient(self):
         # Outdoors a refusal is usually an NPC: nothing is learned.
