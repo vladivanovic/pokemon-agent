@@ -57,12 +57,12 @@ class TestExecutor(unittest.TestCase):
         self.assertEqual(result.status, "stuck", result.log)
 
 
-def battle_state(moves, pp, top_y=0, item=0, move_idx=0):
+def battle_state(moves, pp, top_y=0, item=0, move_idx=0, dialog=None):
     mon = PartyMon(level=10, hp=30, max_hp=30, moves=moves, pp=pp)
     return GameState(map_id=0, x=0, y=0, in_battle=True,
                      badges=frozenset(), money=0, party=[mon],
                      menu_top_y=top_y, menu_item=item,
-                     move_list_index=move_idx)
+                     move_list_index=move_idx, in_dialog=dialog)
 
 
 class TestLedgeHop(unittest.TestCase):
@@ -212,6 +212,21 @@ class TestSmartFightPolicy(unittest.TestCase):
         # Rejected again: now Bubble (index 2, item 3) is the target.
         s = battle_state(moves, pp, top_y=12, item=4)
         self.assertEqual(pol.choose(s, 5), "up")
+
+    def test_rejection_text_does_not_convict_the_next_move(self):
+        # The probe45 trap: during the 'move is disabled' TEXT the
+        # stale bytes sit at (top 12, item 3) with in_dialog True.
+        # Those reads must not record a confirmation for the move
+        # whose slot that is (Bubble), nor count as its rejection.
+        pol = SmartFightPolicy()
+        moves, pp = [33, 39, 145, 55], [35, 30, 30, 17]
+        s = battle_state(moves, pp, top_y=12, item=4, dialog=False)
+        pol.choose(s, 0)                       # confirm Water Gun live
+        for i in range(1, 5):                  # text phase reads
+            s = battle_state(moves, pp, top_y=12, item=3, dialog=True)
+            pol.choose(s, i)
+        self.assertEqual(pol._rejected, set())
+        self.assertNotEqual(pol._pending_move, 2)
 
     def test_executed_move_is_not_mistaken_for_rejected(self):
         # PP dropping after a confirmation means the move went off:

@@ -167,20 +167,30 @@ class SmartFightPolicy:
             self._last_sig = sig
         mon = state.party[0]
         # Judge a pending confirmation: PP moved = the move executed
-        # (clear the slate); PP untouched with the move menu reopened
-        # on the same move = the selection was rejected (disabled).
+        # (clear the slate); PP untouched with the move menu verifiably
+        # reopened on the same move = the selection was rejected
+        # (disabled). The in_dialog guard is load-bearing: during the
+        # rejection TEXT the stale menu bytes sit on the very slot
+        # that would convict the NEXT move too - the first live
+        # version of this judge blacklisted the whole moveset without
+        # a single PP ever moving (probe45). A live menu reads
+        # in_dialog False; the text phase reads True.
         if self._pending_move is not None \
                 and self._pending_move < len(mon.pp):
             if mon.pp[self._pending_move] != self._pending_pp:
                 self._pending_move = None
                 self._reject_count = 0
             elif state.menu_top_y == 12 \
-                    and state.menu_item == self._pending_move + 1:
+                    and state.menu_item == self._pending_move + 1 \
+                    and state.in_dialog is not True:
                 self._reject_count += 1
                 if self._reject_count >= 2:
                     self._rejected.add(self._pending_move)
                     self._pending_move = None
                     self._reject_count = 0
+                    # Fresh probe for the new target: the episode's
+                    # stale/live verdict was about the old one.
+                    self._reset_episode()
         # Target: the LAST damaging move that still has PP. If no
         # damaging move has PP, burn the smallest-PP move available -
         # exhausting PP entirely is the only route to the engine's
@@ -209,7 +219,8 @@ class SmartFightPolicy:
         if state.menu_top_y == 12 and 1 <= state.menu_item <= 4:
             cur = state.menu_item        # 1-based in the move menu
             if cur == target + 1:
-                if self._pending_move != target:
+                if self._pending_move != target \
+                        and state.in_dialog is not True:
                     self._pending_move = target
                     self._pending_pp = mon.pp[target]
                     self._reject_count = 0
