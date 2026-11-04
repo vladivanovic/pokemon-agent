@@ -87,8 +87,17 @@ def parse_connections(pokered: str, id2const, const2id, const2id_alpha,
 def main() -> None:
     id2const = re.findall(r"\tdw\s+(\w+)_h",
                           open(f"{POKERED}/data/maps/map_header_pointers.asm").read())
-    const2id = {c: i for i, c in enumerate(id2const)}
-    const2id_alpha = {alpha_key(c): i for i, c in enumerate(id2const)}
+    # First occurrence wins: _COPY maps reuse the original's header
+    # label later in the pointer table (e.g. UndergroundPathRoute6_h
+    # at ids 74 and 75), and the assembler's own constant resolution
+    # names the first. A last-wins dict pointed the Underground
+    # Path's exit warp at the $4B copy, orphaning the real house
+    # from the route graph (found 2026-11-04).
+    const2id: dict = {}
+    const2id_alpha: dict = {}
+    for i, c in enumerate(id2const):
+        const2id.setdefault(c, i)
+        const2id_alpha.setdefault(alpha_key(c), i)
 
     # tileset name -> collision (passable) tile ids. Labels stack in the
     # .asm (Mart_Coll:: Pokecenter_Coll:: share one list), so accumulate
@@ -207,6 +216,16 @@ def main() -> None:
         blocks = [bst[j * 16:(j + 1) * 16] for j in range(len(bst) // 16)]
         blockers = coll.get(alpha_key(ts_const), set())
         blk = open(blk_path, "rb").read()
+        if len(blk) < w * h and len(blk) % w == 0:
+            # The const table can overstate a map's height: pokered's
+            # own comment on UNDERGROUND_PATH_NORTH_SOUTH notes its
+            # .blk "is actually 4x23" against a 4x24 const. The .blk
+            # is the ground truth the ROM actually contains; trusting
+            # the taller claim makes the tile loop below read past
+            # the file, flag the map bad and skip it entirely - the
+            # Underground Path interior (map 119) was missing from
+            # the data for exactly this reason (found 2026-11-04).
+            h = len(blk) // w
         TW, TH = w * 2, h * 2
 
         # CAVERN maps decode with the same rule as everywhere else.
