@@ -234,3 +234,29 @@ a separate next go. Raw generations are not in git; the battery v2
 rows are in the supervisor log at
 `~/workspace/pokemon-play/supervisor_log.jsonl` (round results in
 `training_output/*/adapter_v2_battery_results.json`, gitignored).
+
+## 8. Live run (2026-11-05): PyBoy real ROM from probe138 chain head
+
+Setup: chain head `probe138/after-surge.state` transferred from Vlad
+(sha256 2f0d8da6a01fe46cf7281a3d93b1a94090faed217f62361a441fd7242a2b50
+44 verified, 178,108 bytes), working copy `after-surge-work.state`
+booted on PyBoy real ROM (Red, SGB-enhanced). Start verified from RAM:
+VermilionGym (5,2), badges Boulder/Cascade/Thunder, party levels
+31/15/21 (Wartortle/Oddish-Cut/Diglett as specified). Supervisor =
+wired default (adapter v2, inline transformers-direct), logging on.
+Budget: 25 goals / 45 min wall.
+
+Run: 26 supervisor invocations, **all served inline:adapter - stock and
+checklist never took over at the serving level** (the checklist did
+step in 19 times inside LLMPlanner after validator rejections, the
+designed inner chain). Outcomes: 1 executed goal (VermilionCity - the
+executor walked out of the gym to the city, the run's only progress),
+the rest failed against two executor limits: "no journey (portal-level
+route) to target" - **the Diglett's Cave LAST_MAP exit-chaining gap,
+live exactly as predicted** - on the supervisor's sensible
+ViridianCity proposals, and "already at destination" on a same-map
+proposal. Final RAM: VermilionCity (12,20), badges unchanged, party
+unchanged (no battles). End: goal budget consumed; the run stopped at
+the executor's movement limits, not the supervisor's - the proposals
+were valid, the world model could not route them. The Diglett's Cave
+chaining fix is the follow-up work this run points at.
