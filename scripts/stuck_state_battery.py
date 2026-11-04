@@ -167,13 +167,37 @@ def propose(model, tok, context: dict) -> tuple[Goal | None, str, str]:
         {"role": "user", "content": json.dumps(context)},
     ]
     enc = tok.apply_chat_template(msgs, add_generation_prompt=True,
-                                  return_tensors="pt")
+                                  return_tensors="pt", enable_thinking=False)
     ids = enc["input_ids"] if hasattr(enc, "keys") else enc
     out = model.generate(input_ids=ids.to("cuda"), max_new_tokens=512,
                          do_sample=True, temperature=0.2, top_p=1.0)
     text = tok.decode(out[0][ids.shape[-1]:], skip_special_tokens=True)
     try:
-        parsed = json.loads(text[text.index("{"):text.rindex("}") + 1])
+        # first BALANCED {...} object - the models wrap JSON in prose
+        start = text.index("{")
+        depth = 0
+        end = None
+        in_str = False
+        esc = False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = not in_str
+            elif not in_str:
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        end = i + 1
+                        break
+        if end is None:
+            raise ValueError("no balanced JSON object in output")
+        parsed = json.loads(text[start:end])
         goal = Goal(kind="goto",
                     target_map=world.map_id(parsed["target_map_name"]),
                     reason=str(parsed.get("reason", ""))[:200])
