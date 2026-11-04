@@ -55,6 +55,30 @@ FLY_DESTINATIONS = {
 
 DIRS = {"north": (0, -1), "south": (0, 1), "west": (-1, 0), "east": (1, 0)}
 
+# Map scripts that assign wLastMap on entry (pokered scripts/*.asm:
+# each map's _Script does `ld a, <MAP>` / `ld [wLastMap], a`). The
+# generic engine rule (home/overworld.asm WarpFound) only sets
+# wLastMap when warping FROM an outside map, so without these scripts
+# a two-mouthed indoor complex (a cave or tunnel with an entrance
+# lobby on each side) could never exit on its far side: the exit warp
+# would return to whichever outside map you entered from. Each
+# lobby's script re-points wLastMap at its OWN outside map the moment
+# you enter the lobby - from either direction. That is the whole
+# mechanism behind Diglett's Cave and the Underground Path working.
+# Name -> name; resolved to ids at load, missing names skipped.
+LAST_MAP_SCRIPT_MAPS = {
+    "DiglettsCaveRoute2": "Route2",
+    "DiglettsCaveRoute11": "Route11",
+    "UndergroundPathRoute5": "Route5",
+    "UndergroundPathRoute6": "Route6",
+    "UndergroundPathRoute7": "Route7",
+    "UndergroundPathRoute7Copy": "Route7",
+    "UndergroundPathRoute8": "Route8",
+}
+# Route22Gate's script assigns wLastMap by position instead
+# (scripts/Route22Gate.asm: player y < 4 -> ROUTE_23, else ROUTE_22),
+# so it is handled tile-wise in World._script_last_map.
+
 
 @dataclass
 class Warp:
@@ -157,6 +181,10 @@ class World:
             for wp in gm.warps:
                 if wp.dest_id is not None:
                     self._entrances.setdefault(wp.dest_id, set()).add(mid)
+        # wLastMap assignments made by map scripts (see
+        # LAST_MAP_SCRIPT_MAPS): map id -> the outside map id its
+        # entry script stores in wLastMap.
+        self._last_map_script: Dict[int, int] = {}
         # Name lookup must resolve to the canonical map, not a _COPY.
         # pokered ships duplicate maps that reuse the original's header
         # (CERULEAN_TRASHED_HOUSE_COPY $45, UNDERGROUND_PATH_ROUTE_6_COPY
@@ -171,6 +199,13 @@ class World:
         self._name_to_id: Dict[str, int] = {}
         for mid in sorted(self.maps):
             self._name_to_id.setdefault(self.maps[mid].name, mid)
+        for mname, lname in LAST_MAP_SCRIPT_MAPS.items():
+            if mname in self._name_to_id and lname in self._name_to_id:
+                self._last_map_script[self._name_to_id[mname]] = \
+                    self._name_to_id[lname]
+        self._route22_gate_id = self._name_to_id.get("Route22Gate")
+        self._route23_id = self._name_to_id.get("Route23")
+        self._route22_id = self._name_to_id.get("Route22")
         # Connections carry the header offset (in blocks): crossing
         # src's edge at column/row t enters dst at t - 2*offset
         # (see build_walkability.py).
@@ -223,6 +258,27 @@ class World:
                 else:
                     frontier.append(ent)
         return outside_found.pop() if len(outside_found) == 1 else None
+
+    def _script_last_map(self, map_id: int, tile: Tile) -> Optional[int]:
+        """The wLastMap value map_id's entry script assigns, if any.
+        Route22Gate's script is position-dependent (y < 4 -> Route 23,
+        else Route 22; scripts/Route22Gate.asm), the rest are fixed."""
+        if map_id == self._route22_gate_id:
+            return self._route23_id if tile[1] < 4 else self._route22_id
+        return self._last_map_script.get(map_id)
+
+    def _enter_last_map(self, map_id: int, tile: Tile,
+                        carried: Optional[int]) -> Optional[int]:
+        """wLastMap after arriving in map_id at `tile`, having carried
+        `carried` in: a map-script assignment wins, an outside map
+        replaces it with itself (WarpFound's from-outside rule), and
+        anywhere else it carries over unchanged."""
+        scripted = self._script_last_map(map_id, tile)
+        if scripted is not None:
+            return scripted
+        if self.is_outside(map_id):
+            return map_id
+        return carried
 
     # -- lookups -----------------------------------------------------------
     def map_id(self, name: str) -> int:
@@ -356,8 +412,13 @@ class World:
         # Journey state includes wLastMap: LAST_MAP exit warps return to
         # the last OUTSIDE map, so where an exit leads depends on where
         # the journey has been (the forest gates are the famous case).
-        start_lo = src_map if self.is_outside(src_map) \
-            else self.default_last_outside(src_map)
+        # Map scripts can assign it on entry (the two-mouthed cave and
+        # tunnel lobbies) - _enter_last_map applies those assignments
+        # at every arrival, and to the start state here.
+        start_lo = self._script_last_map(src_map, src_xy)
+        if start_lo is None:
+            start_lo = src_map if self.is_outside(src_map) \
+                else self.default_last_outside(src_map)
         start_state = (src_map, src_xy[0], src_xy[1], start_lo)
         # state -> (prev_state, [steps from prev])
         parents: Dict[Tuple[int, int, int, object], Optional[tuple]] = \
@@ -420,9 +481,18 @@ class World:
                     wp = action[1]
                     arrivals = []
                     if wp.is_exit:
-                        if lo is not None and 1 <= wp.idx <= len(self.maps[lo].warps):
-                            lw = self.maps[lo].warps[wp.idx - 1]
-                            arrivals = [(lo, lw.x, lw.y, lo)]
+                        # The exit's destination is wLastMap *at the
+                        # moment of stepping on it*: this map's own
+                        # script may have assigned it on entry (the
+                        # cave/tunnel lobbies), which is what lets a
+                        # through-journey leave by the far mouth.
+                        eff_lo = self._script_last_map(mid, tile)
+                        if eff_lo is None:
+                            eff_lo = lo
+                        if eff_lo is not None and \
+                                1 <= wp.idx <= len(self.maps[eff_lo].warps):
+                            lw = self.maps[eff_lo].warps[wp.idx - 1]
+                            arrivals = [(eff_lo, lw.x, lw.y, eff_lo)]
                     else:
                         if wp.dest_id not in self.maps:
                             # A warp into a map the data does not model
@@ -434,7 +504,8 @@ class World:
                             continue
                         landing = self.warp_landing(wp)
                         if landing:
-                            new_lo = wp.dest_id if self.is_outside(wp.dest_id) else lo
+                            new_lo = self._enter_last_map(
+                                wp.dest_id, landing, lo)
                             arrivals = [(wp.dest_id, landing[0], landing[1], new_lo)]
                     for arr in arrivals:
                         if arr not in parents:
@@ -452,7 +523,8 @@ class World:
                         ly = tile[1] - 2 * off
                     if 0 <= lx < dgm.w and 0 <= ly < dgm.h \
                             and dgm.walkable(lx, ly, dx, dy):
-                        arr = (dst, lx, ly, dst)
+                        arr = (dst, lx, ly,
+                               self._enter_last_map(dst, (lx, ly), lo))
                         if arr not in parents:
                             parents[arr] = (state, [walk_step,
                                                     ("cross", direction, dst)])

@@ -174,6 +174,67 @@ class TestWorld(unittest.TestCase):
         walked = [s[1] for s in j if s[0] == "walk"]
         self.assertIn(house, walked)
 
+    def test_journey_through_digletts_cave_both_ways(self):
+        # Regression (found live twice, fixed 2026-11-05): a journey
+        # that must pass THROUGH Diglett's Cave mid-route planned to
+        # nothing - "no journey (portal-level route) to target" killed
+        # the wired supervisor's Viridian proposals in the live run.
+        # Root cause: the journey BFS tracked wLastMap by the generic
+        # WarpFound rule only (set when warping from an outside map),
+        # but each cave lobby's map script assigns wLastMap to its OWN
+        # outside map on entry (scripts/DiglettsCaveRoute2.asm ->
+        # ROUTE_2, ...Route11.asm -> ROUTE_11). With the tracked value
+        # stuck at the entry side, the far lobby's exit warp resolved
+        # back to the entry map and Route 2 was never generated.
+        vermilion = self.w.map_id("VermilionCity")
+        route2 = self.w.map_id("Route2")
+        cave = self.w.map_id("DiglettsCave")
+        # Vermilion (open city tile; the gym pocket is tree-sealed in
+        # the grid - a separate known gap) through the cave to Route 2.
+        j = self.w.journey(vermilion, (11, 4), route2)
+        self.assertIsNotNone(j)
+        walked = [s[1] for s in j if s[0] == "walk"]
+        self.assertIn(cave, walked)
+        self.assertIn(self.w.map_id("DiglettsCaveRoute2"), walked)
+        # ...and back again: the far lobby's exit must now resolve to
+        # Route 11 / Vermilion, not bounce back to Route 2.
+        j = self.w.journey(route2, (12, 10), vermilion)
+        self.assertIsNotNone(j)
+        walked = [s[1] for s in j if s[0] == "walk"]
+        self.assertIn(cave, walked)
+        self.assertIn(self.w.map_id("DiglettsCaveRoute11"), walked)
+
+    def test_journey_cold_start_inside_digletts_cave(self):
+        # Starting inside the cave (no tracked wLastMap at all - the
+        # static guess gives up: two outside mouths), journeys out of
+        # BOTH mouths must still plan, because entering a lobby
+        # assigns wLastMap by script before any exit is taken.
+        cave = self.w.map_id("DiglettsCave")
+        self.assertIsNotNone(
+            self.w.journey(cave, (37, 30), self.w.map_id("Route2")))
+        self.assertIsNotNone(
+            self.w.journey(cave, (6, 6), self.w.map_id("Route11")))
+
+    def test_last_map_script_lobby_exits_to_its_own_outside_map(self):
+        # The narrow regression: standing in the Route 2 lobby (say we
+        # just walked in from the cave), its exit must land on Route 2
+        # even though nothing in the journey came from Route 2.
+        lobby2 = self.w.map_id("DiglettsCaveRoute2")
+        j = self.w.journey(lobby2, (4, 5), self.w.map_id("Route2"))
+        self.assertIsNotNone(j)
+        # One walk step onto the exit tile, no maps in between.
+        self.assertEqual([s[1] for s in j if s[0] == "walk"], [lobby2])
+
+    def test_ordinary_building_exit_still_returns_to_its_town(self):
+        # The generic LAST_MAP rule must not regress: a single-mouth
+        # building still exits to the town it hangs off.
+        mart = self.w.map_id("ViridianMart")
+        j = self.w.journey(mart, (3, 5), self.w.map_id("ViridianCity"))
+        self.assertIsNotNone(j)
+        gym = self.w.map_id("VermilionGym")
+        j = self.w.journey(gym, (5, 2), self.w.map_id("VermilionCity"))
+        self.assertIsNotNone(j)
+
     def test_journey_from_inside_mt_moon_tolerates_unmodelled_maps(self):
         # Regression (found live): starting inside Mt. Moon, the BFS
         # expands far enough to meet warps whose destination map is

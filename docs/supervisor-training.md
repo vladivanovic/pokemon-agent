@@ -260,3 +260,42 @@ unchanged (no battles). End: goal budget consumed; the run stopped at
 the executor's movement limits, not the supervisor's - the proposals
 were valid, the world model could not route them. The Diglett's Cave
 chaining fix is the follow-up work this run points at.
+
+## 9. LAST_MAP exit chaining fixed (2026-11-05, probe141)
+
+Root cause: `journey()` propagated wLastMap with the engine's
+generic rule only (WarpFound sets it when warping from an outside
+map). But the Diglett's Cave lobbies - and the Underground Path
+lobbies - assign wLastMap in their **map scripts** on entry:
+`scripts/DiglettsCaveRoute2.asm` -> ROUTE_2,
+`scripts/DiglettsCaveRoute11.asm` -> ROUTE_11, same pattern in
+UndergroundPathRoute5/6/7/7Copy/8; Route22Gate assigns it
+position-dependently (y<4 -> ROUTE_23, else ROUTE_22). Under the
+generic rule the far lobby's LAST_MAP exit resolved back to the
+entry-side map, Route 2 was never generated as a journey state,
+and every through-cave journey returned None - the §8 failure.
+
+Fix (`agent/world.py`): a `LAST_MAP_SCRIPT_MAPS` table mirroring
+those scripts; journey seeds and updates wLastMap by script
+assignment when the entered map has one (the tile-aware rule for
+Route22Gate), the generic rule otherwise. `route()` untouched.
+Tests 59/59 (4 new: through-cave journeys both directions, cold
+start inside the cave, a lobby exiting to its own outside map,
+ordinary building-exit regression).
+
+Live (probe141, real ROM, RAM-verified): from a copy of the chain
+head (original untouched, hash verified), exit gym, cut the gym
+tree from the yard side (stand (15,19) facing north - the Surge
+macro approaches from the city side), heal, then ONE continuous
+executor journey Vermilion -> Route 11 -> Diglett's Cave ->
+Route 2: the 6 planned steps above, 3 wild Diglett battles fought
+en route via the run loop's battle/dialog recovery, arrival
+Route 2 (12,10), party unharmed.
+
+Still open (separate follow-up): Vermilion -> ViridianCity still
+returns None. Route 2's cave-mouth pocket (y 2-21) is sealed at
+tile level by the Cut-tree tile class, which tile-level journeys
+don't model - the same class as the Vermilion gym tree. The
+supervisor's ViridianCity proposals would route once the journey
+can pass the far side of Route 2 (or once a Flash leg targets
+Route 2 itself).
