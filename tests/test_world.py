@@ -136,6 +136,44 @@ class TestWorld(unittest.TestCase):
         walked = [s[1] for s in steps if s[0] == "walk"]
         self.assertIn(self.w.map_id("MtMoonB2F"), walked)
 
+    def test_duplicate_map_names_resolve_to_canonical_ids(self):
+        # pokered ships _COPY maps that reuse the original's header
+        # (CERULEAN_TRASHED_HOUSE_COPY $45, UNDERGROUND_PATH_ROUTE_6_
+        # COPY $4B) plus an unused Saffron duplicate. Name lookup must
+        # give the canonical (lowest) id - the game's current-map
+        # byte - or executor walks inside the real map silently
+        # no-op, reading the id mismatch as a warp exit.
+        self.assertEqual(self.w.map_id("CeruleanTrashedHouse"), 62)
+        self.assertEqual(self.w.map_id("UndergroundPathRoute6"), 74)
+        self.assertEqual(self.w.map_id("SaffronCity"), 10)
+
+    def test_underground_path_tunnel_is_modelled(self):
+        # Map 119 (UndergroundPathNorthSouth) was missing from the
+        # extracted data: pokered's map_const overstates its height
+        # (24 rows vs the .blk's 23), and the builder skipped the
+        # map outright. The tunnel journey must exist end to end.
+        h5 = self.w.map_id("UndergroundPathRoute5")
+        h6 = self.w.map_id("UndergroundPathRoute6")
+        tunnel = self.w.map_id("UndergroundPathNorthSouth")
+        self.assertEqual(tunnel, 119)
+        r = self.w.route(h5, h6)
+        self.assertIsNotNone(r)
+        self.assertEqual([leg.dst for leg in r.legs], [119, h6])
+        j = self.w.journey(h5, (3, 7), h6)
+        self.assertIsNotNone(j)
+
+    def test_cerulean_south_journey_goes_through_trashed_house(self):
+        # Cerulean's tree line is sealed: the only walking route to
+        # Route 5 runs through the robbed house, out its back hole
+        # into the yard, and around the east bank (the yard segment
+        # shows up as the house's walk steps in the journey).
+        cc = self.w.map_id("CeruleanCity")
+        house = self.w.map_id("CeruleanTrashedHouse")
+        j = self.w.journey(cc, (19, 18), self.w.map_id("Route5"))
+        self.assertIsNotNone(j)
+        walked = [s[1] for s in j if s[0] == "walk"]
+        self.assertIn(house, walked)
+
     def test_journey_from_inside_mt_moon_tolerates_unmodelled_maps(self):
         # Regression (found live): starting inside Mt. Moon, the BFS
         # expands far enough to meet warps whose destination map is

@@ -157,7 +157,20 @@ class World:
             for wp in gm.warps:
                 if wp.dest_id is not None:
                     self._entrances.setdefault(wp.dest_id, set()).add(mid)
-        self._name_to_id = {m.name: mid for mid, m in self.maps.items()}
+        # Name lookup must resolve to the canonical map, not a _COPY.
+        # pokered ships duplicate maps that reuse the original's header
+        # (CERULEAN_TRASHED_HOUSE_COPY $45, UNDERGROUND_PATH_ROUTE_6_COPY
+        # $4B, an unused Saffron duplicate at $0B), so several ids share
+        # one name in the extracted data. The canonical map is always
+        # the lowest id (the copy constants come later in
+        # map_constants.asm order); a last-wins dict resolved
+        # "CeruleanTrashedHouse" to the $45 copy, whose id never matches
+        # the game's current-map byte - executor walks inside the real
+        # house then silently no-oped, reading the mismatch as a warp
+        # exit (found live, 2026-11-04).
+        self._name_to_id: Dict[str, int] = {}
+        for mid in sorted(self.maps):
+            self._name_to_id.setdefault(self.maps[mid].name, mid)
         # Connections carry the header offset (in blocks): crossing
         # src's edge at column/row t enters dst at t - 2*offset
         # (see build_walkability.py).
