@@ -153,3 +153,46 @@ maps, no supervisor-log rows yet). Output adapter: 260 MB r=32 under
 in git). Serving caveat unchanged: the hybrid qwen3_5 arch needs
 vLLM >= 0.32, but transformers-direct works on the Orin and is what
 the battery uses.
+
+## 6. Stuck-state battery v2 results (2026-11-04): KEEP STOCK
+
+Battery v2 (`scripts/stuck_state_battery.py`, 40 scenarios: 12
+midroute / 8 postbadge / 8 lowhp / 12 control; both contenders through
+`goals.validate_goal`; full rounds in the supervisor log at
+`~/workspace/pokemon-play/supervisor_log.jsonl`, 160 records). Harness
+anomalies from v1 (greedy brace parse, thinking preamble) fixed before
+this run - the scores below are model behavior.
+
+| family    | metric   | stock | adapter |
+|-----------|----------|-------|---------|
+| control   | valid    | 100%  | 100%    |
+| control   | unstick  | 100%  | 100%    |
+| control   | advance  | 58%   | 100%    |
+| midroute  | valid    | 42%   | 0%      |
+| midroute  | unstick  | 42%   | 0%      |
+| postbadge | valid    | 50%   | 0%      |
+| postbadge | unstick  | 50%   | 0%      |
+| lowhp     | valid    | 50%   | 0%      |
+| lowhp     | unstick  | 50%   | 0%      |
+
+**Verdict: NO SHIP** (the rule: the adapter ships only if it beats
+stock on unstick without losing validity or controls - it loses
+unstick outright).
+
+Failure classes, dominant first:
+1. **Adapter: 28/28 stuck scenarios suppressed.** It always proposes
+   the story step's goal - the exact goal that already failed twice -
+   because the training set contains only failure-free oracle
+   trajectories. Failure events in the context are out of
+   distribution; the adapter ignores them and recites the checklist.
+   Perfect checklist follower (control advance 100%), zero recovery.
+2. **Stock: 15/28 suppressed** the same way, but 13/28 proposed a
+   different valid goal - its base-model variety is what unsticks.
+3. Controls: the stock returned a valid-but-wrong target 42% of the
+   time (advance 58%); the adapter was exactly right 100%.
+
+Path forward (waiting for go): the next training round must include
+recovery rows - failure events in the context paired with a DIFFERENT
+validated target. Sources: this battery's stock-recovery positives
+(13, already in the log) plus a recovery oracle for the synthesizer.
+Stock stays the default; logging stays on.
