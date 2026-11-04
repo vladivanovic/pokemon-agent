@@ -763,6 +763,970 @@ def eastward_from_cerulean(emu: PyBoyEmulator, ex: Executor) -> bool:
     return ride_underground_to_vermilion(emu, ex)
 
 
+# ----------------------------------------------------------------------
+# The Vermilion leg: SS Anne -> HM01 Cut -> Lt. Surge.
+# Proven in probes 100-138 (~/workspace/pokemon-play/), November 2026.
+# Two hard-won lessons shape the code below:
+#
+# * The stock SmartFightPolicy cannot be trusted inside Vermilion
+#   Gym. It never reads the battle menu's cursor COLUMN, so it can
+#   open the party screen and A-press the active mon's "already
+#   out" text forever (probe132); and the executor's 4-frame taps
+#   fall between the battle engine's joypad polls during animation
+#   phases. _BattleDriver fixes both: column-aware steering, B to
+#   escape the party screen, a stale-signature guard for the text
+#   phases (the menu bytes freeze mid-animation - the same stale
+#   echo the policy's own probe logic exists for), 10-frame holds,
+#   and a forced-switch branch for after a faint.
+#
+# * The Squirtle line CANNOT learn Cut in Gen 1 (pokered
+#   base_stats: of the HMs it takes only Surf and Strength). Cut
+#   goes on a caught Oddish. And Surge's Raichu (Thunderbolt,
+#   2x into Wartortle) is answered by a cave Diglett: Ground is
+#   immune to every Electric move and Dig is super-effective
+#   into his whole team.
+
+ITEM_POKE_BALL = 0x04
+ITEM_HM01 = 0xC4
+MOVE_CUT = 15
+MOVE_DIG = 91
+SPECIES_ODDISH = 0xB9
+SPECIES_DIGLETT = 0x3B
+
+ADDR_MENU_TOP_Y = 0xCC24
+ADDR_MENU_ITEM = 0xCC26
+ADDR_MENU_COL = 0xCC25
+ADDR_MENU_SCROLL = 0xCC36
+ADDR_ENEMY_SPECIES = 0xCFE5
+ADDR_ENEMY_LEVEL = 0xCFF3
+ADDR_ENEMY_MAX_HP = 0xCFF4
+ADDR_BATTLE_MON_SPECIES = 0xD014
+ADDR_BATTLE_MON_HP = 0xD015
+ADDR_TILE_IN_FRONT = 0xCFC6
+ADDR_FIRST_LOCK_CAN = 0xD743
+ADDR_SECOND_LOCK_CAN = 0xD744
+
+# Base powers (pokered data/moves/moves.asm) for the moves this
+# party carries; the battle driver ranks damaging moves by power
+# because "last slot" is wrong here (Bubblebeam 65 sits in slot 1,
+# Water Gun is only 40). Unknown damaging moves rank 30.
+_MOVE_POWER = {61: 65, 55: 40, 145: 20, 10: 40, 91: 100, 71: 25,
+               15: 50}
+
+
+def _press10(emu: PyBoyEmulator, button: str, settle: int = 25):
+    """A press the battle/menu engines reliably register."""
+    _raw(emu, button, hold=10, settle=settle)
+    emu.tick(20)
+
+
+def _bag_index(emu: PyBoyEmulator, item_id: int):
+    mem = emu.pb.memory
+    for i in range(mem[0xD31D]):
+        if mem[ADDR_BAG_ITEMS + 2 * i] == item_id:
+            return i
+    return None
+
+
+def _bag_count(emu: PyBoyEmulator, item_id: int) -> int:
+    i = _bag_index(emu, item_id)
+    if i is None:
+        return 0
+    return emu.pb.memory[ADDR_BAG_ITEMS + 2 * i + 1]
+
+
+def _party_index_of(emu: PyBoyEmulator, species_id: int):
+    for i, mon in enumerate(emu.read_state().party):
+        if mon.species_id == species_id:
+            return i
+    return None
+
+
+def _ranked_move_fn(emu: PyBoyEmulator):
+    """fn(party idx) -> damaging move indices, best power first."""
+    from agent.executor import STATUS_MOVE_IDS
+
+    def fn(idx):
+        st = emu.read_state()
+        mon = st.party[idx]
+        cands = []
+        for i, mv in enumerate(mon.moves):
+            if mv and mv not in STATUS_MOVE_IDS \
+                    and i < len(mon.pp) and mon.pp[i] > 0:
+                cands.append((_MOVE_POWER.get(mv, 30), i))
+        cands.sort(reverse=True)
+        return [i for _p, i in cands] or [0]
+    return fn
+
+
+def _best_move_fn(emu: PyBoyEmulator):
+    ranked = _ranked_move_fn(emu)
+
+    def fn(idx):
+        return ranked(idx)[0]
+    return fn
+
+
+class _BattleDriver:
+    """Screen-aware battle driver for scripted fights the stock
+    policy wedges on (see the leg header). Handles: intro/send-out
+    text, the main menu (row AND column), the move menu, the party
+    screen (B escapes an accidental opening; after a faint it
+    picks the first healthy replacement), and stale menu bytes
+    during animations (three identical signatures in a row means
+    we are really in a text phase - advance with A)."""
+
+    def __init__(self, emu: PyBoyEmulator):
+        self.emu = emu
+        self.mem = emu.pb.memory
+        # Disable/rejection tracking, per battle (the stock
+        # policy's probe45 lesson, ported): a confirmed move whose
+        # PP has not moved when the move menu reopens on it was
+        # rejected (disabled); twice, and it is blacklisted for
+        # the rest of the battle.
+        self._rejected = set()
+        self._pending = None
+        self._rejects = 0
+
+    def sig(self):
+        m = self.mem
+        return (m[ADDR_MENU_TOP_Y], m[ADDR_MENU_ITEM],
+                m[ADDR_MENU_COL])
+
+    def fight_until_end(self, move_rank, switch_first=None,
+                        max_actions: int = 400) -> bool:
+        """move_rank: fn(active party idx) -> candidate move
+        indices, best first."""
+        emu, mem = self.emu, self.mem
+        switched = switch_first is None
+        actions = 0
+        last_sig = None
+        stale = 0
+        while emu.read_state().in_battle and actions < max_actions:
+            actions += 1
+            my, item, col = self.sig()
+            if (my, item, col) == last_sig:
+                stale += 1
+            else:
+                stale = 0
+                last_sig = (my, item, col)
+            if not switched and my == 14:
+                want_sp = emu.read_state().party[switch_first] \
+                    .species_id
+                for _try in range(3):
+                    self._do_switch(switch_first)
+                    emu.tick(30)
+                    if mem[ADDR_BATTLE_MON_SPECIES] == want_sp:
+                        break
+                switched = True
+                continue
+            if stale >= 3:
+                _press10(emu, "a")
+                emu.tick(15)
+                continue
+            if my == 14:                       # main menu
+                if col == 15:
+                    _press10(emu, "left")
+                elif item == 1:
+                    _press10(emu, "up")
+                else:
+                    _press10(emu, "a")        # FIGHT
+                continue
+            if my == 12:                       # move menu
+                active = self._active_party_idx()
+                mon = emu.read_state().party[active]
+                # Judge a pending confirmation (see __init__).
+                if self._pending is not None:
+                    pidx, ppp = self._pending
+                    if pidx < len(mon.pp) and mon.pp[pidx] != ppp:
+                        self._pending = None
+                        self._rejects = 0
+                    elif item == pidx + 1 \
+                            and not emu.read_state().in_dialog:
+                        self._rejects += 1
+                        if self._rejects >= 2:
+                            self._rejected.add(pidx)
+                            self._pending = None
+                            self._rejects = 0
+                cands = [c for c in move_rank(active)
+                         if c not in self._rejected]
+                want = (cands[0] if cands else
+                        move_rank(active)[0]) + 1
+                if item == want:
+                    if self._pending != (want - 1,
+                                         mon.pp[want - 1]) \
+                            and not emu.read_state().in_dialog:
+                        self._pending = (want - 1, mon.pp[want - 1])
+                        self._rejects = 0
+                    _press10(emu, "a")
+                else:
+                    _press10(emu, "down" if item < want else "up")
+                continue
+            if my == 1:                        # party screen
+                if (mem[ADDR_BATTLE_MON_HP] << 8
+                        | mem[ADDR_BATTLE_MON_HP + 1]) == 0:
+                    repl = self._replacement()
+                    if item == repl:
+                        _press10(emu, "a")
+                    else:
+                        _press10(emu, "down" if item < repl
+                                 else "up")
+                else:
+                    _press10(emu, "b")
+                continue
+            _press10(emu, "a")
+            emu.tick(15)
+        over = not emu.read_state().in_battle
+        if over:
+            self._rejected = set()
+            self._pending = None
+            self._rejects = 0
+        return over
+
+    def _replacement(self) -> int:
+        for i, mon in enumerate(self.emu.read_state().party):
+            if mon.hp > 0:
+                return i
+        return 0
+
+    def _active_party_idx(self) -> int:
+        sp = self.mem[ADDR_BATTLE_MON_SPECIES]
+        for i, mon in enumerate(self.emu.read_state().party):
+            if mon.species_id == sp and mon.hp > 0:
+                return i
+        return 0
+
+    def _do_switch(self, party_idx: int) -> None:
+        emu = self.emu
+        for _ in range(200):
+            if not emu.read_state().in_battle:
+                return
+            my, item, col = self.sig()
+            if my == 14:
+                if col == 9:
+                    _press10(emu, "right")
+                elif item == 1:
+                    _press10(emu, "up")
+                else:
+                    _press10(emu, "a")        # PKMN
+                continue
+            if my == 1:                        # party screen
+                if item == party_idx:
+                    _press10(emu, "a")
+                    emu.tick(40)
+                    return
+                _press10(emu, "down" if item < party_idx else "up")
+                continue
+            _press10(emu, "a")
+            emu.tick(15)
+
+
+# -- wild catching (probe115/126 machinery) --------------------------
+
+def _advance_battle(emu: PyBoyEmulator, rounds: int = 140):
+    """Ride a wild battle to its next decision point: returns
+    'menu' with the main battle menu live, or 'over'."""
+    mem = emu.pb.memory
+
+    def press(button):
+        _raw(emu, button, hold=4, settle=22)
+        emu.tick(8)
+
+    for _ in range(rounds):
+        st = emu.read_state()
+        if not st.in_battle:
+            return "over"
+        if mem[ADDR_MENU_TOP_Y] == 12:
+            press("b")
+            emu.tick(40)
+            continue
+        if mem[ADDR_MENU_TOP_Y] == 14:
+            r0 = mem[ADDR_MENU_ITEM]
+            if r0 in (0, 1):
+                press("down" if r0 == 0 else "up")
+                emu.tick(35)
+                if mem[ADDR_MENU_ITEM] != r0:
+                    press("up" if r0 == 0 else "down")
+                    emu.tick(35)
+                    return "menu"
+            if st.in_dialog:
+                press("a")
+                emu.tick(65)
+            else:
+                emu.tick(30)
+            continue
+        if st.in_dialog:
+            press("a")
+            emu.tick(65)
+            continue
+        emu.tick(30)
+    return None
+
+
+def _steer_byte(emu: PyBoyEmulator, getter, want, rounds: int = 14):
+    mem = emu.pb.memory
+
+    def press(button):
+        _raw(emu, button, hold=4, settle=22)
+        emu.tick(8)
+
+    for _ in range(rounds):
+        cur = getter()
+        if cur == want:
+            return True
+        press("down" if cur < want else "up")
+        emu.tick(30)
+    return getter() == want
+
+
+def _run_away(emu: PyBoyEmulator) -> bool:
+    mem = emu.pb.memory
+    for _ in range(12):
+        if _advance_battle(emu) != "menu":
+            return not emu.read_state().in_battle
+        _steer_byte(emu, lambda: mem[ADDR_MENU_ITEM], 1)
+        # RUN is the bottom-right cell: row 1, column 15
+        for _ in range(14):
+            if mem[ADDR_MENU_COL] == 15:
+                break
+            _raw(emu, "right", hold=4, settle=22)
+            emu.tick(30)
+        _raw(emu, "a", hold=4, settle=22)
+        emu.tick(60)
+        if _advance_battle(emu) == "over":
+            return True
+    return not emu.read_state().in_battle
+
+
+def _throw_ball(emu: PyBoyEmulator) -> bool:
+    mem = emu.pb.memory
+    idx = _bag_index(emu, ITEM_POKE_BALL)
+    if idx is None:
+        return False
+    before = _bag_count(emu, ITEM_POKE_BALL)
+    if _advance_battle(emu) != "menu":
+        return False
+    _steer_byte(emu, lambda: mem[ADDR_MENU_ITEM], 1)
+    for _ in range(14):                        # ITEM: row 1, col 9
+        if mem[ADDR_MENU_COL] == 9:
+            break
+        _raw(emu, "left", hold=4, settle=22)
+        emu.tick(30)
+    _raw(emu, "a", hold=4, settle=22)
+    emu.tick(70)
+    for _ in range(160):
+        st = emu.read_state()
+        if not st.in_battle:
+            return _bag_count(emu, ITEM_POKE_BALL) < before
+        if _bag_count(emu, ITEM_POKE_BALL) < before:
+            return True
+        cur = mem[ADDR_MENU_SCROLL] + mem[ADDR_MENU_ITEM]
+        if cur == idx:
+            _raw(emu, "a", hold=4, settle=22)
+            emu.tick(70)
+            return True
+        _raw(emu, "down" if cur < idx else "up", hold=4, settle=22)
+        emu.tick(30)
+    return _bag_count(emu, ITEM_POKE_BALL) < before
+
+
+def _catch_epilogue(emu: PyBoyEmulator, party_target: int) -> bool:
+    """Ride the catch text and the first-catch Pokedex page, then
+    decline the nickname: the yes/no cursor starts on YES, so a
+    *verified* down + A picks NO (probe115's blind As typed a
+    junk nickname; probe126's verified version is this)."""
+    mem = emu.pb.memory
+
+    def press(button):
+        _raw(emu, button, hold=4, settle=22)
+        emu.tick(8)
+
+    for _ in range(160):
+        st = emu.read_state()
+        if not st.in_battle and len(st.party) >= party_target \
+                and mem[ADDR_MENU_TOP_Y] == 0 and not st.in_dialog:
+            return True
+        if st.in_battle and mem[ADDR_MENU_TOP_Y] not in (0, 12, 14) \
+                and mem[ADDR_MENU_ITEM] == 0:
+            press("down")
+            emu.tick(35)
+            if mem[ADDR_MENU_ITEM] == 1:
+                press("a")
+                emu.tick(60)
+                continue
+        press("a")
+        emu.tick(65)
+    st = emu.read_state()
+    return not st.in_battle and len(st.party) >= party_target
+
+
+def _catch_species(emu: PyBoyEmulator, ex: Executor,
+                   want_species: int, max_encounters: int = 40
+                   ) -> bool:
+    """Pace in place for wild encounters; run from everything
+    that is not want_species, throw balls at it until caught.
+    The caller's party must have balls and room."""
+    mem = emu.pb.memory
+    before = len(emu.read_state().party)
+    for _enc in range(max_encounters):
+        for i in range(150):
+            if emu.read_state().in_battle:
+                break
+            emu.press("left" if i % 2 == 0 else "right")
+            emu.tick(8)
+        if not emu.read_state().in_battle:
+            continue
+        for _ in range(200):
+            if mem[ADDR_ENEMY_SPECIES] != 0 \
+                    and mem[ADDR_ENEMY_MAX_HP] != 0:
+                break
+            emu.tick(10)
+        if mem[ADDR_ENEMY_SPECIES] != want_species:
+            _run_away(emu)
+            continue
+        for _attempt in range(14):
+            _throw_ball(emu)
+            st = emu.read_state()
+            if len(st.party) > before:
+                return _catch_epilogue(emu, before + 1)
+            if _advance_battle(emu) == "over":
+                break
+    return False
+
+
+# -- bag item use: the menuY stage machine (probes 122-124) ---------
+
+def _wait_menu_y(emu: PyBoyEmulator, want: int,
+                 rounds: int = 80) -> bool:
+    mem = emu.pb.memory
+    for _ in range(rounds):
+        if mem[ADDR_MENU_TOP_Y] == want:
+            return True
+        if emu.read_state().in_dialog:
+            _press10(emu, "a")
+            continue
+        emu.tick(30)
+    return mem[ADDR_MENU_TOP_Y] == want
+
+
+def _steer_menu(emu: PyBoyEmulator, getter, want: int,
+                rounds: int = 30) -> bool:
+    mem = emu.pb.memory
+    for _ in range(rounds):
+        cur = getter()
+        if cur == want:
+            return True
+        _press10(emu, "down" if cur < want else "up")
+        emu.tick(20)
+    return getter() == want
+
+
+def _close_menus(emu: PyBoyEmulator) -> None:
+    mem = emu.pb.memory
+    for _ in range(12):
+        if mem[ADDR_MENU_TOP_Y] == 0:
+            return
+        _press10(emu, "b")
+        emu.tick(20)
+
+
+def _use_bag_item_on_mon(emu: PyBoyEmulator, item_id: int,
+                         mon_idx: int) -> bool:
+    """START -> ITEM -> the item -> USE -> party member. Used for
+    HM01: teaches the move into a free slot (the full-party TM
+    delete flow is deliberately NOT ported - probe125's delete
+    misclick cost TM28; see the leg report)."""
+    mem = emu.pb.memory
+    bag_idx = _bag_index(emu, item_id)
+    if bag_idx is None:
+        return False
+    _press10(emu, "start")
+    if not _wait_menu_y(emu, 2):
+        return False
+    if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 2):
+        return False
+    _press10(emu, "a")                         # ITEM
+    if not _wait_menu_y(emu, 4):
+        return False
+    if not _steer_menu(
+            emu, lambda: mem[ADDR_MENU_SCROLL] + mem[ADDR_MENU_ITEM],
+            bag_idx):
+        return False
+    _press10(emu, "a")
+    if not _wait_menu_y(emu, 11):
+        return False
+    _press10(emu, "a")                         # USE
+    if not _wait_menu_y(emu, 1):
+        return False
+    if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], mon_idx):
+        return False
+    _press10(emu, "a")
+    return True
+
+
+# -- the scenes -------------------------------------------------------
+
+def board_ss_anne(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Vermilion dock -> SS Anne -> the captain's cabin. The rival
+    ambushes on 2F (the executor's rides fight him; his post-
+    battle move-learning prompt plays out inside the ride's
+    dialog handling, as in probe101). HARD GATE: HM01 must be in
+    the bag before we leave - the ship departs for good."""
+    world = ex.world
+    dock = world.map_id("VermilionDock")
+    a1 = world.map_id("SSAnne1F")
+    a2 = world.map_id("SSAnne2F")
+    capt = world.map_id("SSAnneCaptainsRoom")
+    vc = world.map_id("VermilionCity")
+    vpc = world.map_id("VermilionPokecenter")
+    if ITEM_HM01 in _bag_items(emu):
+        return True
+    if not _ride_to(emu, ex, dock):
+        return False
+    if not _ride_to(emu, ex, a1):
+        return False
+    if not _ride_to(emu, ex, a2):
+        return False
+    # The 2F corridor is crossed on foot, not by ride: the rival
+    # ambush mid-corridor can wedge the stock battle policy for
+    # hundreds of presses (his Pidgeotto's Sand-Attack spam did
+    # exactly that in the replay, probe140 - the policy ground
+    # through 40 ride rounds without finishing the fight, while
+    # _BattleDriver ended it in seconds). Walk legs + the driver
+    # for the ambush, then step onto the captain's door warp.
+    drv = _BattleDriver(emu)
+
+    def walk_leg(map_id, tile):
+        for _ in range(40):
+            try:
+                ex._walk_to(map_id, tile)
+            except StuckError:
+                pass
+            st = emu.read_state()
+            if st.in_battle:
+                # Burst calls, not one long one: a single
+                # multi-hundred-action call was seen to wedge
+                # where 60-action bursts win the same fight
+                # (probe140 - the driver's stale-signature state
+                # interacts badly with the mid-battle
+                # move-learning prompt's menus over long runs).
+                drv.fight_until_end(_ranked_move_fn(emu),
+                                    max_actions=120)
+                emu.wait_free(max_rounds=8, stable_needed=2)
+                continue
+            if st.map_id != map_id:
+                return True                    # a warp fired
+            if (st.x, st.y) == tile:
+                return True
+            if st.in_dialog:
+                emu.close_dialog(max_presses=1)
+                emu.tick(20)
+                continue
+            # The rival's walk-up scene moves the player/NPCs on
+            # rails for a while; let it settle before retrying.
+            emu.wait_free(max_rounds=6, stable_needed=3)
+        st = emu.read_state()
+        return st.map_id != map_id or (st.x, st.y) == tile
+
+    if not walk_leg(a2, (36, 4)):
+        return False
+    if emu.read_state().map_id != capt:
+        if not _ride_to(emu, ex, capt):
+            return False
+    try:
+        ex._walk_to(capt, (4, 3))
+    except StuckError:
+        return False
+    emu.press("up")                            # face the captain
+    emu.tick(20)
+    emu.press("a")
+    for _ in range(40):
+        if ITEM_HM01 in _bag_items(emu):
+            break
+        if emu.read_state().in_dialog:
+            emu.press("a")
+        emu.tick(20)
+    if ITEM_HM01 not in _bag_items(emu):
+        return False
+    if not _ride_to(emu, ex, a1):
+        return False
+    if not _ride_to(emu, ex, vc):
+        return False
+    if not _ride_to(emu, ex, vpc):
+        return False
+    return heal_at_pokecenter(emu, ex, vpc)
+
+
+def buy_poke_balls(emu: PyBoyEmulator, ex: Executor,
+                   want: int = 10) -> bool:
+    """Buy Poke Balls at Vermilion Mart, verifying the bag count
+    after every press. The shop's stages all read dialog=True and
+    A-riding walks them (welcome -> item list, cursor starts on
+    the ball -> quantity 1 -> confirm), so a press loop gated on
+    the RAM count buys one ball per cycle without the runaway
+    probe104 hit when its loop-riding bought 31."""
+    world = ex.world
+    mart = world.map_id("VermilionMart")
+    mem = emu.pb.memory
+    if _bag_count(emu, ITEM_POKE_BALL) >= want:
+        return True
+    if not _ride_to(emu, ex, mart):
+        return False
+    try:
+        ex._walk_to(mart, (2, 5))
+    except StuckError:
+        return False
+    _step(emu, ex, "left")                     # face the clerk
+    _press10(emu, "a")
+    emu.tick(60)
+    for _ in range(200):
+        if _bag_count(emu, ITEM_POKE_BALL) >= want:
+            break
+        _press10(emu, "a")
+        emu.tick(30)
+    got = _bag_count(emu, ITEM_POKE_BALL)
+    # exit: B back to the BUY/SELL/QUIT menu (menuY 1), QUIT = 2
+    for _ in range(10):
+        if mem[ADDR_MENU_TOP_Y] == 1:
+            break
+        _press10(emu, "b")
+        emu.tick(20)
+    _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 2)
+    _press10(emu, "a")
+    for _ in range(10):
+        if not emu.read_state().in_dialog:
+            break
+        _press10(emu, "a")
+        emu.tick(20)
+    return got >= want
+
+
+def catch_oddish_and_teach_cut(emu: PyBoyEmulator,
+                               ex: Executor) -> bool:
+    """Route 6's grass holds Oddish (the only Cut-capable family
+    on the nearby routes in Red). Catch one, then teach it HM01
+    Cut - it has a free move slot, so no deletion is involved.
+    Wartortle cannot learn Cut in Gen 1; see the leg header."""
+    world = ex.world
+    r6 = world.map_id("Route6")
+    st = emu.read_state()
+    oddish_idx = _party_index_of(emu, SPECIES_ODDISH)
+    if oddish_idx is None:
+        if not _ride_to(emu, ex, r6):
+            return False
+        try:
+            ex._walk_to(r6, (9, 15))           # the mid-route field
+        except StuckError:
+            return False
+        if not _catch_species(emu, ex, SPECIES_ODDISH):
+            return False
+        oddish_idx = _party_index_of(emu, SPECIES_ODDISH)
+        if oddish_idx is None:
+            return False
+    mon = emu.read_state().party[oddish_idx]
+    if MOVE_CUT in mon.moves:
+        return True
+    if not _use_bag_item_on_mon(emu, ITEM_HM01, oddish_idx):
+        return False
+    for _ in range(60):
+        mon = emu.read_state().party[oddish_idx]
+        if MOVE_CUT in mon.moves:
+            break
+        if emu.read_state().in_dialog:
+            _press10(emu, "a")
+            continue
+        emu.tick(30)
+    _close_menus(emu)
+    mon = emu.read_state().party[oddish_idx]
+    return MOVE_CUT in mon.moves
+
+
+def catch_diglett(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Diglett in Diglett's Cave (via Route 11): Ground type,
+    already knows Dig at cave levels. The Surge answer."""
+    world = ex.world
+    r11 = world.map_id("Route11")
+    cave = world.map_id("DiglettsCave")
+    if _party_index_of(emu, SPECIES_DIGLETT) is not None:
+        return True
+    if not _ride_to(emu, ex, r11):
+        return False
+    if not _ride_to(emu, ex, cave):
+        return False
+    return _catch_species(emu, ex, SPECIES_DIGLETT)
+
+
+def _cut_tree_at_gym(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """The gym door's tree stands at Vermilion City (15, 18),
+    faced from (14, 18) (front tile 0x3D, pokered cut.asm). The
+    world model marks the tree tile a static wall, so no journey
+    into the gym yard exists - step the last tiles by hand."""
+    world = ex.world
+    vc = world.map_id("VermilionCity")
+    mem = emu.pb.memory
+    try:
+        ex._walk_to(vc, (14, 18))
+    except StuckError:
+        return False
+    _step(emu, ex, "right")                    # blocked: turns us
+    if mem[ADDR_TILE_IN_FRONT] == 0x3D:
+        oddish_idx = _party_index_of(emu, SPECIES_ODDISH)
+        if oddish_idx is None:
+            return False
+        _press10(emu, "start")
+        if not _wait_menu_y(emu, 2):
+            return False
+        if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 1):
+            return False
+        _press10(emu, "a")                     # POKeMON
+        emu.tick(80)
+        if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM],
+                           oddish_idx):
+            return False
+        _press10(emu, "a")                     # mon submenu
+        emu.tick(80)
+        # A mon whose only field move is Cut lists it at item 0.
+        _press10(emu, "a")                     # CUT
+        emu.tick(150)
+        for _ in range(40):
+            if emu.read_state().in_dialog:
+                emu.close_dialog(max_presses=1)
+                continue
+            emu.tick(30)
+        _close_menus(emu)
+    return _step(emu, ex, "right")             # through the gap
+
+
+# Trash-can stands (can index -> stand tile, facing). Sight lines
+# use the gym's real trainer ranges (scripts/VermilionGym.asm):
+# Gentleman (9,6) LEFT range 3, Rocker (3,8) LEFT range 2,
+# Sailor (0,10) RIGHT range 3 - every stand below is outside all
+# three, reached through the corridor nodes.
+_GYM_CANS = {0: (1, 7), 1: (1, 9), 2: (1, 11), 3: (3, 7),
+             4: (3, 9), 5: (3, 11), 6: (5, 7), 7: (5, 9),
+             8: (5, 11), 9: (7, 7), 10: (7, 9), 11: (7, 11),
+             12: (9, 7), 13: (9, 9), 14: (9, 11)}
+_GYM_STANDS = {
+    0: ((1, 6), "down"), 1: ((0, 9), "right"), 2: ((1, 12), "up"),
+    3: ((4, 7), "left"), 4: ((4, 9), "left"), 5: ((3, 12), "up"),
+    6: ((5, 6), "down"), 7: ((5, 8), "down"), 8: ((5, 12), "up"),
+    9: ((8, 7), "left"), 10: ((7, 8), "down"),
+    11: ((7, 12), "up"), 12: ((9, 8), "up"), 13: ((9, 8), "down"),
+    14: ((9, 12), "up"),
+}
+_GYM_NODES = {"A": (4, 12), "B": (4, 8), "C": (4, 6), "D": (0, 6),
+              "E": (0, 9)}
+_GYM_EDGES = {("A", "B"), ("B", "A"), ("B", "C"), ("C", "B"),
+              ("C", "D"), ("D", "C"), ("D", "E"), ("E", "D")}
+_GYM_STAND_NODE = {
+    (1, 6): ("D", []), (0, 9): ("E", []),
+    (1, 12): ("A", []), (3, 12): ("A", []), (5, 12): ("A", []),
+    (7, 12): ("A", []), (9, 12): ("A", []),
+    (4, 7): ("B", []), (4, 9): ("B", []), (5, 8): ("B", []),
+    (7, 8): ("B", []), (9, 8): ("B", []),
+    (6, 7): ("B", [(6, 8)]), (6, 9): ("B", [(6, 8)]),
+    (8, 7): ("B", [(8, 8)]), (5, 6): ("C", []),
+}
+
+
+def beat_surge(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Heal, cut the gym tree, read both trash locks straight
+    from RAM (wFirstLockTrashCanIndex / wSecondLockTrashCanIndex
+    - with them known, the puzzle is two deterministic examines;
+    note the game can even roll the second index onto the same
+    can via its mask bug, probe136), then fight Surge with the
+    Diglett switch line. Ends RAM-verified on the Thunder Badge.
+    """
+    world = ex.world
+    vc = world.map_id("VermilionCity")
+    vpc = world.map_id("VermilionPokecenter")
+    gym = world.map_id("VermilionGym")
+    mem = emu.pb.memory
+    drv = _BattleDriver(emu)
+
+    def clear_interruptions():
+        for _ in range(40):
+            st = emu.read_state()
+            if st.in_battle:
+                drv.fight_until_end(_ranked_move_fn(emu))
+                emu.wait_free(max_rounds=8, stable_needed=2)
+                continue
+            if st.in_dialog:
+                _press10(emu, "a")
+                emu.tick(20)
+                continue
+            return True
+        return False
+
+    def walk_leg(map_id, tile):
+        for _ in range(6):
+            try:
+                ex._walk_to(map_id, tile)
+            except StuckError:
+                pass
+            st = emu.read_state()
+            if st.map_id == map_id and (st.x, st.y) == tile \
+                    and not st.in_battle:
+                return True
+            clear_interruptions()
+        st = emu.read_state()
+        return st.map_id == map_id and (st.x, st.y) == tile
+
+    # Exit Diglett's Cave on foot if that's where we are: the
+    # journey planner cannot chain LAST_MAP exits mid-route
+    # (probe128), so step the ladder and the exit mat by hand.
+    cave = world.map_id("DiglettsCave")
+    entry = world.map_id("DiglettsCaveRoute11")
+    if emu.read_state().map_id == cave:
+        for _ in range(4):
+            if emu.read_state().map_id != cave:
+                break
+            _step(emu, ex, "right")
+            emu.tick(20)
+    if emu.read_state().map_id == entry:
+        walk_leg(entry, (2, 7))
+        emu.wait_free(max_rounds=10, stable_needed=3)
+    if not _ride_to(emu, ex, vc):
+        return False
+    if not _ride_to(emu, ex, vpc):
+        return False
+    if not heal_at_pokecenter(emu, ex, vpc):
+        return False
+    if not _cut_tree_at_gym(emu, ex):
+        return False
+    if not _ride_to(emu, ex, gym):
+        return False
+
+    cur_node = [None]
+
+    def node_path(a, b):
+        if a == b:
+            return []
+        from collections import deque
+        prev = {a: None}
+        q = deque([a])
+        while q:
+            n = q.popleft()
+            if n == b:
+                break
+            for (x, y) in _GYM_EDGES:
+                if x == n and y not in prev:
+                    prev[y] = n
+                    q.append(y)
+        if b not in prev:
+            return []
+        path = []
+        n = b
+        while n != a:
+            path.append(_GYM_NODES[n])
+            n = prev[n]
+        return path[::-1]
+
+    def goto_stand(stand):
+        node, extra = _GYM_STAND_NODE[stand]
+        legs = []
+        if cur_node[0] is None:
+            legs.append(_GYM_NODES["A"])
+            legs += node_path("A", node)
+        else:
+            legs += node_path(cur_node[0], node)
+        legs += extra
+        legs.append(stand)
+        for leg in legs:
+            if not walk_leg(gym, leg):
+                return False
+        cur_node[0] = node
+        return True
+
+    def examine_can(idx):
+        stand, facing = _GYM_STANDS[idx]
+        if not goto_stand(stand):
+            return False
+        _step(emu, ex, facing)
+        if (emu.read_state().x, emu.read_state().y) != stand:
+            return False
+        _press10(emu, "a")
+        emu.tick(60)
+        clear_interruptions()
+        return True
+
+    first = mem[ADDR_FIRST_LOCK_CAN]
+    if first not in _GYM_CANS:
+        return False
+    if not examine_can(first):
+        return False
+    second = mem[ADDR_SECOND_LOCK_CAN]
+    if second not in _GYM_CANS:
+        return False
+    if second != first:
+        if not examine_can(second):
+            return False
+    else:
+        # The game's mask bug can put the second lock in the same
+        # can (probe136) - examine it once more.
+        stand, facing = _GYM_STANDS[first]
+        _step(emu, ex, facing)
+        _press10(emu, "a")
+        emu.tick(60)
+        clear_interruptions()
+    legs = node_path(cur_node[0] or "A", "C")
+    for leg in legs:
+        if not walk_leg(gym, leg):
+            return False
+    if not walk_leg(gym, (5, 2)):
+        return False
+    # Talk to Surge and fight: switch to Diglett on turn one;
+    # Diglett uses Dig, anything else its best-power move.
+    _step(emu, ex, "up")
+    _press10(emu, "a")
+    for _ in range(40):
+        if emu.read_state().in_battle:
+            break
+        _press10(emu, "a")
+        emu.tick(20)
+    if not emu.read_state().in_battle:
+        return False
+    diglett_idx = _party_index_of(emu, SPECIES_DIGLETT)
+    ranked = _ranked_move_fn(emu)
+
+    def surge_moves(idx):
+        mon = emu.read_state().party[idx]
+        rest = ranked(idx)
+        if MOVE_DIG in mon.moves:
+            dig = mon.moves.index(MOVE_DIG)
+            return [dig] + [c for c in rest if c != dig]
+        return rest
+
+    drv.fight_until_end(surge_moves, switch_first=diglett_idx,
+                        max_actions=500)
+    for _ in range(40):
+        if emu.read_state().in_dialog:
+            _press10(emu, "a")
+            emu.tick(20)
+            continue
+        emu.tick(25)
+    return "Thunder" in emu.read_state().badges
+
+
+def vermilion_leg(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """The whole post-Cascade Vermilion chain, as proven by
+    probes 100-138: board the SS Anne for HM01, stock up on
+    balls, catch Oddish and teach it Cut, catch a Diglett, then
+    take the Thunder Badge. Each stage verifies itself from RAM
+    and is skipped when its effect is already in place."""
+    if "Thunder" in emu.read_state().badges:
+        return True
+    if not board_ss_anne(emu, ex):
+        return False
+    if not buy_poke_balls(emu, ex):
+        return False
+    if not catch_oddish_and_teach_cut(emu, ex):
+        return False
+    if not catch_diglett(emu, ex):
+        return False
+    return beat_surge(emu, ex)
+
+
 MAP_MT_MOON_B2F = 61
 
 
@@ -863,6 +1827,7 @@ def main() -> int:
         fossil_done = False
         misty_done = False
         east_done = False
+        surge_done = False
         for round_no in range(args.max_rounds):
             result = ex.run(max_goals=1)
             st = emu.read_state()
@@ -925,6 +1890,22 @@ def main() -> int:
                     east_done = False
                 print(f"eastward leg: {east_done}", flush=True)
                 shot("08-vermilion.png")
+            # Vermilion's own chain (SS Anne, Cut, Surge) is the
+            # same shape: scenes the checklist cannot sequence.
+            # Play it once, the first round that ends in Vermilion
+            # with the Cascade Badge and no Thunder Badge.
+            if not surge_done and "Cascade" in st.badges \
+                    and "Thunder" not in st.badges \
+                    and st.map_id in (world.map_id("VermilionCity"),
+                                      world.map_id(
+                                          "VermilionPokecenter")):
+                try:
+                    surge_done = vermilion_leg(emu, ex)
+                except Exception as e:
+                    print(f"vermilion leg errored: {e}", flush=True)
+                    surge_done = False
+                print(f"vermilion leg: {surge_done}", flush=True)
+                shot("09-thunder-badge.png")
             # Mt. Moon B2F's exit ladder sits behind the fossil
             # chamber: the first round that ends on B2F, play the
             # fossil scene (it is on the way out regardless).
