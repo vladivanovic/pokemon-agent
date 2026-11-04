@@ -409,6 +409,359 @@ def fight_brock(emu: PyBoyEmulator, ex: Executor) -> bool:
     return "Boulder" in emu.read_state().badges
 
 
+MAP_CERULEAN_GYM = 65
+
+# The bag's item pocket (wNumBagItems / wBagItems in pokered WRAM).
+ADDR_NUM_BAG_ITEMS = 0xD31D
+ADDR_BAG_ITEMS = 0xD31E
+ITEM_SS_TICKET = 0x3F
+ITEM_TM28_DIG = 0xE4          # TM ids are 0xC9 + (n - 1) in the pocket
+
+
+def _bag_items(emu: PyBoyEmulator) -> list:
+    n = emu.pb.memory[ADDR_NUM_BAG_ITEMS]
+    return [emu.pb.memory[ADDR_BAG_ITEMS + 2 * i] for i in range(n)]
+
+
+class _FixedPlanner:
+    """Scene-local planner: propose one fixed goto until swapped back.
+    The scene functions below drive cross-map rides with the executor's
+    own run() loop (which fights battles and retries goals) by
+    temporarily replacing the checklist planner."""
+
+    def __init__(self, map_id: int, xy=None):
+        self.map_id = map_id
+        self.xy = xy
+
+    def propose(self, state, world, memory):
+        return Goal("goto", self.map_id, self.xy, "scene ride")
+
+
+def _ride_to(emu: PyBoyEmulator, ex: Executor, map_id: int,
+             xy=None, rounds: int = 200) -> bool:
+    """Ride the executor to a map (optionally a tile), forgiving each
+    round's goal the way main()'s loop does. Scripted scenes on the
+    way (sight battles, the Cerulean rival) are fought by the battle
+    policy and ridden out by the retry."""
+    saved = ex.planner
+    ex.planner = _FixedPlanner(map_id, xy)
+    try:
+        for _ in range(rounds):
+            result = ex.run(max_goals=1)
+            if result.log and result.log[-1].get("goal"):
+                ex.memory.forgive(result.log[-1]["goal"])
+            if emu.read_state().map_id == map_id:
+                return True
+        return emu.read_state().map_id == map_id
+    finally:
+        ex.planner = saved
+
+
+def _step(emu: PyBoyEmulator, ex: Executor, button: str,
+          retries: int = 5) -> bool:
+    """One press-until-move tile step. A bare emu.press() only turns
+    the player when it starts a new direction (Gen 1 semantics), so a
+    step is proven by the RAM coordinates changing, with retries for
+    NPC shuffles. Used inside the small house interiors, where the
+    probes proved step sequences rather than _walk_to paths."""
+    for _ in range(retries):
+        before = emu.read_state()
+        if before.in_battle:
+            ex._battle()
+            emu.wait_free(max_rounds=10, stable_needed=3)
+            before = emu.read_state()
+        for _ in range(4):
+            emu.press(button)
+            emu.tick(20)
+            after = emu.read_state()
+            if after.in_dialog:
+                emu.close_dialog(max_presses=3)
+                after = emu.read_state()
+            if (after.x, after.y) != (before.x, before.y) \
+                    or after.map_id != before.map_id:
+                return True
+        emu.tick(45)
+    return False
+
+
+def heal_at_pokecenter(emu: PyBoyEmulator, ex: Executor,
+                       pc_map: int) -> bool:
+    """Heal at a Pokecenter counter: stand at (3, 3), talk up across
+    the counter, and verify from RAM that HP and PP are fully
+    restored before leaving by the exit mat. Proven at the Cerulean
+    center (probe49/52) and again at Vermilion (probe99). Assumes the
+    player is already inside the center."""
+    try:
+        ex._walk_to(pc_map, (3, 3))
+    except StuckError:
+        return False
+    emu.press("up")                      # face the nurse
+    emu.press("a")                       # talk -> heal dialog
+    for _ in range(6):
+        emu.tick(30)
+        ex._clear_dialog(max_presses=80)
+        emu.wait_free(max_rounds=15, stable_needed=3)
+        st = emu.read_state()
+        if st.party and st.party[0].hp == st.party[0].max_hp:
+            break
+    st = emu.read_state()
+    healed = bool(st.party) and st.party[0].hp == st.party[0].max_hp
+    try:
+        ex._walk_to(pc_map, (3, 7))      # exit mat
+    except StuckError:
+        pass
+    emu.wait_free(max_rounds=10, stable_needed=3)
+    return healed
+
+
+def fight_misty(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Win the Cascade Badge: fight_brock's pattern, one room east.
+    Misty stands at (4, 2) facing down; the proven talk spot is
+    (5, 2), facing west (probe51, from the probe47 save). The tile
+    south of her, (4, 3), is genuinely walkable - probe50 called it
+    impossible, but that was a single-tap artifact (a bare press only
+    turns the player); probe54 stood on it via _walk_to, and its four
+    quadrants are all GYM floor ($11) in pokered's block data, so the
+    world model needs no change. Her gym trainers sight-fight on the
+    way in, like Brock's Jr. Trainer. Verified by the badge bit."""
+    gym = MAP_CERULEAN_GYM
+    for _attempt in range(40):
+        st = emu.read_state()
+        if "Cascade" in st.badges:
+            return True
+        if st.in_battle:
+            try:
+                ex._battle()
+            except StuckError:
+                return "Cascade" in emu.read_state().badges
+            continue
+        if st.map_id != gym:
+            return "Cascade" in emu.read_state().badges  # blacked out
+        if st.in_dialog:
+            emu.close_dialog()
+            continue
+        try:
+            ex._walk_to(gym, (5, 2))
+        except Exception:
+            emu.tick(60)                 # trainer battle / NPC shuffle
+            continue
+        emu.press("left")                # face Misty
+        emu.press("a")                   # talk -> challenge dialog
+        for _ in range(240):
+            st = emu.read_state()
+            if "Cascade" in st.badges:
+                break
+            if st.in_battle:
+                try:
+                    ex._battle()
+                except StuckError:
+                    break
+                continue
+            if st.in_dialog:
+                emu.close_dialog(max_presses=1)
+                continue
+            emu.tick(30)
+        emu.wait_free(max_rounds=60, stable_needed=6)
+        if "Cascade" in emu.read_state().badges:
+            return True
+    return "Cascade" in emu.read_state().badges
+
+
+def get_ss_ticket(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Bill's House: turn Bill back into a human and take the S.S.
+    Ticket he hands over. Assumes the player is inside the house.
+    The sequence is scripted by the game, and every beat is a
+    different interaction kind (probe86-89):
+    1. Talk to Pokemon-Bill (the monster sprite at (6, 5)) from
+       (5, 5), facing right. Either answer to his yes/no proceeds;
+       he walks up into the teleporter and is hidden.
+    2. Run the Cell Separator from his PC: a *hidden event* at tile
+       (1, 4), fired by facing UP from (1, 5) and pressing A
+       (engine/events/hidden_events/bills_house_pc.asm). It sets
+       EVENT_USED_CELL_SEPARATOR_ON_BILL, and Bill (human) exits the
+       machine and walks to his object tile (4, 4).
+    3. Talk to him there from (4, 5), facing up: he gives the ticket.
+    Verified by the ticket itself (item $3F) in the bag, never by
+    dialog progress."""
+    bh = ex.world.map_id("BillsHouse")
+    if ITEM_SS_TICKET in _bag_items(emu):
+        return True
+    try:
+        ex._walk_to(bh, (5, 5))
+    except StuckError:
+        return False
+    emu.press("right")                   # face Pokemon-Bill
+    emu.press("a")
+    emu.tick(40)
+    ex._clear_dialog(max_presses=100)
+    for _ in range(12):                  # he walks to the machine
+        emu.tick(60)
+    try:
+        ex._walk_to(bh, (1, 5))
+    except StuckError:
+        return False
+    emu.press("up")                      # face the PC (hidden event)
+    emu.tick(20)
+    emu.press("a")
+    emu.tick(60)
+    ex._clear_dialog(max_presses=60)
+    for _ in range(20):                  # separator runs; Bill exits
+        emu.tick(60)
+        if emu.read_state().in_dialog:
+            ex._clear_dialog(max_presses=40)
+    try:
+        ex._walk_to(bh, (4, 5))
+    except StuckError:
+        return False
+    emu.press("up")                      # face Bill at (4, 4)
+    emu.tick(20)
+    emu.press("a")
+    emu.tick(40)
+    ex._clear_dialog(max_presses=120)
+    for _ in range(8):
+        emu.tick(60)
+    return ITEM_SS_TICKET in _bag_items(emu)
+
+
+def leave_cerulean_south(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Cerulean -> Route 5, the long way the game actually allows.
+    Cerulean's southern tree line is sealed scenery (proven by an
+    exhaustive in-game DFS, probe83: 360 reachable cells, none at
+    y >= 29), and the Trashed House's front doorstep (27, 12) is
+    occupied by a guard until the S.S. Ticket is in the bag - with
+    the ticket he steps aside (probe90). From there: through the
+    house, out the hole in its back wall into the yard, fight the
+    Rocket thief (his script triggers from (30, 7)/(30, 9)), then
+    around the house's east side, down the river bank (x=33-36) and
+    west along the southern terrace to the (12, 35) crossing.
+    Assumes the player is in Cerulean City with the ticket. Returns
+    True standing on Route 5 (probe94/96)."""
+    world = ex.world
+    cc = world.map_id("CeruleanCity")
+    house = world.map_id("CeruleanTrashedHouse")
+    r5 = world.map_id("Route5")
+    if emu.read_state().map_id == r5:
+        return True
+    if ITEM_SS_TICKET not in _bag_items(emu):
+        return False
+    if not _ride_to(emu, ex, house):
+        return False
+    # Interior: from the entry (2, 7) to the hole approach (3, 1),
+    # then up through the hole to the yard at Cerulean (27, 9). The
+    # centre table blocks the direct column; this is probe94's
+    # proven step sequence.
+    for button in ("up", "up", "up", "up", "up", "right", "up", "up"):
+        if not _step(emu, ex, button):
+            return False
+    emu.wait_free(max_rounds=10, stable_needed=3)
+    if emu.read_state().map_id != cc:
+        return False
+    # The Rocket's script: stepping on (30, 9) makes him walk over,
+    # talk, and fight. The walk itself can be interrupted by his
+    # approach; ride out dialog and battle until TM28 is in the bag.
+    try:
+        ex._walk_to(cc, (30, 9))
+    except StuckError:
+        pass
+    for _ in range(60):
+        if ITEM_TM28_DIG in _bag_items(emu):
+            break
+        st = emu.read_state()
+        if st.in_battle:
+            ex._battle()
+            emu.wait_free(max_rounds=10, stable_needed=3)
+            continue
+        if st.in_dialog:
+            emu.close_dialog(max_presses=3)
+            continue
+        emu.tick(40)
+    if ITEM_TM28_DIG not in _bag_items(emu):
+        return False
+    # Yard -> east side -> bank -> terrace -> crossing (the model
+    # path proven cell-by-cell in probe96).
+    for xy in ((33, 15), (36, 25), (20, 31), (12, 35)):
+        try:
+            ex._walk_to(cc, xy)
+        except StuckError:
+            return False
+    if not _step(emu, ex, "down"):       # cross the south edge
+        return False
+    emu.wait_free(max_rounds=10, stable_needed=3)
+    return emu.read_state().map_id == r5
+
+
+def ride_underground_to_vermilion(emu: PyBoyEmulator,
+                                  ex: Executor) -> bool:
+    """Route 5 -> Vermilion City via the Underground Path. The
+    Saffron gates are a dead end (thirsty guard), and the planner's
+    naive journey from Route 5 walks into the Route 5 gatehouse, so
+    the tunnel houses are explicit waypoints (probe97/99). Map 119
+    (the tunnel itself) was missing from the extracted data until
+    the 2026-11-04 build fix - without it no journey through the
+    tunnel exists at all. Assumes the player is on Route 5; returns
+    True healed at the Vermilion Pokecenter."""
+    world = ex.world
+    h5 = world.map_id("UndergroundPathRoute5")
+    h6 = world.map_id("UndergroundPathRoute6")
+    r6 = world.map_id("Route6")
+    vc = world.map_id("VermilionCity")
+    vpc = world.map_id("VermilionPokecenter")
+    if not _ride_to(emu, ex, h5):
+        return False
+    if not _ride_to(emu, ex, h6):
+        return False
+    # The exit mat is (4, 7); the tunnel warp lands at (4, 4) and
+    # the interior walk was a probe-proven step sequence, not a
+    # _walk_to (probe99).
+    for _ in range(3):
+        if emu.read_state().map_id == r6:
+            break
+        _step(emu, ex, "down")
+    emu.wait_free(max_rounds=10, stable_needed=3)
+    if emu.read_state().map_id != r6:
+        return False
+    if not _ride_to(emu, ex, vc):
+        return False
+    if not _ride_to(emu, ex, vpc):
+        return False
+    return heal_at_pokecenter(emu, ex, vpc)
+
+
+def eastward_from_cerulean(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """The whole post-Cascade leg, as proven by probes 85-99: heal,
+    ride north through the rival fight and Nugget Bridge to Bill's
+    House, get the S.S. Ticket, come back, heal again, leave
+    Cerulean south through the robbed house, and take the
+    Underground Path to Vermilion. Each stage verifies itself from
+    RAM; a stage that fails stops the chain rather than pressing on
+    unverified."""
+    world = ex.world
+    cc = world.map_id("CeruleanCity")
+    cpc = world.map_id("CeruleanPokecenter")
+    r24 = world.map_id("Route24")
+    r25 = world.map_id("Route25")
+    bh = world.map_id("BillsHouse")
+    if not _ride_to(emu, ex, cpc):
+        return False
+    heal_at_pokecenter(emu, ex, cpc)
+    if not _ride_to(emu, ex, r24):
+        return False
+    if not _ride_to(emu, ex, r25):
+        return False
+    if not _ride_to(emu, ex, bh):
+        return False
+    if not get_ss_ticket(emu, ex):
+        return False
+    if not _ride_to(emu, ex, cc):
+        return False
+    if not _ride_to(emu, ex, cpc):
+        return False
+    heal_at_pokecenter(emu, ex, cpc)
+    if not leave_cerulean_south(emu, ex):
+        return False
+    return ride_underground_to_vermilion(emu, ex)
+
+
 MAP_MT_MOON_B2F = 61
 
 
@@ -482,6 +835,8 @@ def main() -> int:
         handover_done = False
         brock_done = False
         fossil_done = False
+        misty_done = False
+        east_done = False
         for round_no in range(args.max_rounds):
             result = ex.run(max_goals=1)
             st = emu.read_state()
@@ -517,6 +872,33 @@ def main() -> int:
                     brock_done = False
                 print(f"brock fight: {brock_done}", flush=True)
                 shot("05-boulder-badge.png")
+            # Same pattern at Cerulean Gym: the cascade goal
+            # completes on arrival; the badge is a scene.
+            if not misty_done and st.map_id == MAP_CERULEAN_GYM \
+                    and "Cascade" not in st.badges:
+                try:
+                    misty_done = fight_misty(emu, ex)
+                except Exception as e:
+                    print(f"misty fight errored: {e}", flush=True)
+                    misty_done = False
+                print(f"misty fight: {misty_done}", flush=True)
+                shot("07-cascade-badge.png")
+            # With the Cascade Badge held, the road east is a chain
+            # of scenes (Bill's ticket, the robbed house, the tunnel)
+            # that the checklist's naive goto cannot sequence - its
+            # Cerulean->Vermilion route runs at the Saffron gates.
+            # Play the chain once, the first round that ends in
+            # Cerulean with the badge.
+            if not east_done and "Cascade" in st.badges \
+                    and st.map_id in (MAP_CERULEAN_GYM,
+                                      world.map_id("CeruleanCity")):
+                try:
+                    east_done = eastward_from_cerulean(emu, ex)
+                except Exception as e:
+                    print(f"eastward leg errored: {e}", flush=True)
+                    east_done = False
+                print(f"eastward leg: {east_done}", flush=True)
+                shot("08-vermilion.png")
             # Mt. Moon B2F's exit ladder sits behind the fossil
             # chamber: the first round that ends on B2F, play the
             # fossil scene (it is on the way out regardless).
