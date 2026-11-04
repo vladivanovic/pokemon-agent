@@ -30,7 +30,8 @@ Gen 1 geometry:
 Output: pokered_walkability.json next to this script
   { map_id: {"name","file","tileset","w","h","walk":[[0/1..]..],
              "warps":[{"x","y","dest_id","idx"}...],
-             "ledges":{"x,y":[dx,dy]} (overworld maps only) }
+             "ledges":{"x,y":[dx,dy]} (overworld maps only),
+             "cut_trees":["x,y"...] (maps whose tileset has cut trees) }
              (dest_id -1 = LAST_MAP)
 
 Usage:  python3 build_walkability.py /path/to/pokered
@@ -188,6 +189,19 @@ def main() -> None:
     LEDGE_FACES = {0x36: (0, 1), 0x37: (0, 1), 0x27: (-1, 0),
                    0x0D: (1, 0), 0x1D: (1, 0)}
 
+    # Cut trees (engine/overworld/cut.asm UsedCut): using Cut from the
+    # party menu checks wTileInFrontOfPlayer against ONE tile id per
+    # tileset - $3D on OVERWORLD, $50 on GYM; any other tileset has
+    # nothing cuttable. (OVERWORLD $52 is cuttable GRASS: already
+    # walkable, not an obstacle, deliberately not emitted.) The cell
+    # whose bottom-left quadrant sample - the same sample the
+    # passability pass uses, and the value wTileInFrontOfPlayer takes
+    # when facing that cell - equals the cut id is the tree's FACE
+    # cell: the one cell of the tree's 2x2 block that reports the cut
+    # id. world.py expands a face to its whole block (the engine's
+    # CutTreeBlockSwaps replaces the entire block when cut).
+    CUT_TILE_BY_TILESET = {"OVERWORLD": 0x3D, "GYM": 0x50}
+
     bstdir = f"{POKERED}/gfx/blocksets"
     mapsdir = f"{POKERED}/maps"
     file_lut = {alpha_key(fn[:-4]): fn[:-4] for fn in os.listdir(mapsdir)}
@@ -310,9 +324,17 @@ def main() -> None:
                     delta = LEDGE_FACES.get(tiles[ty][tx])
                     if delta is not None:
                         ledges[f"{tx},{ty}"] = list(delta)
+        cut_trees = []
+        cut_id = CUT_TILE_BY_TILESET.get(ts_const.upper())
+        if cut_id is not None:
+            for ty in range(TH):
+                for tx in range(TW):
+                    if tiles[ty][tx] == cut_id:
+                        cut_trees.append(f"{tx},{ty}")
         out[i] = {"name": cn, "file": fname, "tileset": ts_const,
                   "w": TW, "h": TH, "walk": grid, "warps": warps,
-                  **({"ledges": ledges} if ledges else {})}
+                  **({"ledges": ledges} if ledges else {}),
+                  **({"cut_trees": cut_trees} if cut_trees else {})}
 
     with open(OUT, "w") as f:
         json.dump(out, f)

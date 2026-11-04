@@ -299,3 +299,65 @@ don't model - the same class as the Vermilion gym tree. The
 supervisor's ViridianCity proposals would route once the journey
 can pass the far side of Route 2 (or once a Flash leg targets
 Route 2 itself).
+
+## 10. Cut-tree traversal (2026-11-05): trees are journey steps, not walls
+
+The §9 remainder is closed. Tile-level journeys now model Cut
+trees as capability-gated ACTION steps.
+
+Identification (data, not hardcodes): the engine checks ONE tile
+id per tileset when Cut is used (engine/overworld/cut.asm UsedCut:
+$3D on OVERWORLD, $50 on GYM; $52 grass is walkable already and
+deliberately excluded). build_walkability.py emits `cut_trees`
+per map - the cell whose bottom-left quadrant sample (the value
+wTileInFrontOfPlayer takes when facing that cell) equals the
+tileset's cut id. 35 face cells across 16 maps, matching the
+game's known trees (Route 2 x6, Fuchsia x4, Celadon Gym x3 - the
+GYM rule is real: Erika's gym grows them indoors).
+
+Model (agent/world.py): a tree is a 2x2 BLOCK (the engine's
+CutTreeBlockSwaps replaces it whole); GameMap.cut_blocks maps
+every block cell to its face. In the tile BFS a block's
+non-walkable cells are solid while the tree stands (a block cell
+whose own tile is passable ground stays ground - the engine's
+collision is per-tile); with the "cut" capability the block is
+entered only through its face, and from the face the rest of the
+block is passable. journey() splits a ("cut", map, face) step out
+of any walk path that enters a tree, stance first, in path order -
+a journey may fell several trees. Without the capability,
+journey_missing_capabilities / missing_capabilities (tile-aware
+form) name "cut", and validate_goal rejects a Cut-sealed goal
+with that diagnosis instead of waving it through to a stuck.
+
+Execution (agent/executor.py, agent/pyboy_emu.py,
+agent/emu.py): the Executor owns _cut_done - faces cut this map
+visit, pruned the moment another map is current (trees respawn
+on map reload, engine semantics; even a gatehouse hop resets the
+previous map's record). A ("cut", ...) step - and, belt-and-
+braces, any walk path stepping onto a standing face - runs
+_cut_tree: face the tree, then the backend's field_cut verb with
+the cutter and submenu index derived from RAM party data (first
+mon knowing Cut; its field-move rank in its own slot order,
+pokered GetMonFieldMoves). PyBoyEmulator.field_cut is the
+generalised gym-tree macro (START -> POKEMON -> mon -> CUT,
+menus steered by RAM cursor bytes); SimEmulator.field_cut models
+the same contract (facing + face cell + mon knows Cut) so the
+whole loop is testable without a ROM.
+
+Tests: 67/67 (8 new: data identification + block expansion, tile
+seal/open, Vermilion -> Viridian journey with ordered cut steps,
+capability diagnosis, validator reject/accept, sim end-to-end
+executor run felling both Route 2 trees, no-Cut blocked run).
+
+Live (probe142, real ROM, RAM-verified): from probe141/
+route2.state, ONE executor ride Route 2 -> Viridian City on the
+planned 8 steps - cut (15,22) out of the cave pocket, gatehouse,
+cut (12,68) at the south end, cross - arriving ViridianCity
+(17,4), party unharmed, both cuts performed by the executor from
+its journey steps (no hand-driven cutting). The supervisor's §8
+ViridianCity proposals are now executable end to end.
+
+Read-only aside (same probe, RAM wPokedexOwned): 4 species owned
+- Squirtle, Wartortle, Oddish, Diglett. The Route 2 aide's HM05
+Flash needs >= 10, so a catching detour is a decision for Vlad
+before any Rock Tunnel leg.

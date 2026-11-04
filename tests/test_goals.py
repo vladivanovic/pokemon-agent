@@ -39,6 +39,26 @@ class TestGoals(unittest.TestCase):
         v = validate_goal(goal, emu.read_state(), self.w, EpisodicMemory())
         self.assertTrue(v.ok, v.problems)
 
+    def test_cut_sealed_goal_rejected_without_cut(self):
+        # Vermilion -> Viridian has a map-level route, but every
+        # tile-level journey is sealed by Route 2's trees: the
+        # verdict must name Cut, not wave the goal through to a stuck.
+        w = self.w
+        emu = SimEmulator(w, w.map_id("VermilionCity"), (11, 4))
+        goal = Goal("goto", w.map_id("ViridianCity"))
+        v = validate_goal(goal, emu.read_state(), w, EpisodicMemory())
+        self.assertFalse(v.ok)
+        self.assertIn("cut", v.missing_capabilities)
+
+    def test_cut_sealed_goal_validates_with_cut(self):
+        w = self.w
+        emu = SimEmulator(w, w.map_id("VermilionCity"), (11, 4))
+        emu.give_starter(moves=(15,))       # Cut
+        emu.give_badge("Cascade")
+        goal = Goal("goto", w.map_id("ViridianCity"))
+        v = validate_goal(goal, emu.read_state(), w, EpisodicMemory())
+        self.assertTrue(v.ok, v.problems)
+
     def test_repeated_failure_is_suppressed(self):
         emu = self._emu()
         mem = EpisodicMemory()

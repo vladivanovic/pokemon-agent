@@ -23,6 +23,16 @@ from .world import World
 _DELTA_TO_BUTTON = {(0, -1): "up", (0, 1): "down", (-1, 0): "left", (1, 0): "right"}
 _BUTTON_TO_DELTA = {v: k for k, v in _DELTA_TO_BUTTON.items()}
 
+MOVE_CUT = 15
+# Moves the party menu offers as field moves, in the mon's own move
+# order (pokered GetMonFieldMoves scans the mon's slots against
+# FieldMoveDisplayData). A mon's field-move submenu lists exactly
+# these, filtered from its moveset in slot order, before STATS /
+# SWITCH / CANCEL - so Cut's submenu index is the count of these ids
+# sitting in slots before Cut's own slot.
+FIELD_MOVE_IDS = frozenset({15, 19, 57, 70, 148, 91, 100, 105})
+#                              CUT FLY SURF STR  FLASH DIG TELE SOFTB
+
 
 class StuckError(Exception):
     pass
@@ -272,6 +282,13 @@ class Executor:
         # (This began as the workaround for the era when CAVERN grids
         # were marked fully open; it stays as the safety net.)
         self._learned_walls: Dict[int, Set[tuple]] = {}
+        # Cut-tree faces cut during the CURRENT visit to each map.
+        # Gen 1 reloads a map's blocks on entry, so a cut tree is back
+        # the moment you leave and return: entries for any map other
+        # than the one we are standing on are stale by definition and
+        # pruned on sight (see _prune_cut_done). The world model gets
+        # this set per plan; it is session state, never world truth.
+        self._cut_done: Dict[int, Set[tuple]] = {}
 
     # -- primitives -----------------------------------------------------------
     def _press(self, button: str) -> None:
@@ -321,6 +338,18 @@ class Executor:
                 dy = target[1] - st.y
                 if (dx, dy) not in _DELTA_TO_BUTTON:
                     raise StuckError(f"non-adjacent step {st.pos} -> {target}")
+                gm = self.world.maps[map_id]
+                if target in gm.cut_trees \
+                        and target not in self._cut_done.get(map_id, ()) \
+                        and "cut" in st.capabilities():
+                    # Stepping onto a standing tree's face tile: the
+                    # step IS the cut. _cut_tree faces it, runs the
+                    # field move and steps on; the loop then sees the
+                    # target reached. (A tree target without the
+                    # capability falls through to a plain press, which
+                    # fails as a wall - the honest outcome.)
+                    self._cut_tree(map_id, target)
+                    continue
                 before = st.pos
                 self._press(_DELTA_TO_BUTTON[(dx, dy)])
                 after = self._state()
@@ -335,6 +364,55 @@ class Executor:
                 else:
                     no_move = 0
 
+    def _prune_cut_done(self, current_map: int) -> None:
+        """Drop cut-tree records for every map but the current one:
+        leaving a map restores its trees (the engine reloads the
+        map's blocks), so a record for a map we are not on is a lie
+        the moment it is kept."""
+        for mid in list(self._cut_done):
+            if mid != current_map:
+                del self._cut_done[mid]
+
+    def _cut_tree(self, map_id: int, tile) -> None:
+        """Cut the tree whose face is `tile` on `map_id` and step onto
+        it. The player must be on an adjacent tile. The field move
+        itself is the backend's verb (emu.field_cut: START -> POKEMON
+        -> the mon that knows Cut -> its field-move submenu), driven
+        here by party composition read from RAM: the cutter is the
+        first party mon whose moves include Cut, and Cut's submenu
+        index is its field-move rank in that mon's slot order (see
+        FIELD_MOVE_IDS). Ends standing on the cleared tile, with the
+        face recorded in _cut_done for this visit."""
+        st = self._state()
+        if st.map_id != map_id:
+            raise StuckError(f"cut: on map {st.map_id}, want {map_id}")
+        dx, dy = tile[0] - st.x, tile[1] - st.y
+        if (dx, dy) not in _DELTA_TO_BUTTON:
+            raise StuckError(f"cut: {tile} not adjacent to {(st.x, st.y)}")
+        cutter = None
+        submenu_idx = 0
+        for i, mon in enumerate(st.party):
+            if MOVE_CUT in mon.moves:
+                cutter = i
+                slot = mon.moves.index(MOVE_CUT)
+                submenu_idx = sum(
+                    1 for mv in mon.moves[:slot] if mv in FIELD_MOVE_IDS)
+                break
+        if cutter is None:
+            raise StuckError("cut: no party member knows Cut")
+        field_cut = getattr(self.emu, "field_cut", None)
+        if field_cut is None:
+            raise StuckError("cut: backend has no field_cut verb")
+        button = _DELTA_TO_BUTTON[(dx, dy)]
+        self._press(button)            # face the tree (the step is refused)
+        if not field_cut(cutter, submenu_idx):
+            raise StuckError(f"cut: field move failed at {tile}")
+        self._cut_done.setdefault(map_id, set()).add(tile)
+        self._press(button)            # through the gap
+        st = self._state()
+        if (st.x, st.y) != tile or st.map_id != map_id:
+            raise StuckError(f"cut: tree at {tile} did not clear")
+
     def _walk_to(self, map_id: int, xy) -> None:
         blocked = set(self._learned_walls.get(map_id, ()))
         learned_here: Set[tuple] = set()
@@ -342,8 +420,12 @@ class Executor:
         cleared = 0
         for _attempt in range(6):
             st = self._state()
-            path = self.world.tile_path(map_id, (st.x, st.y), xy,
-                                         blocked=frozenset(blocked))
+            self._prune_cut_done(st.map_id)
+            path = self.world.tile_path(
+                map_id, (st.x, st.y), xy,
+                blocked=frozenset(blocked),
+                capabilities=st.capabilities(),
+                cut_done=frozenset(self._cut_done.get(map_id, ())))
             if path is None:
                 # Fail-soft, layered: learned walls are beliefs, and a
                 # belief that seals the map must not brick the agent
@@ -419,9 +501,11 @@ class Executor:
     # -- goal execution -----------------------------------------------------------
     def _goto(self, goal: Goal, state: GameState) -> None:
         caps = state.capabilities()
+        self._prune_cut_done(state.map_id)
         steps = self.world.journey(state.map_id, (state.x, state.y),
                                    goal.target_map, goal.target_xy, caps,
-                                   blocked=self._learned_walls)
+                                   blocked=self._learned_walls,
+                                   cut_done=self._cut_done)
         if steps is None and self._learned_walls.get(state.map_id):
             # Same fail-soft as _walk_to, scoped to the map the
             # journey starts in: another map's walls may be sealing a
@@ -431,7 +515,8 @@ class Executor:
             self._learned_walls.pop(state.map_id, None)
             steps = self.world.journey(state.map_id, (state.x, state.y),
                                        goal.target_map, goal.target_xy,
-                                       caps, blocked=self._learned_walls)
+                                       caps, blocked=self._learned_walls,
+                                       cut_done=self._cut_done)
         if steps is None:
             raise StuckError("no journey (portal-level route) to target")
         for step in steps:
@@ -474,6 +559,9 @@ class Executor:
                     if any((wp.x, wp.y) == tile for wp in gm.warps) \
                             and (st.x, st.y) == tile:
                         self._retrigger_warp()
+            elif kind == "cut":
+                _, mid, tile = step
+                self._cut_tree(mid, tile)
             elif kind == "cross":
                 _, direction, dst = step
                 button = {"north": "up", "south": "down",

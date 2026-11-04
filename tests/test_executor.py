@@ -57,6 +57,70 @@ class TestExecutor(unittest.TestCase):
         self.assertEqual(result.status, "stuck", result.log)
 
 
+class CutLoggingEmulator(SimEmulator):
+    """SimEmulator that records every successful field Cut."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.cuts = []
+
+    def field_cut(self, mon_index, submenu_index):
+        ok = super().field_cut(mon_index, submenu_index)
+        if ok:
+            self.cuts.append((self.map_id,
+                              (self.x + self.facing[0],
+                               self.y + self.facing[1])))
+        return ok
+
+
+class FixedPlanner:
+    def __init__(self, map_id):
+        self.map_id = map_id
+
+    def propose(self, state, world, memory):
+        from agent.goals import Goal
+        return Goal("goto", self.map_id, None, "test ride")
+
+
+class TestCutJourney(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.w = default_world()
+
+    def test_executor_cuts_route2_trees_and_reaches_viridian(self):
+        # End to end in the simulator: from the Diglett's Cave mouth
+        # pocket on Route 2, the executor's journey must fell both
+        # trees on the road south (the pocket tree and the one at the
+        # map's south end) with its own field-Cut steps and arrive in
+        # Viridian City - no hand-driven cutting anywhere.
+        w = self.w
+        r2 = w.map_id("Route2")
+        emu = CutLoggingEmulator(w, r2, (12, 10))
+        emu.give_starter(moves=(15,))       # Cut in slot 0
+        emu.give_badge("Cascade")
+        ex = Executor(emu, w, FixedPlanner(w.map_id("ViridianCity")),
+                      EpisodicMemory())
+        result = ex.run(max_goals=1)
+        self.assertEqual(result.goals_done, 1, result.log)
+        self.assertEqual(emu.read_state().map_id, w.map_id("ViridianCity"))
+        self.assertIn((r2, (15, 22)), emu.cuts)
+        self.assertIn((r2, (12, 68)), emu.cuts)
+
+    def test_tree_sealed_goal_blocked_without_cut(self):
+        # Same start, no Cut anywhere in the party: the validator
+        # rejects the goal (blocked, not stuck) and nothing moves.
+        w = self.w
+        r2 = w.map_id("Route2")
+        emu = CutLoggingEmulator(w, r2, (12, 10))
+        emu.give_starter()                  # Scratch/Growl only
+        ex = Executor(emu, w, FixedPlanner(w.map_id("ViridianCity")),
+                      EpisodicMemory())
+        result = ex.run(max_goals=1)
+        self.assertEqual(result.status, "blocked", result.log)
+        self.assertEqual(emu.read_state().map_id, r2)
+        self.assertEqual(emu.cuts, [])
+
+
 def battle_state(moves, pp, top_y=0, item=0, move_idx=0, dialog=None):
     mon = PartyMon(level=10, hp=30, max_hp=30, moves=moves, pp=pp)
     return GameState(map_id=0, x=0, y=0, in_battle=True,

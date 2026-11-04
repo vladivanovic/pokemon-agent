@@ -40,7 +40,18 @@ class SimEmulator:
         self._battle_presses_left = 0
         self.blocked: Set[Tuple[int, int, int]] = set()  # (map, x, y) test hooks
         self.press_count = 0
+        # Field-move (Cut) session state, mirroring the engine: a
+        # direction press turns the player even when the step is
+        # refused (that facing is what Cut reads), and a cut tree
+        # block stays cleared only until its map is left (the engine
+        # reloads the map's blocks on entry).
+        self.facing: Tuple[int, int] = (0, 1)
+        self.cut_blocks: Set[Tuple[int, Tuple[int, int]]] = set()
         self._sync()
+
+    def _leave_map(self, old_map: int) -> None:
+        """Crossing into another map restores the old map's trees."""
+        self.cut_blocks = {kb for kb in self.cut_blocks if kb[0] != old_map}
 
     # -- state plumbing -------------------------------------------------------
     def _sync(self) -> None:
@@ -96,8 +107,29 @@ class SimEmulator:
         if button not in _DELTA:
             return
         dx, dy = _DELTA[button]
+        self.facing = (dx, dy)
         self._step(dx, dy)
         self._sync()
+
+    def field_cut(self, mon_index: int, submenu_index: int) -> bool:
+        """Use Cut on the tree the player is facing (the Executor has
+        already bumped toward it, which set `facing`). Succeeds only
+        if the named party mon actually knows Cut and the faced tile
+        is a standing tree's FACE cell - the engine checks the tile
+        in front, not the whole block."""
+        st = self.read_state()
+        if not (0 <= mon_index < len(st.party)):
+            return False
+        if 15 not in st.party[mon_index].moves:  # MOVE_CUT
+            return False
+        gm = self.world.maps[self.map_id]
+        tx, ty = self.x + self.facing[0], self.y + self.facing[1]
+        if (tx, ty) not in gm.cut_trees:
+            return False
+        if (self.map_id, (tx, ty)) in self.cut_blocks:
+            return False  # already cut: the engine finds nothing to cut
+        self.cut_blocks.add((self.map_id, (tx, ty)))
+        return True
 
     def _step(self, dx: int, dy: int) -> None:
         gm = self.world.maps[self.map_id]
@@ -107,7 +139,13 @@ class SimEmulator:
             return
         if (self.map_id, nx, ny) in self.blocked:
             return
-        if not gm.walkable(nx, ny, dx, dy):
+        face = gm.cut_blocks.get((nx, ny))
+        if face is not None and not gm.walkable(nx, ny, dx, dy) \
+                and (self.map_id, face) not in self.cut_blocks:
+            return  # a standing tree's solid cells (a block cell
+            # whose own tile is passable ground stays walkable,
+            # exactly as the engine's per-tile collision has it)
+        if face is None and not gm.walkable(nx, ny, dx, dy):
             # Ledge jump: stepping into a face tile in its jump
             # direction hops onto the tile beyond it (the engine
             # simulates the second step itself on hardware).
@@ -127,14 +165,18 @@ class SimEmulator:
                     lo = self.last_outside
                     if lo is not None and 1 <= wp.idx <= len(self.world.maps[lo].warps):
                         lw = self.world.maps[lo].warps[wp.idx - 1]
+                        old = self.map_id
                         self.map_id, self.x, self.y = lo, lw.x, lw.y
+                        self._leave_map(old)
                     return
                 if self.world.is_outside(self.map_id):
                     self.last_outside = self.map_id
                 landing = self.world.warp_landing(wp)
                 if landing is not None:
+                    old = self.map_id
                     self.map_id = wp.dest_id
                     self.x, self.y = landing
+                    self._leave_map(old)
                 return
 
     def _cross_edge(self, dx: int, dy: int) -> None:
@@ -154,7 +196,9 @@ class SimEmulator:
                 candidates = sorted(range(gm.w), key=lambda cx: abs(cx - ideal))
                 for cx in candidates:
                     if gm.walkable(cx, ey, dx, dy):
+                        old = self.map_id
                         self.map_id, self.x, self.y = dst, cx, ey
+                        self._leave_map(old)
                         return
             else:
                 ex = gm.w - 1 if dx < 0 else 0
@@ -162,7 +206,9 @@ class SimEmulator:
                 candidates = sorted(range(gm.h), key=lambda cy: abs(cy - ideal))
                 for cy in candidates:
                     if gm.walkable(ex, cy, dx, dy):
+                        old = self.map_id
                         self.map_id, self.x, self.y = dst, ex, cy
+                        self._leave_map(old)
                         return
             return
 
@@ -175,17 +221,23 @@ class SimEmulator:
             self.x, self.y = gm.warps[0].x, gm.warps[0].y
         else:
             self.x, self.y = gm.w // 2, gm.h // 2
+        old = self.map_id
         self.map_id = dest_map
         self.last_outside = dest_map
+        self._leave_map(old)
         self._sync()
 
     # -- save states --------------------------------------------------------------
     def save_state(self) -> dict:
         return {"map": self.map_id, "x": self.x, "y": self.y,
-                "mem": bytes(self.mem.mem)}
+                "mem": bytes(self.mem.mem),
+                "cut_blocks": set(self.cut_blocks),
+                "facing": self.facing}
 
     def load_state(self, snap: dict) -> None:
         self.map_id, self.x, self.y = snap["map"], snap["x"], snap["y"]
         self.mem.mem = bytearray(snap["mem"])
         self.in_battle = False
+        self.cut_blocks = set(snap.get("cut_blocks", set()))
+        self.facing = snap.get("facing", (0, 1))
         self._sync()

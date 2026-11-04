@@ -235,6 +235,85 @@ class TestWorld(unittest.TestCase):
         j = self.w.journey(gym, (5, 2), self.w.map_id("VermilionCity"))
         self.assertIsNotNone(j)
 
+    def test_cut_trees_come_from_tileset_data(self):
+        # Face cells are identified by the engine's own rule
+        # (cut.asm UsedCut: the tile in front must sample $3D on
+        # OVERWORLD / $50 on GYM), extracted by build_walkability.py -
+        # not per-map hardcodes. The known trees must be there: the
+        # Vermilion gym tree and the tree sealing Route 2's cave
+        # pocket, and Erika's gym really does grow cut trees inside
+        # (GYM tileset). A tree-free interior has none.
+        r2 = self.w.maps[self.w.map_id("Route2")]
+        self.assertIn((15, 22), r2.cut_trees)
+        self.assertIn((5, 10), r2.cut_trees)
+        vc = self.w.maps[self.w.map_id("VermilionCity")]
+        self.assertEqual(vc.cut_trees, frozenset({(15, 18)}))
+        gym = self.w.maps[self.w.map_id("CeladonGym")]
+        self.assertTrue(gym.cut_trees)
+        lab = self.w.maps[self.w.map_id("OaksLab")]
+        self.assertFalse(lab.cut_trees)
+        # The block expansion: every cell of the (15,22) tree's 2x2
+        # block maps to that face (the engine swaps the whole block).
+        for cell in ((14, 22), (15, 22), (14, 23), (15, 23)):
+            self.assertEqual(r2.cut_blocks[cell], (15, 22))
+
+    def test_tile_path_tree_seals_without_cut_and_opens_with_it(self):
+        # Route 2's y=22 row is solid across the whole map; the only
+        # way from the cave-mouth pocket to the south side on foot is
+        # through the tree at (15, 22).
+        r2 = self.w.map_id("Route2")
+        self.assertIsNone(self.w.tile_path(r2, (15, 20), (15, 24)))
+        path = self.w.tile_path(r2, (15, 20), (15, 24),
+                                capabilities=frozenset({"cut"}))
+        self.assertIsNotNone(path)
+        self.assertIn((15, 22), path)
+        # ...and a tree cut earlier this visit is plain ground.
+        path = self.w.tile_path(r2, (15, 20), (15, 24),
+                                cut_done=frozenset({(15, 22)}))
+        self.assertIsNotNone(path)
+
+    def test_journey_vermilion_to_viridian_cut_steps(self):
+        # The full arc the supervisor's live run pointed at: with Cut,
+        # the journey plans end to end and emits ordered cut steps -
+        # each preceded by a walk onto the stance tile adjacent to
+        # the tree it fells. Without Cut there is no journey at all.
+        vermilion = self.w.map_id("VermilionCity")
+        viridian = self.w.map_id("ViridianCity")
+        r2 = self.w.map_id("Route2")
+        self.assertIsNone(self.w.journey(vermilion, (11, 4), viridian))
+        j = self.w.journey(vermilion, (11, 4), viridian,
+                           capabilities=frozenset({"cut"}))
+        self.assertIsNotNone(j)
+        cuts = [(i, s) for i, s in enumerate(j) if s[0] == "cut"]
+        self.assertEqual([s[2] for _i, s in cuts], [(15, 22), (12, 68)])
+        for i, s in cuts:
+            self.assertEqual(s[1], r2)
+            prev = j[i - 1]
+            self.assertEqual(prev[0], "walk")
+            self.assertEqual(prev[1], r2)
+            stance = prev[2]
+            self.assertEqual(
+                abs(stance[0] - s[2][0]) + abs(stance[1] - s[2][1]), 1,
+                "cut step must be preceded by a walk to an adjacent tile")
+            nxt = j[i + 1]
+            self.assertEqual(nxt[0], "walk")
+            self.assertEqual(nxt[1], r2)
+        self.assertEqual(j[-1], ("cross", "south", viridian))
+
+    def test_missing_capabilities_reports_cut_for_tree_sealed_target(self):
+        # The diagnosis the validator surfaces: Vermilion -> Viridian
+        # HAS a map-level route, so only the tile-level check can see
+        # the trees sealing it.
+        vermilion = self.w.map_id("VermilionCity")
+        viridian = self.w.map_id("ViridianCity")
+        self.assertIn("cut", self.w.missing_capabilities(
+            vermilion, viridian, frozenset(), src_xy=(11, 4)))
+        self.assertIn("cut", self.w.journey_missing_capabilities(
+            vermilion, (11, 4), viridian))
+        self.assertEqual(self.w.journey_missing_capabilities(
+            vermilion, (11, 4), viridian,
+            capabilities=frozenset({"cut"})), set())
+
     def test_journey_from_inside_mt_moon_tolerates_unmodelled_maps(self):
         # Regression (found live): starting inside Mt. Moon, the BFS
         # expands far enough to meet warps whose destination map is

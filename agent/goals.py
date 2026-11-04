@@ -54,6 +54,26 @@ def validate_goal(goal: Goal, state: GameState, world: World,
             return Verdict(False, problems, sorted(missing), sorted(missing))
         problems.append(f"no route to {world.map_name(goal.target_map)} at all")
         return Verdict(False, problems)
+    # A map-level route can exist while every tile-level journey is
+    # sealed by an obstacle the route graph cannot see - concretely,
+    # a Cut-tree row sealing a pocket (Route 2's cave mouth). If no
+    # journey plans but adding Cut alone would plan one, reject with
+    # that diagnosis instead of letting the executor discover it as
+    # "stuck". Deliberately Cut-only: other journey-level failures
+    # (the sea routes the portal planner cannot model, say) keep the
+    # old behaviour - approved here, honestly reported by the
+    # executor if they bite.
+    if "cut" not in caps \
+            and world.journey(state.map_id, (state.x, state.y),
+                              goal.target_map, goal.target_xy,
+                              caps) is None \
+            and world.journey(state.map_id, (state.x, state.y),
+                              goal.target_map, goal.target_xy,
+                              caps | {"cut"}) is not None:
+        problems.append(
+            f"no journey to {world.map_name(goal.target_map)} "
+            f"without: cut")
+        return Verdict(False, problems, ["cut"], ["cut"])
     if goal.target_xy is not None:
         gm = world.maps[goal.target_map]
         tx, ty = goal.target_xy

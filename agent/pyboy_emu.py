@@ -26,7 +26,8 @@ os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
 from pyboy import PyBoy
 
-from .state import ADDR_WALK_COUNTER, GameState, read_state
+from .state import (ADDR_CURRENT_MENU_ITEM, ADDR_MENU_TOP_Y,
+                    ADDR_WALK_COUNTER, GameState, read_state)
 
 _STEP_TIMEOUT = 90      # frames to wait for one tile step
 _BUTTON_HOLD = 5        # frames a button must be held to register (Gen 1)
@@ -212,3 +213,71 @@ class PyBoyEmulator:
         raise NotImplementedError(
             "Fly on hardware is a menu macro (START -> POKEMON -> Fly); "
             "not implemented yet")
+
+    def field_cut(self, mon_index: int, submenu_index: int) -> bool:
+        """Use Cut from the party menu: START -> POKEMON -> party mon
+        `mon_index` -> item `submenu_index` of its field-move submenu
+        (the caller - Executor._cut_tree - derives both from the
+        party's RAM movesets). The player must already be FACING the
+        tree: the engine reads wTileInFrontOfPlayer when Cut is
+        chosen. Generalised from the Vermilion gym-tree macro the
+        probes proved live (run_real.py _cut_tree_at_gym), with the
+        same press discipline (10-frame holds; menus steered by their
+        RAM cursor bytes, never by dead reckoning). Returns True when
+        the menu sequence completed; whether the tree actually fell
+        is the caller's check (it steps onto the tile)."""
+        mem = self.pb.memory
+
+        def press10(button: str) -> None:
+            self.pb.button_press(button)
+            self.tick(10)
+            self.pb.button_release(button)
+            self.tick(25)
+            self.tick(20)
+
+        def wait_menu_y(want: int, rounds: int = 80) -> bool:
+            for _ in range(rounds):
+                if mem[ADDR_MENU_TOP_Y] == want:
+                    return True
+                if self.read_state().in_dialog:
+                    press10("a")
+                    continue
+                self.tick(30)
+            return mem[ADDR_MENU_TOP_Y] == want
+
+        def steer(want: int, rounds: int = 30) -> bool:
+            for _ in range(rounds):
+                cur = mem[ADDR_CURRENT_MENU_ITEM]
+                if cur == want:
+                    return True
+                press10("down" if cur < want else "up")
+                self.tick(20)
+            return mem[ADDR_CURRENT_MENU_ITEM] == want
+
+        press10("start")
+        if not wait_menu_y(2):               # start menu open
+            return False
+        if not steer(1):                     # POKEMON
+            return False
+        press10("a")
+        if not wait_menu_y(1):               # party screen open
+            return False
+        if not steer(mon_index):
+            return False
+        press10("a")                         # the mon's submenu
+        self.tick(80)
+        if not steer(submenu_index):         # CUT
+            return False
+        press10("a")
+        self.tick(150)                       # cut animation + text
+        for _ in range(40):
+            if self.read_state().in_dialog:
+                self.close_dialog(max_presses=1)
+                continue
+            self.tick(30)
+        for _ in range(12):                  # back out of any menu left
+            if mem[ADDR_MENU_TOP_Y] == 0:
+                break
+            press10("b")
+            self.tick(20)
+        return True

@@ -106,6 +106,19 @@ class GameMap:
     # the BFS step generator (_bfs_steps), not here.
     ledges: Dict[Tile, Tuple[int, int]] = field(default_factory=dict)
     tileset: str = ""
+    # Cut-tree FACE tiles (build_walkability.py: the cell of the
+    # tree's 2x2 block whose sampled tile id is the tileset's cut id -
+    # $3D OVERWORLD / $50 GYM, engine/overworld/cut.asm UsedCut).
+    # Every other cell of the block reads as generic tree graphic
+    # (walk == 0); the engine replaces the WHOLE block when the tree
+    # is cut (CutTreeBlockSwaps), so passability is a block property:
+    # `cut_blocks` maps every cell of a tree block to its face tile.
+    cut_trees: FrozenSet[Tile] = frozenset()
+    cut_blocks: Dict[Tile, Tile] = field(default_factory=dict)
+
+    def cut_block_cells(self, face: Tile) -> FrozenSet[Tile]:
+        """All cells of the tree block whose face is `face`."""
+        return frozenset(t for t, f in self.cut_blocks.items() if f == face)
 
     def in_bounds(self, x: int, y: int) -> bool:
         return 0 <= x < self.w and 0 <= y < self.h
@@ -164,6 +177,19 @@ class World:
             for key, delta in m.get("ledges", {}).items():
                 lx, ly = key.split(",")
                 ledges[(int(lx), int(ly))] = (int(delta[0]), int(delta[1]))
+            cut_trees = frozenset(
+                (int(kx), int(ky))
+                for kx, ky in (k.split(",") for k in m.get("cut_trees", [])))
+            cut_blocks: Dict[Tile, Tile] = {}
+            for fx, fy in cut_trees:
+                # A tree is one 2x2 block; its face is one of the four
+                # cells. Expand to the block so the BFS can leave the
+                # block by any side once the tree is cut.
+                ox, oy = fx - fx % 2, fy - fy % 2
+                for bx in (ox, ox + 1):
+                    for by in (oy, oy + 1):
+                        if 0 <= bx < m["w"] and 0 <= by < m["h"]:
+                            cut_blocks[(bx, by)] = (fx, fy)
             self.maps[mid] = GameMap(
                 map_id=mid,
                 name=m["name"],
@@ -173,6 +199,8 @@ class World:
                 warps=warps,
                 ledges=ledges,
                 tileset=m.get("tileset", ""),
+                cut_trees=cut_trees,
+                cut_blocks=cut_blocks,
             )
         # Exit warps (dest = LAST_MAP) lead back to wherever warps into this
         # map. Precompute entrance maps for graph edges.
@@ -298,7 +326,8 @@ class World:
 
     # -- tile-level pathfinding ---------------------------------------------
     def _bfs_steps(self, gm: GameMap, cur: Tile, blocked,
-                   warp_tiles, exempt):
+                   warp_tiles, exempt, capabilities=frozenset(),
+                   cut_done=frozenset()):
         """Tiles reachable from `cur` in one step. `exempt` tiles (the
         goal / the target set) override the blocked and warp-corridor
         rules. Ledge jumps appear as two unit steps through a virtual
@@ -307,6 +336,20 @@ class World:
         the face node's only exit is that landing - so paths stay
         unit-step and the follower can treat the face entry as "press
         toward it and land two tiles on" (see Executor._follow_tiles).
+
+        Cut trees (gm.cut_blocks) follow the engine's rules: the
+        block's non-walkable cells are solid while the tree stands
+        (a block cell whose own tile is passable ground - some tree
+        blocks have one - stays ordinary ground throughout; the
+        walkable branch above has already yielded those). With the
+        "cut" capability a block may be ENTERED only through its
+        face tile (the one cell that reports the cut tile id - that
+        entry is an action, not a walk: journey() splits it out as a
+        ("cut", ...) step and the Executor performs the field move);
+        from the face, the block's other cells are passable (cutting
+        replaces the whole block with ground), and a block whose face
+        is in `cut_done` (cut earlier this map visit) is plain ground.
+        Without the capability, tree cells are walls, full stop.
         """
         cx, cy = cur
         if cur in gm.ledges:
@@ -325,7 +368,17 @@ class World:
                 if n in warp_tiles and n not in exempt:
                     continue
                 yield n
-            elif gm.ledges.get(n) == (dx, dy):
+                continue
+            face = gm.cut_blocks.get(n)
+            if face is not None:
+                if face in cut_done:
+                    yield n                      # cut earlier: ground
+                elif "cut" in capabilities and \
+                        (n == face or cur == face):
+                    yield n                      # enter via the face,
+                    # or step from the face into the rest of its block
+                continue
+            if gm.ledges.get(n) == (dx, dy):
                 b = (n[0] + dx, n[1] + dy)
                 if gm.in_bounds(*b) and gm.walkable(b[0], b[1], dx, dy) \
                         and b not in blocked \
@@ -333,13 +386,17 @@ class World:
                     yield n
 
     def tile_path(self, map_id: int, start: Tile, goal: Tile,
-                  blocked: FrozenSet[Tile] = frozenset()) -> Optional[List[Tile]]:
+                  blocked: FrozenSet[Tile] = frozenset(),
+                  capabilities: FrozenSet[str] = frozenset(),
+                  cut_done: FrozenSet[Tile] = frozenset()
+                  ) -> Optional[List[Tile]]:
         """BFS shortest path within one map. Includes both endpoints;
         None when unreachable. Warp tiles are destinations, not corridors:
         a path never steps *through* a door (it would teleport), though it
         may end on one. `blocked` tiles are treated as walls for this call
         only (an NPC standing in the way is a transient obstacle, not a
-        fact about the map); the goal itself is never blocked."""
+        fact about the map); the goal itself is never blocked.
+        `capabilities` / `cut_done` gate Cut-tree blocks (see _bfs_steps)."""
         gm = self.maps[map_id]
         if start == goal:
             return [start]
@@ -348,7 +405,8 @@ class World:
         q = deque([start])
         while q:
             cur = q.popleft()
-            for n in self._bfs_steps(gm, cur, blocked, warp_tiles, {goal}):
+            for n in self._bfs_steps(gm, cur, blocked, warp_tiles, {goal},
+                                     capabilities, cut_done):
                 if n in prev:
                     continue
                 prev[n] = cur
@@ -362,13 +420,16 @@ class World:
 
     def tile_paths_from(self, map_id: int, start: Tile,
                         targets: Set[Tile],
-                        blocked: FrozenSet[Tile] = frozenset()
+                        blocked: FrozenSet[Tile] = frozenset(),
+                        capabilities: FrozenSet[str] = frozenset(),
+                        cut_done: FrozenSet[Tile] = frozenset()
                         ) -> Dict[Tile, List[Tile]]:
         """One BFS from `start`; returns a path for every reachable target.
         Warp tiles are blocked unless they are targets (doors are
         destinations, not corridors). `blocked` tiles are walls for
         this call (learned walls on guessed grids - see the Executor);
-        targets are exempt."""
+        targets are exempt. `capabilities` / `cut_done` gate Cut-tree
+        blocks (see _bfs_steps)."""
         gm = self.maps[map_id]
         warp_tiles = {(wp.x, wp.y) for wp in gm.warps}
         remaining = set(targets) - {start}
@@ -380,7 +441,7 @@ class World:
         while q and remaining:
             cur = q.popleft()
             for n in self._bfs_steps(gm, cur, blocked, warp_tiles,
-                                     targets):
+                                     targets, capabilities, cut_done):
                 if n in prev:
                     continue
                 prev[n] = cur
@@ -393,11 +454,32 @@ class World:
                 q.append(n)
         return found
 
+    def _walk_steps(self, mid: int, path: List[Tile],
+                    cut_done: FrozenSet[Tile]) -> list:
+        """Expand one within-map tile path into journey steps, splitting
+        out a ("cut", map, face) step wherever the path enters a
+        Cut-tree block through its face tile: walk to the stance tile
+        beside the tree, cut, then continue. The Executor performs the
+        cut (party-menu field move) and steps onto the face tile, so
+        the following walk resumes from inside the (now ground) block.
+        Faces in `cut_done` were cut earlier this visit and need no
+        action. A path may cross several trees; each gets its own cut
+        step, in path order."""
+        gm = self.maps[mid]
+        steps: list = []
+        for i in range(1, len(path)):
+            t = path[i]
+            if t in gm.cut_trees and t not in cut_done:
+                steps.append(("walk", mid, path[i - 1]))
+                steps.append(("cut", mid, t))
+        steps.append(("walk", mid, path[-1]))
+        return steps
+
     # -- journey planning (portal level) --------------------------------------
     def journey(self, src_map: int, src_xy: Tile, dst_map: int,
                 dst_xy: Optional[Tile] = None,
                 capabilities: FrozenSet[str] = frozenset(),
-                blocked=None) -> Optional[list]:
+                blocked=None, cut_done=None) -> Optional[list]:
         """Plan a full journey as executable steps, chaining within-map
         walks with warps and connection crossings. Map-level route() can
         promise a connection the map's interior geometry cannot honour
@@ -405,8 +487,14 @@ class World:
         forest gates); a journey only exists if every walk in it does.
 
         Steps: ("walk", map, tile) - walk within a map (the tile may be a
-        warp, which fires on arrival); ("cross", direction, dst) - one
-        more step across a connection edge; ("fly", dst).
+        warp, which fires on arrival); ("cut", map, tile) - use Cut on
+        the tree whose face is `tile` (requires the "cut" capability;
+        see _walk_steps); ("cross", direction, dst) - one more step
+        across a connection edge; ("fly", dst).
+
+        `cut_done`: {map_id: {face tiles already cut this visit}} -
+        trees respawn when a map is reloaded, so this is session state
+        owned by the Executor, never a fact about the world.
         """
         from collections import deque as _dq
         # Journey state includes wLastMap: LAST_MAP exit warps return to
@@ -468,14 +556,18 @@ class World:
                 return reconstruct(fly_state)
             paths = self.tile_paths_from(
                 mid, (mx, my), set(targets),
-                blocked=(blocked or {}).get(mid, frozenset()))
+                blocked=(blocked or {}).get(mid, frozenset()),
+                capabilities=capabilities,
+                cut_done=(cut_done or {}).get(mid, frozenset()))
             for tile, action in targets.items():
                 if tile not in paths:
                     continue
-                walk_step = ("walk", mid, tile)
+                walk_steps = self._walk_steps(
+                    mid, paths[tile],
+                    (cut_done or {}).get(mid, frozenset()))
                 if action[0] == "goal":
                     goal_state = (mid, tile[0], tile[1], lo)
-                    parents[goal_state] = (state, [walk_step])
+                    parents[goal_state] = (state, walk_steps)
                     return reconstruct(goal_state)
                 if action[0] == "warp":
                     wp = action[1]
@@ -509,7 +601,7 @@ class World:
                             arrivals = [(wp.dest_id, landing[0], landing[1], new_lo)]
                     for arr in arrivals:
                         if arr not in parents:
-                            parents[arr] = (state, [walk_step])
+                            parents[arr] = (state, walk_steps)
                             q.append(arr)
                 elif action[0] == "cross":
                     _, direction, dst, off = action
@@ -526,8 +618,8 @@ class World:
                         arr = (dst, lx, ly,
                                self._enter_last_map(dst, (lx, ly), lo))
                         if arr not in parents:
-                            parents[arr] = (state, [walk_step,
-                                                    ("cross", direction, dst)])
+                            parents[arr] = (state, walk_steps +
+                                            [("cross", direction, dst)])
                             q.append(arr)
         return None
 
@@ -593,11 +685,43 @@ class World:
                 q.append(leg.dst)
         return None
 
+    def journey_missing_capabilities(
+            self, src_map: int, src_xy: Tile, dst_map: int,
+            dst_xy: Optional[Tile] = None,
+            capabilities: FrozenSet[str] = frozenset()) -> Set[str]:
+        """Tile-level counterpart of missing_capabilities: if no
+        journey exists from (src_map, src_xy), which single capability
+        would create one? (Empty set: a journey exists, or no single
+        capability unlocks one.) This is where a Cut diagnosis comes
+        from: a map-level route() can exist while every tile-level
+        journey is sealed by a tree row (Route 2's cave-mouth pocket),
+        so the map-level check alone can never see it."""
+        if self.journey(src_map, src_xy, dst_map, dst_xy,
+                        capabilities) is not None:
+            return set()
+        missing = set()
+        for cap in ("cut", "surf", "fly", "strength"):
+            if cap not in capabilities and \
+                    self.journey(src_map, src_xy, dst_map, dst_xy,
+                                 capabilities | {cap}) is not None:
+                missing.add(cap)
+        return missing
+
     def missing_capabilities(self, src: int, dst: int,
-                             capabilities: FrozenSet[str] = frozenset()
+                             capabilities: FrozenSet[str] = frozenset(),
+                             src_xy: Optional[Tile] = None,
+                             dst_xy: Optional[Tile] = None
                              ) -> Set[str]:
         """If `dst` is unreachable, which capabilities would unlock a route?
-        (Empty set means unreachable for some other reason.)"""
+        (Empty set means unreachable for some other reason.) With
+        `src_xy` given, a tile-level journey diagnosis runs first: it
+        is the only way to see obstacles (Cut trees) that seal a
+        destination whose map-level route exists."""
+        if src_xy is not None:
+            jm = self.journey_missing_capabilities(
+                src, src_xy, dst, dst_xy, capabilities)
+            if jm:
+                return jm
         all_caps = capabilities | {"surf", "fly", "cut", "strength"}
         if self.route(src, dst, all_caps) is None:
             return set()
