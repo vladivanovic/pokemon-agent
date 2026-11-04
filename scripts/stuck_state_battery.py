@@ -23,6 +23,7 @@ beats stock on unstick rate without losing validity or controls.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import random
 import sys
@@ -231,13 +232,35 @@ def score(goal: Goal | None, sc: dict, raw: str, err: str):
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--adapter", type=str, default=str(ADAPTER),
+                    help="adapter dir for the contender pass")
+    ap.add_argument("--label", type=str, default="adapter",
+                    help="contender label for logging and results")
+    ap.add_argument("--results", type=str,
+                    default=str(ROOT / "training_output" / "qwen_supervisor"
+                                / "battery_results.json"))
+    ap.add_argument("--skip-stock", action="store_true",
+                    help="run only the adapter pass (stock comes from the "
+                         "previous results file)")
+    args = ap.parse_args()
+
     scenarios = build_scenarios()
     print(f"scenarios: {len(scenarios)} "
           f"({ {f: sum(1 for s in scenarios if s['family']==f) for f in ('midroute','postbadge','lowhp','control')} })")
     log = SupervisorLog(LOG_PATH)
     results = {}
+    prev = Path(args.results)
+    if prev.exists():
+        try:
+            results = json.loads(prev.read_text()).get("results", {})
+        except Exception:
+            results = {}
 
-    for label, adapter in (("stock", None), ("adapter", ADAPTER)):
+    passes = ([("stock", None)] if not args.skip_stock else []) + \
+             [(args.label, Path(args.adapter))]
+
+    for label, adapter in passes:
         print(f"=== loading {label} ===")
         tok, model = load_contender(adapter)
         rows = []
@@ -275,12 +298,12 @@ def main():
         return 100.0 * sum(1 for r in sub if r[key]) / len(sub), len(sub)
 
     print("\n===== RESULTS (per family) =====")
-    print(f"{'family':<10} {'metric':<9} {'stock':>7} {'adapter':>8}")
+    print(f"{'family':<10} {'metric':<9} {'stock':>7} {args.label:>8}")
     summary = {}
     for fam in fams:
         for metric in ("valid", "unstick", "advance"):
             s, n = pct(results["stock"], fam, metric)
-            a, _ = pct(results["adapter"], fam, metric)
+            a, _ = pct(results[args.label], fam, metric)
             summary[(fam, metric)] = (s, a, n)
             print(f"{fam:<10} {metric:<9} {s:>6.0f}% {a:>7.0f}%   (n={n})")
 
@@ -289,22 +312,21 @@ def main():
         vals = [r[key] for r in rows if r["family"] in fams]
         return 100.0 * sum(vals) / len(vals) if vals else 0.0
     s_unstick = avg(results["stock"], stuck, "unstick")
-    a_unstick = avg(results["adapter"], stuck, "unstick")
+    a_unstick = avg(results[args.label], stuck, "unstick")
     s_valid = avg(results["stock"], stuck, "valid")
-    a_valid = avg(results["adapter"], stuck, "valid")
+    a_valid = avg(results[args.label], stuck, "valid")
     s_ctrl = avg(results["stock"], ("control",), "unstick")
-    a_ctrl = avg(results["adapter"], ("control",), "unstick")
+    a_ctrl = avg(results[args.label], ("control",), "unstick")
     ship = a_unstick > s_unstick and a_valid >= s_valid and a_ctrl >= s_ctrl
     print(f"\nSTUCK-FAMILY UNSTICK: stock {s_unstick:.0f}% "
-          f"vs adapter {a_unstick:.0f}%")
+          f"vs {args.label} {a_unstick:.0f}%")
     print(f"CONTROLS unstick:     stock {s_ctrl:.0f}% "
-          f"vs adapter {a_ctrl:.0f}%  (fallback baseline: 100%)")
+          f"vs {args.label} {a_ctrl:.0f}%  (fallback baseline: 100%)")
     print(f"DECISION: {'SHIP adapter' if ship else 'KEEP STOCK, keep logging'}")
-    (ROOT / "training_output" / "qwen_supervisor" / "battery_results.json"
+    results_path = Path(args.results)
+    (results_path.parent / (args.label + "_battery_results.json")
      ).write_text(json.dumps({"scenarios": len(scenarios),
-                              "results": results,
-                              "summary": {f"{k[0]}:{k[1]}": v
-                                          for k, v in summary.items()},
+                              "results": {args.label: rows},
                               "ship": ship}, indent=1, default=str))
 
 

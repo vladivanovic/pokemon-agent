@@ -196,3 +196,35 @@ recovery rows - failure events in the context paired with a DIFFERENT
 validated target. Sources: this battery's stock-recovery positives
 (13, already in the log) plus a recovery oracle for the synthesizer.
 Stock stays the default; logging stays on.
+
+## 7. Round 2 (2026-11-04): recovery rows trained, battery 3 = SHIP
+
+Round-2 dataset (`dataset/supervisor_r2/`, builder flags `--count 800
+--seed 42 --recovery 240 --battery-train 12 --battery-holdout 4
+--out dataset/supervisor_r2`): 800 failure-free originals + 240
+recovery rows (midroute/postbadge/lowhp, failure events in context,
+priority oracle: heal → Zapdos detour → retreat; every row validated
+and different from the failed goal) + 12 real battery-stock recovery
+rows. Mechanical audit: **0 of 240 recovery rows target the failed
+goal**. 4 real rows held out (`battery_holdout.jsonl`) to audit
+synthetic against real; trained **from base**, 1 epoch - continuing
+from the v1 adapter would have started from its checklist collapse.
+
+Battery 3 (same 40 scenarios, same harness/scoring; stock and v1 rows
+from battery v2, adapter v2 run fresh):
+
+| family    | metric   | stock | adapter v1 | adapter v2 |
+|-----------|----------|-------|------------|------------|
+| midroute  | valid/unstick | 42% | 0%  | **83%** |
+| postbadge | valid/unstick | 50% | 0%  | **100%** |
+| lowhp     | valid/unstick | 50% | 0%  | **75%** |
+| control   | valid/unstick | 100% | 100% | **100%** |
+| control   | advance  | 58%   | 100% | **100%** |
+
+**Verdict: SHIP.** v2 beats stock on unstick in every stuck family
+(86% avg vs 47%) without losing validity, and controls hold at v1's
+level (100%, advance included). Wiring v2 as the default supervisor is
+a separate next go. Raw generations are not in git; the battery v2
+rows are in the supervisor log at
+`~/workspace/pokemon-play/supervisor_log.jsonl` (round results in
+`training_output/*/adapter_v2_battery_results.json`, gitignored).
