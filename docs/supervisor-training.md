@@ -210,6 +210,12 @@ goal**. 4 real rows held out (`battery_holdout.jsonl`) to audit
 synthetic against real; trained **from base**, 1 epoch - continuing
 from the v1 adapter would have started from its checklist collapse.
 
+Seed arithmetic (corrected - the earlier draft said 13): the
+supervisor log holds **31 battery-stock successes** (25 from battery
+v2 - 13 stuck-family recoveries + 12 controls - and 6 from the first
+battery run). Round 2 trained on 12 of that 31-row pool and held out
+4; the remaining 15 rows stay in the log, unused.
+
 Battery 3 (same 40 scenarios, same harness/scoring; stock and v1 rows
 from battery v2, adapter v2 run fresh):
 

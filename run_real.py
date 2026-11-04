@@ -47,6 +47,7 @@ import argparse
 import os
 import sys
 import time
+from pathlib import Path
 
 # PyBoy wants SDL; headless machines need the dummy drivers, and they
 # must be set before pyboy is imported (PyBoyEmulator imports it).
@@ -56,7 +57,7 @@ os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 from agent.executor import Executor, SmartFightPolicy, StuckError
 from agent.goals import Goal
 from agent.memory import EpisodicMemory
-from agent.planner import ChecklistPlanner
+from agent.planner import ChecklistPlanner, LLMPlanner
 from agent.pyboy_emu import PyBoyEmulator
 from agent.world import default_world
 
@@ -802,13 +803,38 @@ def main() -> int:
     ap.add_argument("--rival", default="GARY")
     ap.add_argument("--starter", default="squirtle", choices=STARTERS)
     ap.add_argument("--max-rounds", type=int, default=12)
+    ap.add_argument("--supervisor", default="adapter",
+                    choices=["adapter", "stock", "off"],
+                    help="LLM supervisor mode: adapter (trained LoRA, "
+                         "default) / stock (bare base model) / off "
+                         "(checklist only). Adapter failures degrade to "
+                         "stock, then to the checklist - never a hard "
+                         "failure.")
+    ap.add_argument("--supervisor-adapter", default=str(
+        Path(__file__).parent / "training_output" / "qwen_supervisor_v2"
+        / "final"), help="LoRA adapter directory for --supervisor adapter")
+    ap.add_argument("--supervisor-base", default="/home/vlad/models/"
+                    "Qwen3.5-4B", help="base model directory")
     args = ap.parse_args()
 
     os.makedirs(args.workdir, exist_ok=True)
     world = default_world()
     emu = PyBoyEmulator(args.rom)
     memory = EpisodicMemory()
-    ex = Executor(emu, world, ChecklistPlanner(), memory,
+    if args.supervisor == "adapter":
+        planner = LLMPlanner(endpoint="inline", model="inline:adapter",
+                             adapter=args.supervisor_adapter,
+                             base_model=args.supervisor_base)
+        print(f"supervisor: adapter {args.supervisor_adapter} "
+              f"(inline; degrades to stock, then checklist)")
+    elif args.supervisor == "stock":
+        planner = LLMPlanner(endpoint="inline", model="inline:stock",
+                             adapter=None, base_model=args.supervisor_base)
+        print("supervisor: stock base model (inline)")
+    else:
+        planner = ChecklistPlanner()
+        print("supervisor: off (checklist only)")
+    ex = Executor(emu, world, planner, memory,
                   battle_policy=SmartFightPolicy())
 
     def shot(name: str) -> None:

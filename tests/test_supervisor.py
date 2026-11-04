@@ -189,7 +189,7 @@ class TestDatasetBuilder(unittest.TestCase):
         self.assertGreaterEqual(len(targets), 10)
 
     def test_examples_are_wellformed_and_validate(self):
-        examples, stats = builder.build_examples(
+        examples, stats, _holdout = builder.build_examples(
             self.w, synthetic_count=30, seed=7, variants=2, log_path=None)
         self.assertEqual(len(examples), 30)
         self.assertEqual(stats["synthetic"], 30)
