@@ -469,7 +469,7 @@ def build_examples(world: World, synthetic_count: int = 800,
                    log_path: Optional[str | Path] = DEFAULT_SUPERVISOR_LOG,
                    recovery_count: int = 0,
                    battery_train: int = 0,
-                   battery_holdout: int = 4):
+                   battery_holdout: int = 0):
     """All examples as (example, source) pairs, deduped on the full
     (user, assistant) payload, plus a stats dict."""
     scenarios = generate_scenarios(world, seed=seed, variants=variants)
