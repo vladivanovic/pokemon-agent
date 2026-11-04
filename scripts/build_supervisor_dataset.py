@@ -33,8 +33,8 @@ from typing import List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from agent.goals import DETOURS, STORY, next_step, validate_goal
-from agent.memory import EpisodicMemory
+from agent.goals import DETOURS, STORY, Goal, next_step, validate_goal
+from agent.memory import EpisodicMemory, state_signature
 from agent.planner import SYSTEM_PROMPT, ChecklistPlanner, LLMPlanner
 from agent.state import HM_MOVES, GameState, PartyMon
 from agent.supervisor_log import DEFAULT_SUPERVISOR_LOG, SupervisorLog
@@ -246,6 +246,190 @@ def make_example(context: dict, target_map_name: str, reason: str,
     ]}
 
 
+# --- recovery rows (round 2) -------------------------------------------------
+# Battery v2 (docs/supervisor-training.md section 6) showed the v1 adapter
+# proposes the already-failed goal in every stuck scenario: its training
+# set never contained failure events. Recovery rows pair a production-
+# faithful context (failure events present) with a DIFFERENT validated
+# target, chosen by a priority oracle: heal when the party is hurt, the
+# Zapdos detour when Surf is in hand, otherwise retreat to the previous
+# story town.
+
+POKECENTER_TOWNS = ["PewterCity", "CeruleanCity", "VermilionCity",
+                    "CeladonCity", "FuchsiaCity", "SaffronCity",
+                    "CinnabarIsland", "ViridianCity"]
+
+
+def _failed_memory(state: GameState, world: World, step, n: int = 2) -> (
+        EpisodicMemory):
+    """Memory as production sees it after the deterministic goal failed
+    n times in this unchanged situation."""
+    mem = EpisodicMemory()
+    key = Goal(kind="goto",
+               target_map=world.map_id(step.goal_map_name)).key()
+    sig = state_signature(state)
+    for _ in range(n):
+        mem.record_goal_result(key, success=False, state_signature=sig,
+                               note="executor press budget exhausted")
+    return mem
+
+
+def _recovery_goal(state: GameState, world: World, memory: EpisodicMemory,
+                   k: int) -> tuple[Optional[Goal], str]:
+    caps = state.capabilities()
+    # 1. heal: the party is hurt and a Pokecenter town is reachable
+    if state.party and state.team_hp_frac() < 0.6:
+        best = None
+        for name in POKECENTER_TOWNS:
+            mid = world._name_to_id.get(name)
+            if mid is None or mid == state.map_id:
+                continue
+            route = world.route(state.map_id, mid, caps)
+            if route is not None and (best is None or len(route) < len(best)):
+                best = route
+        if best is not None:
+            return (Goal(kind="goto", target_map=best.maps[-1],
+                         reason="Recovery: heal the party at a Pokecenter "
+                                "after repeated failures of the main "
+                                "goal"),
+                    "recovery-heal")
+    # 2. Zapdos detour when Surf is in hand
+    if "surf" in caps and not memory.succeeded("detour:zapdos"):
+        det = DETOURS[0]
+        goal = Goal(kind="goto",
+                    target_map=world.map_id(det.goal_map_name),
+                    reason="Recovery: take the Zapdos detour while the "
+                           "main path is blocked")
+        if validate_goal(goal, state, world, memory).ok:
+            return goal, "recovery-detour"
+    # 3. retreat: the previous story town, re-approach from there
+    if k >= 1:
+        prev = STORY[k - 1]
+        goal = Goal(kind="goto",
+                    target_map=world.map_id(prev.goal_map_name),
+                    reason="Recovery: fall back to " + prev.goal_map_name
+                           + " and re-approach")
+        if validate_goal(goal, state, world, memory).ok:
+            return goal, "recovery-retreat"
+    return None, ""
+
+
+def generate_recovery_scenarios(world: World, seed: int = 43,
+                                variants: int = 10) -> List[Scenario]:
+    """Stuck-state scenarios across the battery's three families
+    (midroute / postbadge / lowhp), each with the deterministic goal
+    failed 2x in memory, paired with the recovery-oracle target."""
+    rng = random.Random(seed)
+    out: List[Scenario] = []
+    seen = set()
+    plan = ([("midroute", k) for k in (2, 3, 4, 5, 6, 7)]
+            + [("postbadge", k) for k in (5, 6, 7, 8)]
+            + [("lowhp", k) for k in (3, 4, 5, 6)])
+    for family, k in plan:
+        badges, visits, hm_moves = _prefix(k)
+        caps = _caps(badges, hm_moves)
+        for start_name in _candidate_starts(world, k, caps):
+            start_id = world.map_id(start_name)
+            for _ in range(variants):
+                tile = _start_tile(world, start_id, rng)
+                if tile is None:
+                    continue
+                state = _make_state(rng, k, start_id, tile,
+                                    badges, hm_moves)
+                if family == "lowhp":
+                    state = GameState(
+                        map_id=state.map_id, x=state.x, y=state.y,
+                        in_battle=False, badges=state.badges,
+                        money=state.money,
+                        party=[PartyMon(level=m.level,
+                                        hp=max(1, round(m.max_hp * 0.15)),
+                                        max_hp=m.max_hp, moves=m.moves,
+                                        pp=m.pp, species_id=m.species_id)
+                               for m in state.party])
+                step = STORY[k]
+                memory = _memory_for(world, visits)
+                memory.events.extend(
+                    _failed_memory(state, world, step).events)
+                if next_step(state, memory, world) is not step:
+                    continue
+                goal, source = _recovery_goal(state, world, memory, k)
+                if goal is None:
+                    continue
+                if goal.target_map == world.map_id(step.goal_map_name):
+                    continue  # recovery must differ from the failed goal
+                if not validate_goal(goal, state, world, memory).ok:
+                    continue
+                context = LLMPlanner._context(state, world, memory)
+                key = (json.dumps(context, sort_keys=True),
+                       world.map_name(goal.target_map))
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(Scenario(context=context, goal=goal, state=state,
+                                    memory=memory, source=source))
+    return out
+
+
+def audit_recovery_rows(examples, world: World) -> dict:
+    """Mechanical audit: no recovery row may target the failed goal.
+    The failed goal(s) are read back from each row's own context
+    (recent_events goal_result failures), the target from the assistant
+    turn."""
+    name_to_id = {m.name: mid for mid, m in world.maps.items()}
+    bad = 0
+    targets = {}
+    for example, source in examples:
+        if source != "recovery":
+            continue
+        ctx = json.loads(example["messages"][1]["content"])
+        target = json.loads(example["messages"][2]["content"])
+        tgt_id = name_to_id.get(target["target_map_name"])
+        targets[target["target_map_name"]] = \
+            targets.get(target["target_map_name"], 0) + 1
+        failed_ids = set()
+        for ev in ctx.get("recent_events", []):
+            if ev.get("kind") == "goal_result" and not ev.get("success"):
+                key = ev.get("goal", "")          # "goto:<id>:<xy>"
+                parts = key.split(":")
+                if len(parts) >= 2 and parts[1].isdigit():
+                    failed_ids.add(int(parts[1]))
+        if tgt_id in failed_ids:
+            bad += 1
+    return {"recovery_rows": sum(1 for _, s in examples
+                                 if s == "recovery"),
+            "failed_goal_as_target": bad,
+            "target_map_counts": targets}
+
+
+def examples_from_battery_log(records: List[dict], world: World):
+    """Real stock recoveries from battery runs (model battery-*): the
+    executor completed the goal. Returns a single list of
+    (example, "battery-log") pairs; caller splits train/holdout.
+    Note: the battery logs verdict=None (scoring lives in
+    battery_results.json), so acceptance is judged by the outcome."""
+    names = {m.name for m in world.maps.values()}
+    proposals = {r["record_id"]: r for r in records
+                 if r.get("kind") == "supervisor_proposal"
+                 and str(r.get("model", "")).startswith("battery-stock")}
+    outcomes = {r["record_id"]: r for r in records
+                if r.get("kind") == "supervisor_outcome"}
+    pairs = []
+    for record_id, rec in proposals.items():
+        if rec.get("decision") != "battery":
+            continue
+        outcome = outcomes.get(record_id)
+        if not outcome or not outcome.get("executed") \
+                or not outcome.get("success"):
+            continue
+        prop = rec.get("proposal") or {}
+        target = prop.get("target_map_name")
+        if target not in names:
+            continue
+        pairs.append((make_example(rec["context"], target,
+                                   prop.get("reason", "")), "battery-log"))
+    return pairs
+
+
 def examples_from_scenarios(scenarios: List[Scenario], world: World):
     return [(make_example(s.context, world.map_name(s.goal.target_map),
                           s.goal.reason), s.source)
@@ -282,7 +466,10 @@ def examples_from_log(records: List[dict], world: World):
 
 def build_examples(world: World, synthetic_count: int = 800,
                    seed: int = 42, variants: int = 24,
-                   log_path: Optional[str | Path] = DEFAULT_SUPERVISOR_LOG):
+                   log_path: Optional[str | Path] = DEFAULT_SUPERVISOR_LOG,
+                   recovery_count: int = 0,
+                   battery_train: int = 0,
+                   battery_holdout: int = 4):
     """All examples as (example, source) pairs, deduped on the full
     (user, assistant) payload, plus a stats dict."""
     scenarios = generate_scenarios(world, seed=seed, variants=variants)
@@ -299,6 +486,30 @@ def build_examples(world: World, synthetic_count: int = 800,
             SupervisorLog.read_records(log_path), world)
         stats["log"] = len(log_examples)
         examples += log_examples
+    if recovery_count > 0:
+        rec_scenarios = generate_recovery_scenarios(
+            world, seed=seed + 17, variants=10)
+        rng2 = random.Random(seed + 18)
+        rng2.shuffle(rec_scenarios)
+        rec_examples = examples_from_scenarios(rec_scenarios[:recovery_count],
+                                               world)
+        # recovery rows are labeled by their oracle source, not the
+        # generic "synthetic", so the audit can isolate them
+        rec_examples = [(e, "recovery") for e, _ in rec_examples]
+        stats["recovery_pool"] = len(rec_scenarios)
+        examples += rec_examples
+    if battery_train > 0 or battery_holdout > 0:
+        b_all = examples_from_battery_log(
+            SupervisorLog.read_records(log_path), world)
+        rng3 = random.Random(seed + 19)
+        rng3.shuffle(b_all)
+        hold_n = min(battery_holdout, len(b_all) // 2)
+        b_hold = b_all[:hold_n]
+        b_train = b_all[hold_n:hold_n + battery_train]
+        stats["battery_pool"] = len(b_all)
+        stats["battery_train"] = len(b_train)
+        stats["battery_holdout"] = len(b_hold)
+        examples += b_train
     seen = set()
     deduped = []
     for example, source in examples:
@@ -313,7 +524,16 @@ def build_examples(world: World, synthetic_count: int = 800,
     stats["targets"] = len({
         json.loads(e["messages"][2]["content"])["target_map_name"]
         for e, _ in deduped})
-    return deduped, stats
+    holdout = []
+    if battery_holdout > 0:
+        # battery-log holdout rows were never added to examples; rebuild
+        # them here from the same seeded split for the caller
+        b_all = examples_from_battery_log(
+            SupervisorLog.read_records(log_path), world)
+        rng4 = random.Random(seed + 19)
+        rng4.shuffle(b_all)
+        holdout = b_all[:min(battery_holdout, len(b_all) // 2)]
+    return deduped, stats, holdout
 
 
 def main(argv=None) -> int:
@@ -332,15 +552,28 @@ def main(argv=None) -> int:
                     help="skip the supervisor log source")
     ap.add_argument("--out", default="dataset/supervisor",
                     help="output directory (default dataset/supervisor)")
+    ap.add_argument("--recovery", type=int, default=0,
+                    help="recovery examples to add (stuck-state scenarios "
+                         "with failure events; 0 = round-1 behavior)")
+    ap.add_argument("--battery-train", type=int, default=0,
+                    help="real stock-recovery rows from the battery log to "
+                         "train on (0 = skip)")
+    ap.add_argument("--battery-holdout", type=int, default=0,
+                    help="battery rows held out of training to audit the "
+                         "synthetic recovery rows against (written to "
+                         "battery_holdout.jsonl)")
     ap.add_argument("--eval-frac", type=float, default=0.05,
                     help="held-out fraction (default 0.05)")
     args = ap.parse_args(argv)
 
     world = default_world()
-    examples, stats = build_examples(
+    examples, stats, holdout = build_examples(
         world, synthetic_count=args.count, seed=args.seed,
         variants=args.variants,
-        log_path=None if args.no_log else args.log)
+        log_path=None if args.no_log else args.log,
+        recovery_count=args.recovery,
+        battery_train=args.battery_train,
+        battery_holdout=args.battery_holdout)
     rng = random.Random(args.seed + 2)
     rng.shuffle(examples)
     total = len(examples)
@@ -359,7 +592,21 @@ def main(argv=None) -> int:
     print(f"scenario pool: {stats['scenario_pool']}")
     print(f"examples: {stats['total']} "
           f"(synthetic {stats['synthetic']}, log {stats['log']}, "
+          f"recovery {stats.get('recovery_pool', 0)} pool / "
+          f"{sum(1 for _, s in examples if s == 'recovery')} used, "
+          f"battery train {stats.get('battery_train', 0)} "
+          f"holdout {stats.get('battery_holdout', 0)}, "
           f"dedup dropped {stats['dedup_dropped']})")
+    audit = audit_recovery_rows(examples, world)
+    print(f"recovery audit: {audit['recovery_rows']} rows, "
+          f"failed-goal-as-target = {audit['failed_goal_as_target']} "
+          f"(must be 0); targets: {audit['target_map_counts']}")
+    if holdout:
+        hold_path = out_dir / "battery_holdout.jsonl"
+        with hold_path.open("w") as f:
+            for row in holdout:
+                f.write(json.dumps(row) + "\n")
+        print(f"wrote {len(holdout)} battery holdout rows to {hold_path}")
     print(f"distinct target maps: {stats['targets']}")
     print(f"wrote {len(train_set)} train + {len(eval_set)} eval "
           f"to {out_dir}/")
