@@ -1719,7 +1719,8 @@ def _ride_battling(emu: PyBoyEmulator, ex: Executor, map_id: int,
 
 
 def buy_mart_item(emu: PyBoyEmulator, ex: Executor, mart: int,
-                  list_index: int, item_id: int, want: int) -> int:
+                  list_index: int, item_id: int, want: int,
+                  stand=(2, 5), face: str = "left") -> int:
     """Buy up to `want` of one mart item; returns the final bag
     count. STAGE-GATED on the shop's menu signatures (calibrated
     live at Cerulean Mart, probe144; the first blind-steering
@@ -1732,7 +1733,18 @@ def buy_mart_item(emu: PyBoyEmulator, ex: Executor, mart: int,
       menuY 8 = quantity/confirm (A-ride until the bag count
                 ticks in RAM - the count is the ground truth)
     A unit of the WRONG item moving (the Poke Ball count is the
-    index-0 canary) aborts the buy with what it has."""
+    index-0 canary) aborts the buy with what it has.
+
+    `stand`/`face` locate the clerk (generalised in probe145
+    from the Cerulean-only original for Celadon Mart, whose
+    clerks stand elsewhere): the defaults keep the exact
+    probe144-proven Cerulean behaviour (stand (2,5), step left
+    into the clerk); other shops pass their own pair and are
+    faced with _face instead (probe145's proven Celadon path -
+    Mart 2F wants stand (5,5) facing up, Mart 4F (5,5) facing
+    down). Callers buying on an upper floor must chain the
+    floors first: a single journey ride into an elevator
+    building spins (see celadon_leg)."""
     mem = emu.pb.memory
     have = _bag_count(emu, item_id)
     if have >= want:
@@ -1740,10 +1752,13 @@ def buy_mart_item(emu: PyBoyEmulator, ex: Executor, mart: int,
     if not _ride_to(emu, ex, mart):
         return have
     try:
-        ex._walk_to(mart, (2, 5))
+        ex._walk_to(mart, stand)
     except StuckError:
         return have
-    _step(emu, ex, "left")                     # face the clerk
+    if stand == (2, 5) and face == "left":
+        _step(emu, ex, "left")                 # face the clerk
+    else:
+        _face(emu, face)
     _press10(emu, "a")
     emu.tick(60)
     balls0 = _bag_count(emu, ITEM_POKE_BALL)
@@ -2748,6 +2763,852 @@ def rock_tunnel_leg(emu: PyBoyEmulator, ex: Executor) -> bool:
     if not _ride_to(emu, ex, lavpc):
         return False
     return heal_at_pokecenter(emu, ex, lavpc)
+
+
+# -- Celadon leg (probes 145-147): the road west, the Fire
+# counter, Erika ---------------------------------------------------
+#
+# Faithful ports of the probe-proven segments, assembled into
+# the WINNING route (catch -> swap -> shop -> stone -> grind ->
+# gym): the five blackouts and the detours that taught the
+# numbers are in docs/supervisor-training.md S13, not replayed
+# here. The assembled leg has NOT been cold-replayed end to end.
+
+ITEM_SUPER_POTION = 0x13
+ITEM_GREAT_BALL = 0x03
+ITEM_FRESH_WATER = 0x3C
+ITEM_FIRE_STONE = 0x20
+SPECIES_GROWLITHE = 0x21
+SPECIES_ARCANINE = 0x14
+SPECIES_BLASTOISE = 0x1C
+EVENT_BEAT_ERIKA = 425
+ADDR_ENEMY_TYPE1 = 0xCFEA
+ADDR_ENEMY_TYPE2 = 0xCFEB
+ADDR_BATTLE_MON_TYPE1 = 0xD019
+ADDR_BATTLE_MON_TYPE2 = 0xD01A
+
+# Damaging moves: id -> (base power, type). Generated once from
+# pokered data/moves/moves.asm (probe145's table); status moves
+# are absent, which doubles as the damaging-move test.
+_MOVE_INFO = {
+    1: (40, "NORMAL"),  2: (50, "NORMAL"),  3: (15, "NORMAL"),  4: (18, "NORMAL"),
+    5: (80, "NORMAL"),  6: (40, "NORMAL"),  7: (75, "FIRE"),  8: (75, "ICE"),
+    9: (75, "ELECTRIC"),  10: (40, "NORMAL"),  11: (55, "NORMAL"),  12: (1, "NORMAL"),
+    13: (80, "NORMAL"),  15: (50, "NORMAL"),  16: (40, "NORMAL"),  17: (35, "FLYING"),
+    19: (70, "FLYING"),  20: (15, "NORMAL"),  21: (80, "NORMAL"),  22: (35, "GRASS"),
+    23: (65, "NORMAL"),  24: (30, "FIGHTING"),  25: (120, "NORMAL"),  26: (70, "FIGHTING"),
+    27: (60, "FIGHTING"),  29: (70, "NORMAL"),  30: (65, "NORMAL"),  31: (15, "NORMAL"),
+    32: (1, "NORMAL"),  33: (35, "NORMAL"),  34: (85, "NORMAL"),  35: (15, "NORMAL"),
+    36: (90, "NORMAL"),  37: (90, "NORMAL"),  38: (100, "NORMAL"),  40: (15, "POISON"),
+    41: (25, "BUG"),  42: (14, "BUG"),  44: (60, "NORMAL"),  49: (1, "NORMAL"),
+    51: (40, "POISON"),  52: (40, "FIRE"),  53: (95, "FIRE"),  55: (40, "WATER"),
+    56: (120, "WATER"),  57: (95, "WATER"),  58: (95, "ICE"),  59: (120, "ICE"),
+    60: (65, "PSYCHIC"),  61: (65, "WATER"),  62: (65, "ICE"),  63: (150, "NORMAL"),
+    64: (35, "FLYING"),  65: (80, "FLYING"),  66: (80, "FIGHTING"),  67: (50, "FIGHTING"),
+    68: (1, "FIGHTING"),  69: (1, "FIGHTING"),  70: (80, "NORMAL"),  71: (20, "GRASS"),
+    72: (40, "GRASS"),  75: (55, "GRASS"),  76: (120, "GRASS"),  80: (70, "GRASS"),
+    82: (1, "DRAGON"),  83: (15, "FIRE"),  84: (40, "ELECTRIC"),  85: (95, "ELECTRIC"),
+    87: (120, "ELECTRIC"),  88: (50, "ROCK"),  89: (100, "GROUND"),  90: (1, "GROUND"),
+    91: (100, "GROUND"),  93: (50, "PSYCHIC"),  94: (90, "PSYCHIC"),  98: (40, "NORMAL"),
+    99: (20, "NORMAL"),  120: (130, "NORMAL"),  121: (100, "NORMAL"),  122: (20, "GHOST"),
+    123: (20, "POISON"),  124: (65, "POISON"),  125: (65, "GROUND"),  126: (120, "FIRE"),
+    127: (80, "WATER"),  128: (35, "WATER"),  129: (60, "NORMAL"),  130: (100, "NORMAL"),
+    131: (20, "NORMAL"),  132: (10, "NORMAL"),  136: (85, "FIGHTING"),  138: (100, "PSYCHIC"),
+    140: (15, "NORMAL"),  141: (20, "BUG"),  143: (140, "FLYING"),  145: (20, "WATER"),
+    146: (70, "NORMAL"),  149: (1, "PSYCHIC"),  152: (90, "WATER"),  153: (170, "NORMAL"),
+    154: (18, "NORMAL"),  155: (50, "GROUND"),  157: (75, "ROCK"),  158: (80, "NORMAL"),
+    161: (80, "NORMAL"),  162: (1, "NORMAL"),  163: (70, "NORMAL"),  165: (50, "NORMAL"),
+}
+
+_TYPE_ID2NAME = {0: "NORMAL", 1: "FIGHTING", 2: "FLYING",
+                 3: "POISON", 4: "GROUND", 5: "ROCK", 7: "BUG",
+                 8: "GHOST", 20: "FIRE", 21: "WATER", 22: "GRASS",
+                 23: "ELECTRIC", 24: "PSYCHIC", 25: "ICE",
+                 26: "DRAGON"}
+
+# Gen 1 type chart (pokered data/types/type_matchups.asm):
+# (attacking, defending) -> multiplier, non-1.0 entries only.
+_TYPE_CHART = {}
+for _a, _d, _m in [
+    ("NORMAL","ROCK",0.5),("NORMAL","GHOST",0),
+    ("FIRE","FIRE",0.5),("FIRE","WATER",0.5),("FIRE","GRASS",2),
+    ("FIRE","ICE",2),("FIRE","BUG",2),("FIRE","ROCK",0.5),("FIRE","DRAGON",0.5),
+    ("WATER","FIRE",2),("WATER","WATER",0.5),("WATER","GRASS",0.5),
+    ("WATER","GROUND",2),("WATER","ROCK",2),("WATER","DRAGON",0.5),
+    ("ELECTRIC","WATER",2),("ELECTRIC","ELECTRIC",0.5),("ELECTRIC","GRASS",0.5),
+    ("ELECTRIC","ELECTRIC",0.5),("ELECTRIC","GROUND",0),("ELECTRIC","FLYING",2),
+    ("ELECTRIC","DRAGON",0.5),
+    ("GRASS","FIRE",0.5),("GRASS","WATER",2),("GRASS","GRASS",0.5),
+    ("GRASS","POISON",0.5),("GRASS","GROUND",2),("GRASS","FLYING",0.5),
+    ("GRASS","BUG",0.5),("GRASS","ROCK",2),("GRASS","DRAGON",0.5),
+    ("ICE","WATER",0.5),("ICE","GRASS",2),("ICE","ICE",0.5),("ICE","GROUND",2),
+    ("ICE","FLYING",2),("ICE","DRAGON",2),
+    ("FIGHTING","NORMAL",2),("FIGHTING","ICE",2),("FIGHTING","POISON",0.5),
+    ("FIGHTING","FLYING",0.5),("FIGHTING","PSYCHIC",0.5),("FIGHTING","BUG",0.5),
+    ("FIGHTING","ROCK",2),("FIGHTING","GHOST",0),
+    ("POISON","GRASS",2),("POISON","POISON",0.5),("POISON","GROUND",0.5),
+    ("POISON","BUG",2),("POISON","ROCK",0.5),("POISON","GHOST",0.5),
+    ("GROUND","FIRE",2),("GROUND","ELECTRIC",2),("GROUND","GRASS",0.5),
+    ("GROUND","POISON",2),("GROUND","FLYING",0),("GROUND","BUG",0.5),
+    ("GROUND","ROCK",2),
+    ("FLYING","ELECTRIC",0.5),("FLYING","GRASS",2),("FLYING","FIGHTING",2),
+    ("FLYING","BUG",2),("FLYING","ROCK",0.5),
+    ("PSYCHIC","FIGHTING",2),("PSYCHIC","POISON",2),("PSYCHIC","PSYCHIC",0.5),
+    ("BUG","FIRE",0.5),("BUG","GRASS",2),("BUG","FIGHTING",0.5),
+    ("BUG","POISON",2),("BUG","FLYING",0.5),("BUG","PSYCHIC",2),
+    ("BUG","GHOST",0.5),
+    ("ROCK","FIRE",2),("ROCK","ICE",2),("ROCK","FIGHTING",0.5),
+    ("ROCK","GROUND",0.5),("ROCK","FLYING",2),("ROCK","BUG",2),
+    ("GHOST","NORMAL",0),("GHOST","PSYCHIC",0),("GHOST","GHOST",2),
+    ("DRAGON","DRAGON",2),
+]:
+    _TYPE_CHART[(_a, _d)] = _m
+del _a, _d, _m
+
+
+def _effectiveness(atk_type: str, def_types) -> float:
+    eff = 1.0
+    for d in def_types:
+        if d:
+            eff *= _TYPE_CHART.get((atk_type, d), 1.0)
+    return eff
+
+
+def _typed_move_fn(emu: PyBoyEmulator):
+    """fn(party idx) -> move indices ranked by EFFECTIVE power
+    (base power x type effectiveness x STAB) against the live
+    enemy, same contract and 0-PP discipline as _ranked_move_fn
+    (probe145). The raw-power ranker cannot see that Ember (40)
+    out-damages Bite (60) into Grass, or that Water Gun is
+    resisted there - the two facts the Erika matchup turns on.
+    Enemy types come from 0xCFEA/B, our active mon's from
+    0xD019/A (a switched-in mon's types are its own)."""
+    from agent.executor import STATUS_MOVE_IDS
+    mem = emu.pb.memory
+
+    def fn(idx):
+        st = emu.read_state()
+        mon = st.party[idx]
+        et = tuple(_TYPE_ID2NAME.get(mem[a]) for a in
+                   (ADDR_ENEMY_TYPE1, ADDR_ENEMY_TYPE2))
+        bt = tuple(_TYPE_ID2NAME.get(mem[a]) for a in
+                   (ADDR_BATTLE_MON_TYPE1, ADDR_BATTLE_MON_TYPE2))
+        cands = []
+        any_pp = None
+        for i, mv in enumerate(mon.moves):
+            if not mv:
+                continue
+            if i < len(mon.pp) and mon.pp[i] > 0 \
+                    and any_pp is None:
+                any_pp = i
+            info = _MOVE_INFO.get(mv)
+            if info is None or mv in STATUS_MOVE_IDS:
+                continue
+            if i >= len(mon.pp) or mon.pp[i] <= 0:
+                continue
+            power, mtype = info
+            eff = _effectiveness(mtype, et)
+            stab = 1.5 if mtype in bt else 1.0
+            cands.append((power * eff * stab, i))
+        cands.sort(reverse=True)
+        return [i for _s, i in cands] or \
+            ([any_pp] if any_pp is not None else [0])
+    return fn
+
+
+def _damaging_pp(emu: PyBoyEmulator, idx: int) -> int:
+    mon = emu.read_state().party[idx]
+    return sum(pp for mv, pp in zip(mon.moves, mon.pp)
+               if mv in _MOVE_INFO and pp > 0)
+
+
+def _ride_text(emu: PyBoyEmulator, rounds: int = 80) -> bool:
+    """Press through text until the dialog flag reads clear on
+    TWO consecutive polls 30 ticks apart (probe145: wLetterPrinting
+    delay makes in_dialog flicker mid-print; probe146's first
+    departure rode under still-open text and desynced a mart
+    ride). Ends with a wait_free either way."""
+    free = 0
+    for _ in range(rounds):
+        if emu.read_state().in_dialog:
+            _press10(emu, "a")
+            free = 0
+            continue
+        emu.tick(30)
+        if not emu.read_state().in_dialog:
+            free += 1
+            if free >= 2:
+                break
+        else:
+            free = 0
+    emu.wait_free(max_rounds=8, stable_needed=2)
+    return free >= 2
+
+
+def _drive_battle_typed(emu: PyBoyEmulator,
+                        switch_first=None) -> bool:
+    """Drive the live battle to its honest end (in_battle
+    clears) with the typed ranker (probe145's drive_battle).
+    fight_until_end's own exit can fire seconds early on menu
+    flicker; this loop re-drives until the battle flag is
+    really down. A PP-dry active mon is rescued by switching
+    to the first teammate holding PP (the Exeggcute wedge's
+    lesson); switch_first rides only the first drive."""
+    drv = _BattleDriver(emu)
+    first = True
+    drives = 0
+    while emu.read_state().in_battle and drives < 15:
+        sf = switch_first if first else None
+        if sf is None and first:
+            mem = emu.pb.memory
+            active = None
+            for i, mon in enumerate(emu.read_state().party):
+                if mon.species_id == mem[ADDR_BATTLE_MON_SPECIES]:
+                    active = i
+                    break
+            if active is not None and active < len(
+                    emu.read_state().party) and \
+                    _damaging_pp(emu, active) == 0:
+                for j, mon in enumerate(emu.read_state().party):
+                    if j != active and mon.hp > 0 and \
+                            _damaging_pp(emu, j) > 0:
+                        sf = j
+                        break
+        drv.fight_until_end(_typed_move_fn(emu), switch_first=sf,
+                            max_actions=600)
+        first = False
+        drives += 1
+        emu.wait_free(max_rounds=8, stable_needed=2)
+        _ride_text(emu)
+        emu.wait_free(max_rounds=8, stable_needed=2)
+    return not emu.read_state().in_battle
+
+
+def _walk_fighting(emu: PyBoyEmulator, ex: Executor, map_id: int,
+                   tile, attempts: int = 25):
+    """Walk to a tile inside one map, fighting whatever
+    intercepts (probe145). Returns (arrived, battles fought).
+    Needed wherever sight trainers guard the path: a raw
+    _walk_to sometimes threads a sight line without triggering
+    the trainer at all, and a challenge built on it talks to
+    thin air (the probe145 Lasses)."""
+    fought = 0
+    for _try in range(attempts):
+        st = emu.read_state()
+        if st.in_battle:
+            _drive_battle_typed(emu)
+            fought += 1
+            continue
+        if (st.x, st.y) == tile and st.map_id == map_id:
+            return True, fought
+        if st.in_dialog:
+            emu.close_dialog(max_presses=3)
+            continue
+        try:
+            ex._walk_to(map_id, tile)
+        except StuckError:
+            pass
+        st = emu.read_state()
+        if st.in_battle:
+            _drive_battle_typed(emu)
+            fought += 1
+    st = emu.read_state()
+    return (st.x, st.y) == tile and st.map_id == map_id, fought
+
+
+def _hop_ride(emu: PyBoyEmulator, ex: Executor, map_names) -> bool:
+    """Ride a route as ONE JOURNEY PER MAP (probe145/147's hop
+    discipline). A single multi-map journey execution once
+    diverged from its plan, rode through a Saffron gatehouse
+    and auto-surrendered the guard's drink in a dead lineage;
+    hop rides keep every gatehouse-adjacent step individually
+    verified. Callers holding the Fresh Water re-check the bag
+    after gatehouse-adjacent hops."""
+    for name in map_names:
+        mid = ex.world.map_id(name)
+        if emu.read_state().map_id == mid:
+            continue
+        if not _ride_battling(emu, ex, mid):
+            return False
+    return True
+
+
+def _switch_menu_index(moves) -> int:
+    """Index of SWITCH in a mon's party submenu: the submenu
+    prepends the mon's FIELD MOVES, so SWITCH sits at
+    1 + (field moves known) (probe147: probe145's party_lead
+    hard-coded item 1 - correct only for field-move-less mons;
+    for Oddish item 1 is CUT's slot neighbour STATS, and the
+    'reorder' silently opened the stats page instead)."""
+    from agent.executor import FIELD_MOVE_IDS
+    return 1 + sum(1 for mv in moves if mv in FIELD_MOVE_IDS)
+
+
+def _swap_party_slots(emu: PyBoyEmulator, i: int, j: int) -> bool:
+    """Swap party slots i and j via START -> POKEMON -> slot i
+    -> SWITCH (field-move-aware index) -> slot j, verified by
+    the party order afterwards (probe147)."""
+    st = emu.read_state()
+    if i == j or i >= len(st.party) or j >= len(st.party):
+        return i == j
+    want = [m.species_id for m in st.party]
+    want[i], want[j] = want[j], want[i]
+    _close_menus(emu)
+    mem = emu.pb.memory
+    _press10(emu, "start")
+    if not _wait_menu_y(emu, 2):
+        return False
+    if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 3):
+        return False
+    _press10(emu, "a")                         # POKEMON
+    emu.tick(80)
+    if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], i):
+        return False
+    _press10(emu, "a")                         # open submenu
+    emu.tick(80)
+    sw = _switch_menu_index(emu.read_state().party[i].moves)
+    if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], sw):
+        return False
+    _press10(emu, "a")                         # SWITCH
+    emu.tick(60)
+    if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], j):
+        return False
+    _press10(emu, "a")                         # confirm target
+    emu.tick(120)
+    _close_menus(emu)
+    emu.wait_free(max_rounds=8, stable_needed=2)
+    got = [m.species_id for m in emu.read_state().party]
+    return got == want
+
+
+def party_lead(emu: PyBoyEmulator, species_id: int) -> bool:
+    """Move a species to the lead slot (probe147's corrected
+    party_lead; see _switch_menu_index for the bug in the
+    original)."""
+    idx = _party_index_of(emu, species_id)
+    if idx is None:
+        return False
+    if idx == 0:
+        return True
+    return _swap_party_slots(emu, idx, 0)
+
+
+def _arrange_front(emu: PyBoyEmulator, first_id: int,
+                   second_id: int) -> bool:
+    """Put first_id in slot 0 and second_id in slot 1, in
+    whichever order they currently sit (probe147: the battle
+    driver's replacement pick is the first HEALTHY mon in
+    party order, so the closer must physically sit second -
+    in probe146's second Erika attempt Blastoise sat at slot 5
+    and never fought)."""
+    if not party_lead(emu, first_id):
+        return False
+    idx = _party_index_of(emu, second_id)
+    if idx is None:
+        return False
+    if idx == 1:
+        return True
+    return _swap_party_slots(emu, idx, 1)
+
+
+CELADON_MART2F_LIST = [ITEM_GREAT_BALL, ITEM_SUPER_POTION, 0x35,
+                       0x22, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F]
+# data/items/marts.asm CeladonMart2FClerk1: Great Ball, Super
+# Potion, Revive, Super Repel, Antidote, Burn/ Ice Heal,
+# Awakening, Parlyz Heal. Only indices 0-1 are ever bought.
+CELADON_MART4F_LIST = [0x33, ITEM_FIRE_STONE, 0x21, 0x22, 0x2F]
+# CeladonMart4FClerk: Poke Doll, Fire/ Thunder/ Water/ Leaf
+# Stone. Only index 1 (the Fire Stone) is ever bought.
+
+
+def buy_vending_drink(emu: PyBoyEmulator, ex: Executor,
+                      item_id: int = ITEM_FRESH_WATER,
+                      list_index: int = 0, price: int = 200
+                      ) -> bool:
+    """Buy a drink from the Celadon Mart roof vending machine
+    (probe145). The machine's menu opens at menuY 5 (not the
+    mart clerk's 1) and the charge posts only after the whole
+    delivery sequence, so verification rides the dialog and
+    then checks BOTH the bag and the exact money delta. Roof
+    access chains the mart floors one warp at a time (the
+    elevator lesson: a single journey into the building
+    spins). Ends on the roof."""
+    world = ex.world
+    roof = world.map_id("CeladonMartRoof")
+    if _bag_count(emu, item_id) >= 1:
+        return True
+    for floor in ("CeladonMart1F", "CeladonMart2F",
+                  "CeladonMart3F", "CeladonMart4F",
+                  "CeladonMart5F", "CeladonMartRoof"):
+        if not _ride_to(emu, ex, world.map_id(floor)):
+            return False
+    emu.wait_free(max_rounds=8, stable_needed=2)
+    if emu.read_state().map_id != roof:
+        return False
+    try:
+        ex._walk_to(roof, (10, 2))
+    except StuckError:
+        return False
+    _face(emu, "up")
+    money0 = emu.read_state().money
+    mem = emu.pb.memory
+    _press10(emu, "a")
+    for _ in range(60):
+        if mem[ADDR_MENU_TOP_Y] == 5:
+            break
+        emu.tick(20)
+    if mem[ADDR_MENU_TOP_Y] != 5:
+        return False
+    if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM],
+                       list_index):
+        return False
+    _press10(emu, "a")
+    for _ in range(300):
+        if _bag_count(emu, item_id) >= 1:
+            break
+        if emu.read_state().in_dialog:
+            _press10(emu, "a")
+        emu.tick(30)
+    emu.wait_free(max_rounds=8, stable_needed=2)
+    return _bag_count(emu, item_id) >= 1 and \
+        emu.read_state().money == money0 - price
+
+
+def catch_growlithe(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Catch a Growlithe in Route 8's grass (probe145) - the
+    Fire counter Erika's Grass team demands (Blastoise's Water
+    damage is Grass-resisted and Razor Leaf crits near-always;
+    see S13's matchup math). Growlithe is 20% of the Route 8
+    grass at Lv16-18, catch rate 190. Modelled on
+    catch_voltorb: a Growlithe interrupting the walk to the
+    grass is caught on the spot via _catch_current. With a
+    full party the catch files to Box 1, where the PC swap
+    picks it up. Idempotent."""
+    world = ex.world
+    r8 = world.map_id("Route8")
+    grass = (34, 10)
+    if SPECIES_GROWLITHE in _box_species(emu) or \
+            SPECIES_ARCANINE in _box_species(emu) or \
+            _party_index_of(emu, SPECIES_GROWLITHE) is not None or \
+            _party_index_of(emu, SPECIES_ARCANINE) is not None:
+        return True
+    if not _ride_battling(emu, ex, r8):
+        return False
+    mem = emu.pb.memory
+    for _try in range(60):
+        st = emu.read_state()
+        if st.in_battle:
+            sp = mem[ADDR_ENEMY_SPECIES]
+            if sp == SPECIES_GROWLITHE and _catch_current(emu):
+                break
+            if not _run_away(emu) and emu.read_state().in_battle:
+                _drive_battle_typed(emu)
+            continue
+        if (st.x, st.y) == grass and st.map_id == r8:
+            break
+        try:
+            ex._walk_to(r8, grass)
+        except StuckError:
+            pass
+        if emu.read_state().in_dialog:
+            emu.close_dialog(max_presses=2)
+    if SPECIES_GROWLITHE not in _box_species(emu) and \
+            _party_index_of(emu, SPECIES_GROWLITHE) is None:
+        _catch_any(emu, ex, {SPECIES_GROWLITHE},
+                   max_encounters=40)
+    return SPECIES_GROWLITHE in _box_species(emu) or \
+        _party_index_of(emu, SPECIES_GROWLITHE) is not None
+
+
+def evolve_with_stone(emu: PyBoyEmulator, item_id: int,
+                      from_species: int, to_species: int) -> bool:
+    """Evolve a party mon with an evolution stone (probe146:
+    the Fire Stone on Growlithe). The evolution ride presses A
+    ONLY - B cancels a Gen 1 evolution, so the bag-menu B-exit
+    vocabulary stays out of it. Verified in RAM: species flip,
+    level and moves unchanged (a stone evolution must cost
+    neither), the dex ticks up by one, the stone is consumed.
+    The party member is left wherever the evolution put it -
+    party order does not change."""
+    idx = _party_index_of(emu, from_species)
+    if idx is None:
+        return _party_index_of(emu, to_species) is not None
+    if _bag_count(emu, item_id) == 0:
+        return False
+    before = emu.read_state().party[idx]
+    dex0 = _dex_owned_count(emu)
+    if not _use_bag_item_on_mon(emu, item_id, idx):
+        return False
+    # NO menu-closing here: the ride below presses A only,
+    # exactly as probe146 proved it - a B press landing after
+    # the evolution starts cancels it.
+    for _ in range(240):
+        mon = emu.read_state().party[idx]
+        if mon.species_id == to_species:
+            break
+        _press10(emu, "a")
+        emu.tick(40)
+    emu.wait_free(max_rounds=8, stable_needed=2)
+    mon = emu.read_state().party[idx]
+    return mon.species_id == to_species and \
+        mon.level == before.level and \
+        [m for m in mon.moves if m] == [m for m in before.moves if m] and \
+        _dex_owned_count(emu) == dex0 + 1 and \
+        _bag_count(emu, item_id) == 0
+
+
+# (npc tile, stance, facing to talk, event flag) - flags from
+# the CeladonGym map header (probe145, ROM-verified).
+CELADON_GYM_TRAINERS = [
+    ((2, 11), (3, 11), "left", 426),
+    ((7, 10), (6, 10), "right", 427),
+    ((9, 5), (9, 6), "up", 428),
+    ((1, 5), (1, 6), "up", 429),
+    ((6, 3), (6, 4), "up", 430),
+    ((3, 3), (3, 4), "up", 431),
+    ((5, 3), (5, 4), "up", 432),
+]
+
+CELADON_TO_CERULEAN_HOPS = [
+    "Route7", "UndergroundPathRoute7", "UndergroundPathWestEast",
+    "UndergroundPathRoute8", "Route8", "LavenderPokecenter",
+    "Route10", "RockTunnel1F", "RockTunnelB1F", "Route9",
+    "CeruleanPokecenter",
+]
+CERULEAN_TO_CELADON_HOPS = [
+    "Route9", "RockTunnel1F", "RockTunnelB1F", "Route10",
+    "LavenderPokecenter", "Route8", "UndergroundPathRoute8",
+    "UndergroundPathWestEast", "UndergroundPathRoute7",
+    "Route7", "CeladonPokecenter",
+]
+
+
+def _maintain_party(emu: PyBoyEmulator, counter_ids) -> None:
+    """Super-Potion top-ups between gym fights (probe145's
+    maintain): the lead is topped toward full under 100 HP,
+    the Fire counter under 26. Fainted mons are skipped (a
+    Potion does nothing for them - the heal trip handles
+    those). Ends with menus closed: _use_bag_item_on_mon
+    returns with the bag menu still open and the next walk
+    desyncs if it stays open (probe145's gym8 lesson)."""
+    st = emu.read_state()
+    for idx, mon in enumerate(st.party):
+        if mon.hp <= 0:
+            continue
+        want = (idx == 0 and mon.hp < 100 and mon.hp < mon.max_hp) or \
+            (mon.species_id in counter_ids and mon.hp <= 25)
+        if not want:
+            continue
+        if _bag_count(emu, ITEM_SUPER_POTION) == 0:
+            return
+        if _use_bag_item_on_mon(emu, ITEM_SUPER_POTION, idx):
+            emu.tick(90)
+            _close_menus(emu)
+            emu.wait_free(max_rounds=8, stable_needed=2)
+
+
+def _gym_heal_trip(emu: PyBoyEmulator, ex: Executor,
+                   gym_map: int, pc_map: int) -> bool:
+    """Out the gym door, heal at the Pokecenter, ride back
+    (probe145). The door mat at (4,17) warps on step-off: walk
+    onto it, then keep pressing down until the map changes."""
+    st = emu.read_state()
+    if st.map_id == gym_map:
+        _walk_fighting(emu, ex, gym_map, (4, 17))
+        for _ in range(30):
+            emu.press("down")
+            emu.tick(16)
+            if emu.read_state().map_id != gym_map:
+                break
+    if not _ride_battling(emu, ex, pc_map):
+        return False
+    if not heal_at_pokecenter(emu, ex, pc_map):
+        return False
+    return _ride_battling(emu, ex, gym_map)
+
+
+def _challenge_gym_trainer(emu: PyBoyEmulator, ex: Executor,
+                           gym_map: int, stance, face: str
+                           ) -> str:
+    """Walk to a trainer's stance fighting intercepts, then
+    face her and talk (probe145's challenge). Returns "fought"
+    (a battle ran - walking or talking), "talked" (dialog but
+    no battle) or "unreached". THE CALLER VERIFIES THE EVENT
+    FLAG: a prior stage of this leg scored 'fought' off the
+    driver's own word while the flag stayed clear (the driver
+    had fought a DIFFERENT trainer it met en route), and the
+    gym only made sense once progress was read off the flags
+    (probe145 gym3)."""
+    arrived, fought = _walk_fighting(emu, ex, gym_map, stance)
+    if fought:
+        return "fought"
+    if not arrived:
+        return "unreached"
+    st = emu.read_state()
+    if (st.x, st.y) != stance:
+        return "unreached"
+    _face(emu, face)
+    _press10(emu, "a")
+    emu.tick(120)
+    if emu.read_state().in_battle:
+        _drive_battle_typed(emu)
+        return "fought"
+    _ride_text(emu)
+    return "talked"
+
+
+def beat_erika(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Clear Celadon Gym and beat Erika (probes 145-147).
+
+    Trainers first, FLAG-VERIFIED: the worklist is the ROM's
+    own event flags (426-432), re-read after every challenge -
+    never the driver's say-so. The Beauty at (3,3) has sight
+    range 2: the approach steps to (3,5), inside her line,
+    before her stance (probe145 gym3's opening fix). Heal
+    trips run when the lead drops under 55 or the front two
+    are down. Erika herself is fight_misty's shape with the
+    typed driver: stance (4,4), face up, and the win is the
+    Rainbow badge bit in RAM.
+
+    The Fire counter leads with Blastoise second - arranged
+    here, because the driver's replacement pick is the first
+    healthy mon in party order (probe146's slot-5 lesson).
+    In the winning lineage the counter was an Arcanine ground
+    to Lv25 on Route 24 first (see grind_route24 and S13);
+    this scene does not grind or evolve by itself."""
+    world = ex.world
+    gym = world.map_id("CeladonGym")
+    celpc = world.map_id("CeladonPokecenter")
+    if "Rainbow" in emu.read_state().badges:
+        return True
+    if _party_index_of(emu, SPECIES_ARCANINE) is not None:
+        _arrange_front(emu, SPECIES_ARCANINE, SPECIES_BLASTOISE)
+    elif _party_index_of(emu, SPECIES_GROWLITHE) is not None:
+        _arrange_front(emu, SPECIES_GROWLITHE, SPECIES_BLASTOISE)
+    counter_ids = {SPECIES_ARCANINE, SPECIES_GROWLITHE}
+    for _round in range(3):
+        todo = [t for t in CELADON_GYM_TRAINERS
+                if not _event_flag(emu, t[3])]
+        if not todo:
+            break
+        if not _ride_battling(emu, ex, gym):
+            return False
+        for npc, stance, face, ev in todo:
+            if _event_flag(emu, ev):
+                continue
+            if npc == (3, 3):
+                _walk_fighting(emu, ex, gym, (3, 5))
+            _challenge_gym_trainer(emu, ex, gym, stance, face)
+            _maintain_party(emu, counter_ids)
+            st = emu.read_state()
+            lead = st.party[0] if st.party else None
+            if lead is not None and (lead.hp == 0 or lead.hp < 55
+                    or all(m.hp == 0 for m in st.party[:2])):
+                _gym_heal_trip(emu, ex, gym, celpc)
+    if not all(_event_flag(emu, t[3])
+               for t in CELADON_GYM_TRAINERS):
+        return False
+    st = emu.read_state()
+    if st.party and st.party[0].hp < 80:
+        _gym_heal_trip(emu, ex, gym, celpc)
+    ex.prepare_battle_party()
+    for _attempt in range(80):
+        st = emu.read_state()
+        if "Rainbow" in st.badges:
+            return True
+        if st.in_battle:
+            _drive_battle_typed(emu)
+            continue
+        if st.in_dialog:
+            emu.close_dialog(max_presses=3)
+            continue
+        if st.map_id != gym:
+            if not _ride_battling(emu, ex, gym):
+                return False
+            continue
+        if (st.x, st.y) != (4, 4):
+            _walk_fighting(emu, ex, gym, (4, 4))
+            continue
+        _face(emu, "up")
+        _press10(emu, "a")
+        emu.tick(120)
+    return "Rainbow" in emu.read_state().badges
+
+
+def grind_route24(emu: PyBoyEmulator, ex: Executor,
+                  species_id: int, target_level: int) -> int:
+    """Lead-and-solo level grind on Route 24's grass (probe147:
+    Arcanine Lv18 -> Lv25 in 132 battles). The species leads
+    and solos; nobody switch-trains (Gen 1 pays fainted
+    participants NOTHING and halves shared XP - the economics
+    that killed probe145's trainee plan). Ember PP (25) is the
+    binding constraint, Bite the neutral fallback; a Pokecenter
+    trip runs when HP < 22 or damaging PP <= 4. Travel is the
+    hop chain both ways under Blastoise's lead (the tunnel is
+    no place for a grinding Fire type), with the front
+    arranged [grinder, Blastoise] at Cerulean and restored at
+    Celadon. Returns the solo battles fought."""
+    world = ex.world
+    celpc = world.map_id("CeladonPokecenter")
+    cerpc = world.map_id("CeruleanPokecenter")
+    r24 = world.map_id("Route24")
+    idx = _party_index_of(emu, species_id)
+    if idx is None:
+        return 0
+    if emu.read_state().party[idx].level >= target_level:
+        return 0
+    battles = 0
+    if not _ride_battling(emu, ex, celpc):
+        return battles
+    heal_at_pokecenter(emu, ex, celpc)
+    if _party_index_of(emu, SPECIES_BLASTOISE) is not None:
+        party_lead(emu, SPECIES_BLASTOISE)
+    if not _hop_ride(emu, ex, CELADON_TO_CERULEAN_HOPS):
+        return battles
+    heal_at_pokecenter(emu, ex, cerpc)
+    if not _arrange_front(emu, species_id, SPECIES_BLASTOISE):
+        return battles
+    grass = [(4, 20), (5, 27)]
+    for _sweep in range(400):
+        idx = _party_index_of(emu, species_id)
+        if idx is None:
+            break
+        mon = emu.read_state().party[idx]
+        if mon.level >= target_level:
+            break
+        if mon.hp == 0 or mon.hp < 22 or _damaging_pp(emu, idx) <= 4:
+            if not _ride_battling(emu, ex, cerpc):
+                break
+            heal_at_pokecenter(emu, ex, cerpc)
+            party_lead(emu, species_id)
+            continue
+        if emu.read_state().map_id != r24:
+            if not _ride_battling(emu, ex, r24):
+                break
+            continue
+        for tile in grass:
+            _arr, f = _walk_fighting(emu, ex, r24, tile,
+                                     attempts=40)
+            battles += f
+            idx = _party_index_of(emu, species_id)
+            mon = emu.read_state().party[idx]
+            if mon.level >= target_level or mon.hp < 22 or \
+                    _damaging_pp(emu, idx) <= 4:
+                break
+    heal_at_pokecenter(emu, ex, cerpc)
+    if _party_index_of(emu, SPECIES_BLASTOISE) is not None:
+        party_lead(emu, SPECIES_BLASTOISE)
+    _hop_ride(emu, ex, CERULEAN_TO_CELADON_HOPS)
+    heal_at_pokecenter(emu, ex, celpc)
+    _arrange_front(emu, species_id, SPECIES_BLASTOISE)
+    return battles
+
+
+def celadon_leg(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Lavender Town -> the Rainbow Badge (probes 145-147),
+    following the WINNING route end to end:
+
+      road west (hop rides) -> catch Growlithe on Route 8 ->
+      PC swap (Nidoran-F out) -> Celadon Mart 2F resupply
+      (5 Super Potions, 4 Great Balls) -> roof Fresh Water ->
+      Mart 4F Fire Stone -> evolve Arcanine -> Route 24 grind
+      to Lv25 -> the gym (beat_erika).
+
+    The drink is bought AFTER the road west on purpose: the
+    Saffron gatehouses only take drinks from travellers who
+    carry one, and the westbound road passes two of them.
+    (In the lineage that taught this, the drink bought in
+    Celadon survived every eastbound hop home - verified in
+    the bag after each one; see S13.)
+
+    Every stage verifies from RAM and skips when already in
+    place, so the leg resumes from any intermediate state.
+    Assumes the party starts in or east of Lavender Town with
+    the Thunder Badge (rock_tunnel_leg's end state), a free
+    party slot's worth of box room, and Nidoran-F in the
+    party to swap out (this lineage's shape). Money: the
+    shopping totals Y6,100 and the stone Y2,100 against the
+    Y8,820 the tunnel leg arrives with - the leg does not
+    farm money, and a broke arrival fails honestly at the
+    till."""
+    world = ex.world
+    celpc = world.map_id("CeladonPokecenter")
+    mart2f = world.map_id("CeladonMart2F")
+    mart4f = world.map_id("CeladonMart4F")
+    if "Rainbow" in emu.read_state().badges:
+        return _ride_battling(emu, ex, celpc) and \
+            heal_at_pokecenter(emu, ex, celpc)
+    west = {world.map_id(n) for n in
+            ("CeladonCity", "CeladonPokecenter", "CeladonGym",
+             "CeladonMart1F", "CeladonMart2F", "CeladonMart3F",
+             "CeladonMart4F", "CeladonMart5F", "CeladonMartRoof",
+             "Route7")}
+    if emu.read_state().map_id not in west:
+        if not _hop_ride(emu, ex, ["Route8",
+                                   "UndergroundPathRoute8",
+                                   "UndergroundPathWestEast",
+                                   "UndergroundPathRoute7",
+                                   "Route7"]):
+            return False
+    if not catch_growlithe(emu, ex):
+        return False
+    if not _ride_battling(emu, ex, celpc):
+        return False
+    if not heal_at_pokecenter(emu, ex, celpc):
+        return False
+    if _party_index_of(emu, SPECIES_ARCANINE) is None and \
+            _party_index_of(emu, SPECIES_GROWLITHE) is None:
+        if not pc_swap(emu, ex, celpc, SPECIES_NIDORAN_F,
+                       SPECIES_GROWLITHE):
+            return False
+    # Mart 2F resupply (floor-chained: one ride per floor).
+    if not _hop_ride(emu, ex, ["CeladonMart1F", "CeladonMart2F"]):
+        return False
+    if buy_mart_item(emu, ex, mart2f, 0, ITEM_GREAT_BALL, 4,
+                     stand=(5, 5), face="up") < 4:
+        return False
+    if buy_mart_item(emu, ex, mart2f, 1, ITEM_SUPER_POTION, 5,
+                     stand=(5, 5), face="up") < 5:
+        return False
+    # The drink (ends on the roof).
+    if not buy_vending_drink(emu, ex):
+        return False
+    # The stone, and the evolution Vlad chose (S13: permanent -
+    # Arcanine's Gen 1 level-up learnset is empty, so
+    # Growlithe's Lv50 Flamethrower is forfeited for it; Fire
+    # Blast survives as TM38).
+    if _party_index_of(emu, SPECIES_ARCANINE) is None:
+        if not _hop_ride(emu, ex, ["CeladonMart5F",
+                                   "CeladonMart4F"]):
+            return False
+        if buy_mart_item(emu, ex, mart4f, 1, ITEM_FIRE_STONE, 1,
+                         stand=(5, 5), face="down") < 1:
+            return False
+        if not _ride_battling(emu, ex, celpc):
+            return False
+        heal_at_pokecenter(emu, ex, celpc)
+        if not evolve_with_stone(emu, ITEM_FIRE_STONE,
+                                 SPECIES_GROWLITHE,
+                                 SPECIES_ARCANINE):
+            return False
+    # The grind Vlad approved: Lv25 before Erika.
+    arc = _party_index_of(emu, SPECIES_ARCANINE)
+    if arc is None:
+        return False
+    if emu.read_state().party[arc].level < 25:
+        grind_route24(emu, ex, SPECIES_ARCANINE, 25)
+        arc = _party_index_of(emu, SPECIES_ARCANINE)
+        if emu.read_state().party[arc].level < 24:
+            return False
+    if not beat_erika(emu, ex):
+        return False
+    if not _ride_battling(emu, ex, celpc):
+        return False
+    if not heal_at_pokecenter(emu, ex, celpc):
+        return False
+    st = emu.read_state()
+    return "Rainbow" in st.badges and \
+        _bag_count(emu, ITEM_FRESH_WATER) >= 1
 
 
 MAP_MT_MOON_B2F = 61

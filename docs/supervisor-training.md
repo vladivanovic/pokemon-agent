@@ -576,3 +576,157 @@ Saffron, no Pokemon Tower, no Celadon. Tests: 77/77
 (73 + 3 world pair-rule tests + 1 Sim field-flash test).
 Save states stay out of git as ever; the chain head moves
 to the Orin by hand with its sha256.
+
+## 13. Celadon + Erika (2026-11-06/07, probes 145-147): the Fire counter, a stone, and a grind
+
+The road west worked as planned journeys from the tunnel
+chain head: Lavender -> Route 8 -> Underground Path -> Route 7
+-> Celadon City, then the gym interior through all three tree
+faces as planner Cut steps. All seven gym trainers were beaten
+along the way (event flags 426-432 verified set in RAM).
+
+Shopping, all RAM-verified: 5x Super Potion (Y3,500) and 4x
+Great Balls (Y2,400) at Mart 2F (clerk 1, stand (5,5) facing
+up); one Fresh Water (Y200) from the roof vending machine -
+the Saffron guards' drink (Gen 1: one drink to any guard opens
+every gate). Money in: Y8,820 + Y330 (a Route 8 trainer).
+
+The matchup math came from pokered data, not vibes: Blastoise
+cannot solo Erika. Its Water damage is Grass-resisted (~21/hit
+on the aces) while Razor Leaf crits near-always in Gen 1
+(~70/hit back). The counter was always going to be Fire:
+Growlithe, caught on Route 8 with the first ball thrown
+(dex 12 -> 13), Nidoran-F boxed for it.
+
+What failed, in order (five blackouts across the leg):
+
+1. Gym trainer #1 (probe145): the party walked in under-level
+   for the room and the lead fainted mid-clear.
+2. Erika, attempts 1-2 (probe145): Growlithe switch-training
+   turned out to be economically broken in Gen 1 - a mon that
+   faints earns NO XP and shared XP is halved, so the trainee
+   plan starved. What actually levelled Growlithe (16 -> 18,
+   Ember learned) was leading and soloing Route 24 grass via
+   a new party_lead reorder helper. Erika still won: Ember at
+   Lv18 is not enough (below), and the Lv40 Blastoise closer
+   is resisted.
+3. Erika, attempts 3-4 (probe146, post-stone): see below.
+
+Two battle-driver bugs were found by the failures and fixed
+in b905d04 (suite 80/80): the faint-pick wedge (a stale
+signature branch pressed A on a fainted mon forever) and
+_ranked_move_fn's 0-PP fallback (it returned slot 0 at 0 PP,
+wedging battles on the "no PP" text; it now falls back to any
+PP'd move).
+
+The Fire Stone was Vlad's decision (2026-11-07), taken with
+its permanent cost on the table: Arcanine's Gen 1 level-up
+learnset is EMPTY, so evolving forfeits Growlithe's Lv50
+Flamethrower for good; Fire Blast remains available later as
+TM38. Bought at Mart 4F (Y2,828 -> Y728, exact delta verified);
+Growlithe -> Arcanine Lv18 (dex 13 -> 14).
+
+Correction, stated plainly: the numbers that pitched the
+stone were wrong. Arcanine at Lv18 has 63 max HP, not the
+~86 estimated (a stone evolution adds only the stat delta:
++12 HP), and Ember lands ~21-24 per hit on Erika's ~85 HP
+aces - about four hits each - into ~28-damage Razor Leaf
+crits it can only tank two of. Two more blackouts followed
+(money Y728 -> Y364 -> Y182; Pokecenter heals are free, and
+the lineage parked healed at probe145/p9-failed.state).
+
+The grind was also Vlad's call (2026-11-07): Arcanine to
+~24-25 on Route 24, then re-fight. probe147 first found a
+third machinery bug: probe145's party_lead hard-codes the
+party submenu's SWITCH entry at item 1, which is only true
+for mons with NO field moves - the submenu prepends the mon's
+field moves (Oddish's reads CUT / STATS / SWITCH / CANCEL),
+so for Oddish item 1 is STATS and the "reorder" silently
+opened the stats page. (The failed arrange saved
+probe145/g-travel-failed.state, poisoned mid-STATS-page; do
+not build on it.) SWITCH sits at 1 + (field moves known);
+the port computes it (_switch_menu_index) and verifies the
+swap by the party order afterwards.
+
+The grind itself: 11 per-map hop rides to Cerulean (drink
+re-verified in the bag after every hop), arrange
+[Arcanine, Blastoise], then Arcanine led and soloed Route 24's
+Lv12-14 grass - 132 battles, Lv18 -> Lv25, ~4.5 minutes of
+emulation, checkpoints saved per level. Exactly one heal
+trip, and it was PP-driven, not HP (at Lv23: 58 HP but only
+4 damaging PP left; Ember's 25 PP is the grind's real
+budget). Per the mission rule, Lv25 was the target and 24
+the floor; it stopped at 25 because that was the target.
+
+The fight at Lv25 took ONE attempt. Arcanine soloed all
+three (Victreebel Lv29, Tangela Lv24, Vileplume Lv29) on
+Ember, levelled 25 -> 26 mid-fight, and ended at 60/91 HP;
+Blastoise - arranged second precisely so the driver's
+first-healthy replacement pick would find it - was never
+needed. Payout Y2,871 (money Y182 -> Y3,053). Rainbow Badge
+verified in RAM (badges Boulder/Cascade/Rainbow/Thunder;
+Erika event flag 425 set), TM21 Mega Drain received. Blastoise
+picked up Lv41 fighting intercepts on the road home.
+
+The drink incident, flagged plainly: in an abandoned scratch
+lineage (p5-failed4, never the chain), a single multi-map
+journey execution diverged from its plan, rode through a
+Saffron gatehouse, and the guard auto-took the Fresh Water,
+stranding that lineage in Route 8's west pocket. The live
+lineage used per-map hop rides throughout, its drink was
+re-verified in the bag after every gatehouse-adjacent hop,
+and Saffron was never entered. The drink is still in the bag
+at the chain head (RAM-verified).
+
+Machinery gaps banked by this leg:
+
+- Multi-map journey EXECUTION can diverge from the planner's
+  route (the gatehouse ride) - intercity travel is per-map
+  hop rides now (_hop_ride).
+- Celadon Mart's elevator defeats single multi-warp journeys
+  (they spin) - floor-chained rides, one warp at a time.
+- _use_bag_item_on_mon returns with the bag menu still open;
+  callers must close menus or the next walk desyncs.
+- in_dialog flickers under the letter-printing delay, so text
+  rides need a two-poll clear test (_ride_text).
+- Sight trainers are engaged by _walk_fighting, not raw
+  _walk_to, which can thread a sight line without triggering.
+- Evolution rides press A only: B cancels a Gen 1 evolution.
+- The battle driver still has no mid-battle item path; the
+  4 Super Potions rode out the whole leg unused (field
+  top-ups only, via _maintain_party).
+- drive_battle's entry print reads a stale enemy-species byte
+  (cosmetic, also noted in S12); read_state is the truth.
+
+Ported to run_real.py: celadon_leg (the winning route:
+road west -> catch_growlithe -> pc swap -> Mart 2F resupply
+-> buy_vending_drink -> Fire Stone -> evolve_with_stone ->
+grind_route24 to 25 -> beat_erika), beat_erika (flag-verified
+trainer worklist, heal trips, _maintain_party,
+_challenge_gym_trainer, _gym_heal_trip), catch_growlithe,
+buy_vending_drink, evolve_with_stone, grind_route24,
+_hop_ride, _walk_fighting, _drive_battle_typed,
+_typed_move_fn (+ _MOVE_INFO/_TYPE_CHART generated from
+pokered - the raw-power ranker cannot see Ember > Bite into
+Grass), party_lead + _swap_party_slots + _arrange_front with
+the _switch_menu_index fix, and buy_mart_item generalised
+with stand/face (Celadon lists CELADON_MART2F_LIST /
+CELADON_MART4F_LIST). One deliberate divergence: the ported
+trainer phase leads with the ground Arcanine rather than
+replaying the historical Blastoise-plus-trainee order - the
+segments are probe-proven, the composition follows the
+winning route, and celadon_leg as a whole has NOT been
+cold-replayed end to end. Tests: 90/90 (80 + typed-ranker,
+effectiveness, switch-index and damaging-PP tests).
+
+Final state: probe145/celadon.state - Celadon City, party
+healed at its Pokecenter. Arcanine Lv26 [Bite, Roar, Ember],
+Blastoise Lv41, Diglett Lv22, Nidoran (m) Lv3, Voltorb Lv16
+[Flash], Oddish Lv23 [Cut]; box holds Weedle, Pidgey,
+Rattata, Spearow, Nidoran-F; badges Boulder/Cascade/
+Rainbow/Thunder; dex 14; Y3,053; 8 Poke Balls, 4 Great
+Balls, 4 Super Potions, Fresh Water x1, TM21 in the bag,
+TM24 still unspent; Saffron never entered.
+sha256 8e58b3dfe0c49016e96ad52f2204960b2e0c48eafc0d54b7e31b2e93ae3c85c3.
+Save states stay out of git as ever; the chain head moves
+to the Orin by hand with its sha256.
