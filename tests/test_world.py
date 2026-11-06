@@ -323,6 +323,46 @@ class TestWorld(unittest.TestCase):
                            self.w.map_id("CeruleanGym"))
         self.assertIsNotNone(j)
 
+    def test_pair_collision_data_only_on_pair_tilesets(self):
+        # TilePairCollisionsLand has entries only for CAVERN and
+        # FOREST; the generated data must mirror that exactly.
+        b1 = self.w.maps[self.w.map_id("RockTunnelB1F")]
+        self.assertIsNotNone(b1.tiles)
+        self.assertIn(frozenset((0x20, 0x05)), b1.pair_forbidden)
+        pallet = self.w.maps[self.w.map_id("PalletTown")]
+        self.assertIsNone(pallet.tiles)
+        self.assertEqual(pallet.pair_forbidden, frozenset())
+
+    def test_cavern_elevation_crossing_is_refused(self):
+        # Rock Tunnel B1F's south corridor steps $20 -> $05 at
+        # (14,28) -> (13,28); the engine refuses that pair, so the
+        # lower corridor (17,28) must NOT reach the raised segment
+        # (11,28) within B1F at all - the clusters only join via
+        # 1F's ladders. (Before the pair rule the model drew this
+        # exact line and the game refused the step; probe144.)
+        b1 = self.w.map_id("RockTunnelB1F")
+        caps = frozenset({"cut", "flash"})
+        self.assertIsNone(self.w.tile_path(b1, (17, 28), (11, 28),
+                                           capabilities=caps))
+        # The pair-legal legs of the real zigzag DO plan.
+        self.assertIsNotNone(self.w.tile_path(
+            b1, (33, 25), (27, 3), capabilities=caps))
+        path = self.w.tile_path(b1, (23, 11), (3, 3),
+                                capabilities=caps)
+        self.assertIsNotNone(path)
+        gm = self.w.maps[b1]
+        for a, b in zip(path, path[1:]):
+            ta, tb = gm.tiles[a[1]][a[0]], gm.tiles[b[1]][b[0]]
+            if ta != tb:
+                self.assertNotIn(frozenset((ta, tb)),
+                                 gm.pair_forbidden)
+
+    def test_journey_rock_tunnel_to_lavender_plans(self):
+        j = self.w.journey(self.w.map_id("RockTunnel1F"), (15, 3),
+                           self.w.map_id("LavenderTown"),
+                           capabilities=frozenset({"cut", "flash"}))
+        self.assertIsNotNone(j)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -432,3 +432,147 @@ Rock Tunnel, and any nickname for the new catches (the
 epilogue's verified NO held - all six carry species names;
 box catches are never offered the prompt at all,
 item_effects.asm SendNewMonToBox).
+
+## 12. Rock Tunnel (2026-11-06, probe144): the carrier that couldn't, tile-pair collisions, and a ladder zigzag
+
+Premise correction first, because it changes the leg: section
+11's closing claim that "Oddish can learn it" is WRONG. Oddish's
+tmhm learnset in pokered (data/pokemon/base_stats/oddish.asm)
+lists Cut, not Flash, and the game's own CanLearnTM screen for
+HM05 reads NOT ABLE for all six party members (probe144 evidence
+screenshot 00-hm05-compat-all-not-able.png). Oddish had a free
+move slot all along - the blocker was compatibility, not slots,
+so no move-delete flow was ever needed (and none was used;
+nobody's moves were deleted this leg). The full Gen 1 Flash
+learnset is 27 species; the reachable one was Voltorb. Recovery
+adopted: catch Voltorb on Route 10, PC-swap it in for Spearow
+(a Lv3 detour catch, not story party), teach Voltorb instead.
+Oddish finishes the leg exactly as it entered it: [Absorb,
+PoisonPowder, Cut]. Cut was never at risk.
+
+Road taken (all planned executor journeys): Viridian ->
+Diglett's Cave -> Vermilion (heal), Vermilion -> Cerulean via
+the Underground Path (heal; Saffron's gates stayed shut and
+unexploited), Cerulean -> Route 9 -> Route 10 -> Rock Tunnel
+Pokecenter (heal). Mt. Moon's interior was NOT needed - the
+planner's road goes under/around it - though it still plans
+cleanly offline. Route 9 is a genuine gauntlet: Wartortle
+reached the tunnel-side center at 4/93 HP. The stock battle
+policy (SmartFightPolicy) wedges on its trainers - 500-press
+battle caps, party bleeding, then frozen with dialog up - so
+every ride in this leg escalates battles to _BattleDriver
+bursts (ported as _ride_battling).
+
+Shopping lesson, learned expensively (10 extra balls, money
+drained to Y50 before the canary tripped): in a mart, the
+cursor bytes change meaning per stage - menuY 1 is
+BUY/SELL/QUIT (index 1 is SELL), menuY 4 the item list, menuY
+8 quantity/confirm. The ported buy_mart_item is stage-gated
+and aborts if the Poke Ball canary count moves. Loadout that
+crossed: 9 balls, 5 Potions, 2 Antidotes, 3 Repels (the
+Repels and extra Potions came from a deliberate second
+Cerulean run - see attempt 2 below).
+
+The tunnel took three attempts, and each failure taught the
+model something:
+
+- Attempt 1 (tile-walk with a persistent blocked set): 1F
+  clean, most of B1F crossed, then the party WIPED - pure HP
+  attrition across ~15 battles (the diagnostic run with no
+  supplies showed the same curve: Wartortle 96 -> 4 HP without
+  facing anything individually dangerous). Blackout respawn
+  at the Route 10 center, healed, money halved to Y2,955.
+  Reported as the brief's contingency allows: recovered and
+  re-attempted.
+- Attempt 2 (after the Cerulean resupply): SEALED in B1F with
+  six tiles blocked - (26,30) and (20,21) are STAY trainers
+  standing on the through-path (Pokemaniac, Super Nerd), but
+  (13,28), (16,28), (19,16), (19,22) were the tell. Root cause
+  found in the engine source: TilePairCollisionsLand
+  (data/tilesets/pair_collision_tile_ids.asm) forbids crossing
+  between CAVERN tiles $20 and $05 in EITHER direction
+  (CheckForTilePairCollisions matches standing/front in both
+  orders - an elevation rule), and the check reads the same
+  bottom-left cell sample the walkability grid is built from.
+  The model's B1F path crossed $20 -> $05 at (14,28) ->
+  (13,28) and the game simply refuses the step. (One of the
+  six, (16,28), is plain floor - its "refusal" was a trainer
+  engagement cancelling the step, the Super Nerd at (14,28)
+  facing the corridor.)
+- The fix is in the model, not the scene: build_walkability.py
+  now parses TilePairCollisionsLand and emits the per-cell
+  sampled tile ids + forbidden pairs for the 24 CAVERN/FOREST
+  maps (regeneration is purely additive - every walk grid,
+  warp and connection is byte-identical), and agent/world.py's
+  _bfs_steps refuses a plain step whose sampled pair is
+  forbidden (ledge jumps skip the check, as in the engine;
+  Cut tilesets have no pair entries). Warp-reachability deltas
+  vs the old model are confined to pair-tileset maps and match
+  pokered's elevation geography (Mt. Moon B2F's two sections
+  really do join only via B1F). With the rule, B1F's east and
+  west clusters are correctly unreachable from each other
+  inside B1F.
+- Attempt 3 (pair-aware routes): the real road is a LADDER
+  ZIGZAG - 1F door (15,3) -> east ladder (37,3) -> B1F (33,25)
+  -> north ladder (27,3) -> 1F (5,3) -> mid ladder (17,11) ->
+  B1F (23,11) -> west ladder (3,3) -> 1F south (37,17) ->
+  south exit (15,33) -> Route 10 (8,54). It executed with zero
+  pair refusals. Flash verified in RAM both ways: entry
+  wMapPalOffset = 6 with screenshot mean brightness 5.4; after
+  Flash, offset 0 and brightness 93.7. The toll concentrated
+  in 1F south (Hiker teams; the lead was Potion-topped at
+  4/116, 24, 42, 18, 38 HP - all 5 Potions spent), and
+  Wartortle evolved into Blastoise at Lv36 mid-crossing (dex
+  11 -> 12). Exit state: Blastoise 28/116, money Y7,820.
+
+The last hop had its own machinery lesson: ride_robust
+orbited Route 10's south corridor for 15+ minutes and
+Executor._follow_tiles then wedged silently on it in two
+further runs (its inner loop can spin without a StuckError
+when a press keeps changing state without reaching the
+target; the Super Nerd engagement at (14,64) is the local
+suspect, not fully isolated). The corridor was finally
+walked with a hand-rolled single-step walker (bounded
+presses, every step proven by RAM coordinates, ported as
+_step_walk_to) under a fresh Repel. Blastoise FAINTED in the
+Super Nerd's fight on that corridor - the party won it
+(+Y1,000) and walked into Lavender Town with the lead down,
+then healed at Lavender's Pokecenter. No second blackout;
+the faint is a faint, reported as one.
+
+Model decision - Flash is NOT a capability gate in the world
+model: wMapPalOffset is palette-only in the engine, darkness
+changes nothing mechanical, and RAM navigation does not read
+the screen, so gating journey() on "flash" would model a
+constraint the game does not have. Canonical play is enforced
+at the scene level instead: traverse_rock_tunnel uses Flash
+on entry and verifies wMapPalOffset 6 -> 0 before walking.
+
+Ported to run_real.py: rock_tunnel_leg (the chain above,
+stage-idempotent), traverse_rock_tunnel, teach_flash
+(free-slot only - the delete flow stays unported, as with
+TM28's lesson), use_flash (via PyBoyEmulator.field_flash;
+field_cut's menu driver is now a shared _field_move in
+agent/pyboy_emu.py, with a matching SimEmulator.field_flash),
+buy_mart_item + CERULEAN_MART_LIST, catch_voltorb,
+pc_swap + _open_pc (Bill's PC told from the PC main menu by
+wMaxMenuItem 0xCC28 - max 4 vs max 3 at the same menuY),
+_walk_tile_leg (persistent-blocked interior walker with the
+engage fallback and blackout as a distinct outcome),
+_step_walk_to, _ride_battling, use_repel, _field_heal_lead.
+Fidelity: the scenes are faithful ports of the probe-proven
+flows; the tunnel legs' routes now come from the pair-aware
+model (unit-tested + offline-verified) rather than the
+probe's offline graph. rock_tunnel_leg as a whole has not
+been cold-replayed end to end.
+
+Final state: probe144/lavender.state - Lavender Town,
+party healed at its Pokecenter. Blastoise Lv36, Oddish Lv15
+[Absorb, PoisonPowder, Cut], Diglett Lv22, Nidoran (m) Lv3,
+Nidoran (f) Lv3, Voltorb Lv16 [Tackle, Screech, FLASH]; box
+holds Weedle, Pidgey, Rattata, Spearow; capabilities cut +
+flash; dex 12; 9 balls; Y8,820; TM24 still unspent; no
+Saffron, no Pokemon Tower, no Celadon. Tests: 77/77
+(73 + 3 world pair-rule tests + 1 Sim field-flash test).
+Save states stay out of git as ever; the chain head moves
+to the Orin by hand with its sha256.

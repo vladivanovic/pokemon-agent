@@ -215,17 +215,32 @@ class PyBoyEmulator:
             "not implemented yet")
 
     def field_cut(self, mon_index: int, submenu_index: int) -> bool:
-        """Use Cut from the party menu: START -> POKEMON -> party mon
-        `mon_index` -> item `submenu_index` of its field-move submenu
-        (the caller - Executor._cut_tree - derives both from the
-        party's RAM movesets). The player must already be FACING the
-        tree: the engine reads wTileInFrontOfPlayer when Cut is
-        chosen. Generalised from the Vermilion gym-tree macro the
-        probes proved live (run_real.py _cut_tree_at_gym), with the
-        same press discipline (10-frame holds; menus steered by their
-        RAM cursor bytes, never by dead reckoning). Returns True when
-        the menu sequence completed; whether the tree actually fell
-        is the caller's check (it steps onto the tile)."""
+        """Use Cut from the party menu (see _field_move). The player
+        must already be FACING the tree: the engine reads
+        wTileInFrontOfPlayer when Cut is chosen. Whether the tree
+        actually fell is the caller's check (it steps onto the
+        tile)."""
+        return self._field_move(mon_index, submenu_index)
+
+    def field_flash(self, mon_index: int, submenu_index: int) -> bool:
+        """Use Flash from the party menu (see _field_move). No
+        facing requirement: Flash lights the whole cave (the
+        engine's handler zeroes wMapPalOffset). Whether the cave
+        actually lit is the caller's check (it reads wMapPalOffset
+        back - probe144's use_flash verified 6 -> 0 live)."""
+        return self._field_move(mon_index, submenu_index)
+
+    def _field_move(self, mon_index: int, submenu_index: int) -> bool:
+        """Use a field move from the party menu: START -> POKEMON ->
+        party mon `mon_index` -> item `submenu_index` of its
+        field-move submenu (the caller derives both from the party's
+        RAM movesets - Executor._cut_tree for Cut, run_real's
+        use_flash for Flash). Generalised from the Vermilion
+        gym-tree macro the probes proved live (run_real.py
+        _cut_tree_at_gym), with the same press discipline (10-frame
+        holds; menus steered by their RAM cursor bytes, never by
+        dead reckoning). Returns True when the menu sequence
+        completed; the move's effect is the caller's check."""
         mem = self.pb.memory
 
         def press10(button: str) -> None:

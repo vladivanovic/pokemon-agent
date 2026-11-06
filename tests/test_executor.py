@@ -56,6 +56,18 @@ class TestExecutor(unittest.TestCase):
         result = ex.run(max_goals=1)
         self.assertEqual(result.status, "stuck", result.log)
 
+    def test_field_flash_requires_the_move(self):
+        # SimEmulator.field_flash mirrors field_cut's contract:
+        # the named mon must actually know Flash (148).
+        emu = SimEmulator(self.w, self.w.map_id("RockTunnel1F"),
+                          (15, 3))
+        emu.give_starter(moves=(33, 45))          # no Flash
+        self.assertFalse(emu.field_flash(0, 0))
+        self.assertFalse(emu.field_flash(3, 0))   # no such mon
+        emu.give_starter(moves=(33, 148))
+        self.assertTrue(emu.field_flash(0, 1))
+        self.assertIn(self.w.map_id("RockTunnel1F"), emu.lit_maps)
+
 
 class CutLoggingEmulator(SimEmulator):
     """SimEmulator that records every successful field Cut."""

@@ -47,6 +47,7 @@ class SimEmulator:
         # reloads the map's blocks on entry).
         self.facing: Tuple[int, int] = (0, 1)
         self.cut_blocks: Set[Tuple[int, Tuple[int, int]]] = set()
+        self.lit_maps: Set[int] = set()
         self._sync()
 
     def _leave_map(self, old_map: int) -> None:
@@ -110,6 +111,20 @@ class SimEmulator:
         self.facing = (dx, dy)
         self._step(dx, dy)
         self._sync()
+
+    def field_flash(self, mon_index: int, submenu_index: int) -> bool:
+        """Use Flash from the party menu. Succeeds only if the named
+        party mon actually knows Flash. The sim has no palette
+        state (darkness is cosmetic - navigation reads the world
+        model, not the screen), so success is the mon knowing the
+        move; the map is recorded in `lit_maps` for tests."""
+        st = self.read_state()
+        if not (0 <= mon_index < len(st.party)):
+            return False
+        if 148 not in st.party[mon_index].moves:  # MOVE_FLASH
+            return False
+        self.lit_maps.add(self.map_id)
+        return True
 
     def field_cut(self, mon_index: int, submenu_index: int) -> bool:
         """Use Cut on the tree the player is facing (the Executor has

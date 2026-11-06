@@ -31,7 +31,9 @@ Output: pokered_walkability.json next to this script
   { map_id: {"name","file","tileset","w","h","walk":[[0/1..]..],
              "warps":[{"x","y","dest_id","idx"}...],
              "ledges":{"x,y":[dx,dy]} (overworld maps only),
-             "cut_trees":["x,y"...] (maps whose tileset has cut trees) }
+             "cut_trees":["x,y"...] (maps whose tileset has cut trees),
+             "tiles":[[id..]..] + "pair_forbidden":[[a,b]..] (maps whose
+             tileset has TilePairCollisionsLand entries: CAVERN, FOREST) }
              (dest_id -1 = LAST_MAP)
 
 Usage:  python3 build_walkability.py /path/to/pokered
@@ -146,6 +148,31 @@ def main() -> None:
             for nm in pending:
                 block_file[alpha_key(nm)] = m2.group(1)
             pending = []
+
+    # tileset name -> forbidden tile pairs (TilePairCollisionsLand,
+    # data/tilesets/pair_collision_tile_ids.asm): the engine refuses
+    # to cross between the two tile ids IN EITHER DIRECTION
+    # (CheckForTilePairCollisions matches standing/front in both
+    # orders - an elevation rule: in CAVERN, $20 floor may not cross
+    # to $05 raised floor, nor $05 to $21). Only CAVERN and FOREST
+    # have entries. The check compares wTilePlayerStandingOn with
+    # wTileInFrontOfPlayer, and both are the bottom-left cell sample
+    # (see the passability pass), so the rule is a property of the
+    # same per-cell sampled ids the grid is built from. Rock Tunnel
+    # B1F is where the missing rule bit (2026-11-06): the grid's
+    # shortest B1F crossing steps $20 -> $05 at (14,28) -> (13,28),
+    # the game refuses, and refusal-learning alone seals the map
+    # because the legal route is a ladder zigzag the grid's path
+    # never resembles.
+    pair_by_ts: dict = {}
+    pair_txt = open(
+        f"{POKERED}/data/tilesets/pair_collision_tile_ids.asm").read()
+    land = pair_txt.split("TilePairCollisionsLand::", 1)[1]
+    land = land.split("db -1", 1)[0]
+    for m in re.finditer(r"db\s+(\w+),\s*\$([0-9A-Fa-f]+),\s*\$([0-9A-Fa-f]+)",
+                         land):
+        pair_by_ts.setdefault(alpha_key(m.group(1)), []).append(
+            [int(m.group(2), 16), int(m.group(3), 16)])
 
     # map name -> tileset (headers)
     map_ts: dict = {}
@@ -331,10 +358,14 @@ def main() -> None:
                 for tx in range(TW):
                     if tiles[ty][tx] == cut_id:
                         cut_trees.append(f"{tx},{ty}")
+        pair_forbidden = pair_by_ts.get(alpha_key(ts_const), [])
         out[i] = {"name": cn, "file": fname, "tileset": ts_const,
                   "w": TW, "h": TH, "walk": grid, "warps": warps,
                   **({"ledges": ledges} if ledges else {}),
-                  **({"cut_trees": cut_trees} if cut_trees else {})}
+                  **({"cut_trees": cut_trees} if cut_trees else {}),
+                  **({"tiles": tiles,
+                      "pair_forbidden": pair_forbidden}
+                     if pair_forbidden else {})}
 
     with open(OUT, "w") as f:
         json.dump(out, f)

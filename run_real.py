@@ -789,8 +789,13 @@ def eastward_from_cerulean(emu: PyBoyEmulator, ex: Executor) -> bool:
 ITEM_POKE_BALL = 0x04
 ITEM_HM01 = 0xC4
 ITEM_HM05 = 0xC8               # HM ids are 0xC4 + (n - 1) in the pocket
+ITEM_POTION = 0x14
+ITEM_ANTIDOTE = 0x0B
+ITEM_REPEL = 0x1E
 MOVE_CUT = 15
 MOVE_DIG = 91
+MOVE_FLASH = 148
+SPECIES_VOLTORB = 0x06
 SPECIES_ODDISH = 0xB9
 SPECIES_DIGLETT = 0x3B
 # Species ids are Gen 1 INTERNAL indices (party struct byte 0),
@@ -823,6 +828,10 @@ ADDR_ENEMY_MAX_HP = 0xCFF4
 ADDR_BATTLE_MON_SPECIES = 0xD014
 ADDR_BATTLE_MON_HP = 0xD015
 ADDR_TILE_IN_FRONT = 0xCFC6
+ADDR_MAP_PAL_OFFSET = 0xD35D     # wMapPalOffset: 6 in an unlit
+                                 # dark cave, 0 once Flash is used
+ADDR_MAX_MENU_ITEM = 0xCC28      # wMaxMenuItem: tells the PC main
+                                 # menu (max 3) from Bill's (max 4)
 ADDR_FIRST_LOCK_CAN = 0xD743
 ADDR_SECOND_LOCK_CAN = 0xD744
 
@@ -1622,6 +1631,725 @@ def collect_flash(emu: PyBoyEmulator, ex: Executor) -> bool:
     return ITEM_HM05 in _bag_items(emu)
 
 
+def _ride_battling(emu: PyBoyEmulator, ex: Executor, map_id: int,
+                   xy=None, rounds: int = 300) -> bool:
+    """_ride_to with a battle escalation: ride executor slices,
+    but whenever a slice leaves us in a battle, finish the fight
+    with _BattleDriver bursts (the board_ss_anne pattern), then
+    keep riding. The stock SmartFightPolicy wedges on
+    trainer-dense routes - probe144's diagnostics watched it burn
+    500-press battle caps repeatedly against Route 9's first
+    trainers while Wartortle bled - so every ride in the Rock
+    Tunnel leg goes through here."""
+    saved = ex.planner
+    ex.planner = _FixedPlanner(map_id, xy)
+    drv = _BattleDriver(emu)
+    try:
+        for _ in range(rounds):
+            st = emu.read_state()
+            if st.map_id == map_id and not st.in_battle:
+                return True
+            if st.in_battle:
+                for _burst in range(15):
+                    if not emu.read_state().in_battle:
+                        break
+                    drv.fight_until_end(_ranked_move_fn(emu),
+                                        max_actions=120)
+                emu.wait_free(max_rounds=8, stable_needed=2)
+                continue
+            result = ex.run(max_goals=1)
+            if result.log and result.log[-1].get("goal"):
+                ex.memory.forgive(result.log[-1]["goal"])
+            if emu.read_state().map_id == map_id:
+                return True
+        return emu.read_state().map_id == map_id
+    finally:
+        ex.planner = saved
+
+
+def buy_mart_item(emu: PyBoyEmulator, ex: Executor, mart: int,
+                  list_index: int, item_id: int, want: int) -> int:
+    """Buy up to `want` of one mart item; returns the final bag
+    count. STAGE-GATED on the shop's menu signatures (calibrated
+    live at Cerulean Mart, probe144; the first blind-steering
+    version bought 10 extra Poke Balls because the cursor bytes
+    change meaning per stage):
+      menuY 1 = BUY/SELL/QUIT (steer item to 0 = BUY, press A;
+                index 1 at this stage is SELL, not an item)
+      menuY 4 = the item list (steer scroll+item to the item's
+                list index, press A)
+      menuY 8 = quantity/confirm (A-ride until the bag count
+                ticks in RAM - the count is the ground truth)
+    A unit of the WRONG item moving (the Poke Ball count is the
+    index-0 canary) aborts the buy with what it has."""
+    mem = emu.pb.memory
+    have = _bag_count(emu, item_id)
+    if have >= want:
+        return have
+    if not _ride_to(emu, ex, mart):
+        return have
+    try:
+        ex._walk_to(mart, (2, 5))
+    except StuckError:
+        return have
+    _step(emu, ex, "left")                     # face the clerk
+    _press10(emu, "a")
+    emu.tick(60)
+    balls0 = _bag_count(emu, ITEM_POKE_BALL)
+
+    def wait_menu_y(want_y, rounds=60):
+        for _ in range(rounds):
+            if mem[ADDR_MENU_TOP_Y] == want_y:
+                return True
+            emu.tick(20)
+        return mem[ADDR_MENU_TOP_Y] == want_y
+
+    if not wait_menu_y(1):                     # BUY/SELL/QUIT
+        return _bag_count(emu, item_id)
+    if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 0):
+        return _bag_count(emu, item_id)
+    _press10(emu, "a")                         # BUY -> item list
+    for _cycle in range(want * 2 + 2):
+        if _bag_count(emu, item_id) >= want:
+            break
+        for _ in range(60):                    # the item list:
+            if mem[ADDR_MENU_TOP_Y] == 4:      # post-buy text
+                break                          # needs an A to
+            _press10(emu, "a")                 # reopen it
+            emu.tick(20)
+        if mem[ADDR_MENU_TOP_Y] != 4:
+            break
+        if not _steer_menu(
+                emu, lambda: mem[ADDR_MENU_SCROLL]
+                + mem[ADDR_MENU_ITEM], list_index):
+            break
+        before = _bag_count(emu, item_id)
+        _press10(emu, "a")                     # select the item
+        ok = False
+        for _ in range(40):                    # quantity/confirm
+            _press10(emu, "a")
+            emu.tick(25)
+            if _bag_count(emu, item_id) > before:
+                ok = True
+                break
+            if item_id != ITEM_POKE_BALL and \
+                    _bag_count(emu, ITEM_POKE_BALL) != balls0:
+                ok = False                     # WRONG ITEM moved
+                break
+        if not ok:
+            break
+        emu.tick(40)                           # back to the list
+    for _ in range(10):                        # exit the shop
+        if mem[ADDR_MENU_TOP_Y] == 1:
+            break
+        _press10(emu, "b")
+        emu.tick(20)
+    _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 2)
+    _press10(emu, "a")
+    for _ in range(10):
+        if not emu.read_state().in_dialog:
+            break
+        _press10(emu, "a")
+        emu.tick(20)
+    return _bag_count(emu, item_id)
+
+
+# Cerulean Mart's shelf, in list order (probe144, verified live
+# against the game's own list menu). buy_mart_item takes the
+# index from the caller so other marts can pass their own.
+CERULEAN_MART_LIST = [ITEM_POKE_BALL, ITEM_POTION, ITEM_REPEL,
+                      ITEM_ANTIDOTE, 0x0C, 0x0E, 0x0F]
+
+
+def _field_rank(emu: PyBoyEmulator, mon_idx: int,
+                move_id: int) -> int:
+    """Submenu index of a field move in a mon's party submenu:
+    its field moves in its own slot order (FIELD_MOVE_IDS)."""
+    from agent.executor import FIELD_MOVE_IDS
+    mon = emu.read_state().party[mon_idx]
+    slot = mon.moves.index(move_id)
+    return sum(1 for mv in mon.moves[:slot] if mv in FIELD_MOVE_IDS)
+
+
+def teach_flash(emu: PyBoyEmulator, mon_idx: int) -> bool:
+    """Teach HM05 Flash to the party mon at `mon_idx`. FREE SLOT
+    ONLY: the full-moveset delete flow is deliberately not used
+    (this save line already lost TM28 Dig to a move-delete
+    misclick in the Anne leg), so a mon with four moves returns
+    False untouched. Verified from RAM afterwards.
+
+    The pupil matters: the leg brief's original plan, Oddish,
+    CANNOT learn Flash in Gen 1 (its base-stats learnset in
+    pokered lists Cut, not Flash - the game's own CanLearnTM
+    screen reads NOT ABLE for the whole arriving party). The
+    carrier is Voltorb, caught for the purpose on Route 10."""
+    mon = emu.read_state().party[mon_idx]
+    if MOVE_FLASH in mon.moves:
+        return True
+    if len([m for m in mon.moves if m]) >= 4:
+        return False
+    if not _use_bag_item_on_mon(emu, ITEM_HM05, mon_idx):
+        return False
+    for _ in range(60):
+        mon = emu.read_state().party[mon_idx]
+        if MOVE_FLASH in mon.moves:
+            break
+        if emu.read_state().in_dialog:
+            _press10(emu, "a")
+            continue
+        emu.tick(30)
+    _close_menus(emu)
+    mon = emu.read_state().party[mon_idx]
+    return MOVE_FLASH in mon.moves
+
+
+def use_flash(emu: PyBoyEmulator) -> bool:
+    """Use Flash from the party submenu of whichever mon knows
+    it, and prove it in RAM: wMapPalOffset goes 6 (dark) -> 0
+    (lit). The menu driver is PyBoyEmulator.field_flash (the
+    shared _field_move behind field_cut)."""
+    st = emu.read_state()
+    holder = next((i for i, m in enumerate(st.party)
+                   if MOVE_FLASH in m.moves), None)
+    if holder is None:
+        return False
+    sub = _field_rank(emu, holder, MOVE_FLASH)
+    if not emu.field_flash(holder, sub):
+        return False
+    for _ in range(40):
+        if emu.pb.memory[ADDR_MAP_PAL_OFFSET] == 0:
+            break
+        if emu.read_state().in_dialog:
+            emu.close_dialog(max_presses=1)
+        emu.tick(30)
+    return emu.pb.memory[ADDR_MAP_PAL_OFFSET] == 0
+
+
+def _use_bag_item(emu: PyBoyEmulator, item_id: int) -> bool:
+    """Use a no-target bag item (Repel): START -> ITEM -> the
+    item -> USE, ride the effect text, close the menus. Verified
+    by the bag count dropping exactly one."""
+    mem = emu.pb.memory
+    idx = _bag_index(emu, item_id)
+    if idx is None:
+        return False
+    before = _bag_count(emu, item_id)
+    _press10(emu, "start")
+    if not _wait_menu_y(emu, 2):
+        return False
+    if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 2):
+        return False
+    _press10(emu, "a")                         # ITEM
+    if not _wait_menu_y(emu, 4):
+        return False
+    if not _steer_menu(
+            emu, lambda: mem[ADDR_MENU_SCROLL]
+            + mem[ADDR_MENU_ITEM], idx):
+        return False
+    _press10(emu, "a")
+    if not _wait_menu_y(emu, 11):
+        return False
+    _press10(emu, "a")                         # USE
+    for _ in range(40):
+        if not emu.read_state().in_dialog:
+            break
+        _press10(emu, "a")
+        emu.tick(25)
+    _close_menus(emu)
+    return _bag_count(emu, item_id) == before - 1
+
+
+def use_repel(emu: PyBoyEmulator) -> bool:
+    """Burn one Repel (100 steps of no wild encounters while the
+    lead outlevels the locals - the tunnel wilds top out far
+    below the party lead)."""
+    return _use_bag_item(emu, ITEM_REPEL)
+
+
+def _field_heal_lead(emu: PyBoyEmulator) -> None:
+    """Potion the party lead when it drops under 45%: the tunnel
+    crossing is an attrition problem (~a dozen forced battles),
+    and the bag machinery is item-generic. A fainted lead is
+    left alone - Potions do not revive."""
+    st = emu.read_state()
+    if not st.party:
+        return
+    lead = st.party[0]
+    if lead.hp == 0 or lead.hp_frac >= 0.45:
+        return
+    if _bag_count(emu, ITEM_POTION) <= 0:
+        return
+    if _use_bag_item_on_mon(emu, ITEM_POTION, 0):
+        for _ in range(30):
+            if not emu.read_state().in_dialog:
+                break
+            _press10(emu, "a")
+            emu.tick(25)
+        _close_menus(emu)
+
+
+def _fight_now(emu: PyBoyEmulator, drv: _BattleDriver) -> None:
+    """Finish the current battle with driver bursts, then
+    top up the lead."""
+    for _burst in range(15):
+        if not emu.read_state().in_battle:
+            break
+        drv.fight_until_end(_ranked_move_fn(emu), max_actions=120)
+    emu.wait_free(max_rounds=8, stable_needed=2)
+    _field_heal_lead(emu)
+
+
+def _box_species(emu: PyBoyEmulator) -> list:
+    """Species ids in Box 1, in box order (0xFF-terminated)."""
+    mem = emu.pb.memory
+    out = []
+    for i in range(20):
+        s = mem[ADDR_BOX_SPECIES + i]
+        if s == 0xFF:
+            break
+        out.append(s)
+    return out
+
+
+def catch_voltorb(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Catch a Voltorb on Route 10's grass (the patch at the
+    Route 9 junction; hunt tile (8,7)) - the Flash carrier.
+    Voltorb is ~35% of that grass at Lv14-17 with a 190 catch
+    rate; with a full party it files to Box 1, which is where
+    the PC swap picks it up. Idempotent: already boxed or in
+    the party means done. Ends back at the Rock Tunnel
+    Pokecenter."""
+    world = ex.world
+    rtpc = world.map_id("RockTunnelPokecenter")
+    r10 = world.map_id("Route10")
+    grass = (8, 7)
+    if SPECIES_VOLTORB in _box_species(emu) or \
+            _party_index_of(emu, SPECIES_VOLTORB) is not None:
+        return True
+    if not _ride_battling(emu, ex, rtpc):
+        return False
+    if not heal_at_pokecenter(emu, ex, rtpc):
+        return False
+    if not _ride_battling(emu, ex, r10):
+        return False
+    mem = emu.pb.memory
+    for _try in range(60):
+        st = emu.read_state()
+        if st.in_battle:
+            sp = mem[ADDR_ENEMY_SPECIES]
+            if sp == SPECIES_VOLTORB and _catch_current(emu):
+                break
+            if not _run_away(emu) and emu.read_state().in_battle:
+                _BattleDriver(emu).fight_until_end(
+                    _ranked_move_fn(emu), max_actions=300)
+                emu.wait_free(max_rounds=8, stable_needed=2)
+            continue
+        if (st.x, st.y) == grass and st.map_id == r10:
+            break
+        try:
+            ex._walk_to(r10, grass)
+        except StuckError:
+            pass
+        if emu.read_state().in_dialog:
+            emu.close_dialog(max_presses=2)
+    if SPECIES_VOLTORB not in _box_species(emu) and \
+            _party_index_of(emu, SPECIES_VOLTORB) is None:
+        _catch_any(emu, ex, {SPECIES_VOLTORB}, max_encounters=40)
+    got = SPECIES_VOLTORB in _box_species(emu) or \
+        _party_index_of(emu, SPECIES_VOLTORB) is not None
+    if not got:
+        return False
+    return _ride_battling(emu, ex, rtpc)
+
+
+def _open_pc(emu: PyBoyEmulator, ex: Executor, pc_map: int) -> bool:
+    """Walk to the PC stance and boot the PC. The hidden event
+    sits at (13,3) facing UP in every Pokecenter, so the stance
+    is (13,4) facing up; if that does not take, scan the tiles
+    around the room's right side. Success = the PC answered
+    (dialog or a menu cursor up)."""
+    stances = [(13, 4, "up"), (13, 2, "up"), (12, 2, "up"),
+               (12, 3, "right"), (11, 3, "right"), (13, 3, "up")]
+    for (x, y, face) in stances:
+        try:
+            ex._walk_to(pc_map, (x, y))
+        except StuckError:
+            continue
+        emu.press(face)                        # turn toward the PC
+        emu.tick(20)
+        _press10(emu, "a")
+        for _ in range(30):
+            emu.tick(20)
+            st = emu.read_state()
+            if st.in_dialog or \
+                    emu.pb.memory[ADDR_MENU_TOP_Y] != 0:
+                return True
+        _close_menus(emu)
+    return False
+
+
+def _pc_press_a_ride(emu: PyBoyEmulator, done, rounds: int = 120):
+    """Press A through PC text until `done()` reads True."""
+    for _ in range(rounds):
+        if done():
+            return True
+        if emu.read_state().in_dialog:
+            _press10(emu, "a")
+        emu.tick(25)
+    return done()
+
+
+def pc_swap(emu: PyBoyEmulator, ex: Executor, pc_map: int,
+            deposit_species: int, withdraw_species: int) -> bool:
+    """Bill's PC swap at a Pokecenter: deposit `deposit_species`
+    from the party, withdraw `withdraw_species` from Box 1.
+    Menu stages are told apart by wMaxMenuItem (the PC main
+    menu caps at 3, Bill's menu at 4 - both share menuY 2, the
+    trap a stage-blind driver falls into). Every effect is
+    verified in RAM (party/box membership and sizes); the swap
+    ends with a heal so the withdrawn mon is ready. Proven live
+    in probe144 (Spearow out, Voltorb in; the story party's
+    first three slots were asserted untouched there)."""
+    if _party_index_of(emu, withdraw_species) is not None and \
+            _party_index_of(emu, deposit_species) is None:
+        return True                            # already swapped
+    dep_idx = _party_index_of(emu, deposit_species)
+    if dep_idx is None or withdraw_species not in _box_species(emu):
+        return False
+    if not _open_pc(emu, ex, pc_map):
+        return False
+    mem = emu.pb.memory
+
+    def sig():
+        return (mem[ADDR_MENU_TOP_Y], mem[ADDR_MENU_ITEM],
+                mem[ADDR_MAX_MENU_ITEM])
+
+    def wait_sig(pred, rounds=120, ride_a=False):
+        for _ in range(rounds):
+            if pred(sig()):
+                return True
+            if ride_a and emu.read_state().in_dialog:
+                _press10(emu, "a")
+            emu.tick(25)
+        return pred(sig())
+
+    def bills_menu():
+        return wait_sig(lambda s: s[2] == 4, ride_a=True)
+
+    if not bills_menu():
+        if not wait_sig(lambda s: s[2] == 3):
+            return False
+        if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 0):
+            return False
+        _press10(emu, "a")                     # BILL'S PC
+        if not bills_menu():
+            return False
+
+    def pick_from_list(index, done):
+        emu.tick(60)
+        if not _steer_menu(
+                emu, lambda: mem[ADDR_MENU_SCROLL]
+                + mem[ADDR_MENU_ITEM], index):
+            return False
+        _press10(emu, "a")
+        emu.tick(90)
+        if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 0):
+            return False
+        _press10(emu, "a")
+        return _pc_press_a_ride(emu, done, rounds=160)
+
+    n_party = len(emu.read_state().party)
+    if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 1):
+        return False
+    _press10(emu, "a")                         # DEPOSIT
+    if not pick_from_list(
+            dep_idx,
+            lambda: len(emu.read_state().party) == n_party - 1):
+        return False
+    if deposit_species not in _box_species(emu):
+        return False
+    if not bills_menu():
+        return False
+    box = _box_species(emu)
+    v_idx = box.index(withdraw_species)
+    if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 0):
+        return False
+    _press10(emu, "a")                         # WITHDRAW
+    if not pick_from_list(
+            v_idx,
+            lambda: len(emu.read_state().party) == n_party):
+        return False
+    if _party_index_of(emu, withdraw_species) is None:
+        return False
+    if not bills_menu():
+        return False
+    if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 4):
+        return False
+    _press10(emu, "a")                         # SEE YA!
+    if not wait_sig(lambda s: s[2] == 3, ride_a=True):
+        return False
+    if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 3):
+        return False
+    _press10(emu, "a")                         # LOG OFF
+    emu.tick(90)
+    _close_menus(emu)
+    emu.wait_free(max_rounds=10, stable_needed=3)
+    return heal_at_pokecenter(emu, ex, pc_map)
+
+
+def _walk_tile_leg(emu: PyBoyEmulator, ex: Executor, map_id: int,
+                   tile, ok_maps, repel_every: int = 0,
+                   max_rounds: int = 240) -> str:
+    """Tile-level walk inside one map toward `tile`, for
+    interiors where journey-level rides fail. Returns "warp"
+    (a warp carried us to a map in `ok_maps`), "tile" (standing
+    on the target), "blackout" (a warp to an unexpected map -
+    the party wiped and respawned; reported as its own outcome
+    instead of masquerading as leg success), "sealed" or
+    "stuck".
+
+    The blocked set is PERSISTENT for the whole leg: the
+    executor's own learned-wall forgetting kept erasing Rock
+    Tunnel B1F's refusals and replanning through them, orbiting
+    the same trainers while the party bled (probe144 attempts
+    1-2). A refused tile stays refused here; battles go to the
+    driver; if the persistent set seals the map, the fallback
+    steps beside a sealing tile and talks to whatever stands
+    on it (a trainer battle frees the corridor's sight
+    geometry). The lead is Potion-topped between fights, and
+    Repel upkeep runs on a round cadence when repel_every > 0.
+    """
+    world = ex.world
+    drv = _BattleDriver(emu)
+    blocked = set()
+    engaged = set()
+    for rnd in range(max_rounds):
+        st = emu.read_state()
+        if st.map_id != map_id:
+            if st.map_id in ok_maps:
+                return "warp"
+            return "blackout"
+        if (st.x, st.y) == tile:
+            return "tile"
+        if st.in_battle:
+            _fight_now(emu, drv)
+            continue
+        if st.in_dialog:
+            emu.close_dialog(max_presses=3)
+            continue
+        _field_heal_lead(emu)
+        if repel_every and rnd > 0 and rnd % repel_every == 0:
+            use_repel(emu)
+        path = world.tile_path(
+            map_id, (st.x, st.y), tile,
+            blocked=frozenset(blocked),
+            capabilities=st.capabilities(),
+            cut_done=frozenset(ex._cut_done.get(map_id, ())))
+        if path is None:
+            cands = [t for t in blocked if t not in engaged]
+            if not cands:
+                return "sealed"
+            tgt = cands[0]
+            engaged.add(tgt)
+            stood = False
+            for n in [(tgt[0] + dx, tgt[1] + dy)
+                      for dx, dy in ((0, 1), (0, -1),
+                                     (1, 0), (-1, 0))]:
+                p2 = world.tile_path(
+                    map_id, (st.x, st.y), n,
+                    blocked=frozenset(blocked),
+                    capabilities=st.capabilities())
+                if p2:
+                    try:
+                        ex._follow_tiles(map_id, p2)
+                        stood = True
+                        break
+                    except StuckError:
+                        if ex._blocked_tile is not None:
+                            blocked.add(ex._blocked_tile)
+                            ex._blocked_tile = None
+            if not stood:
+                continue
+            st = emu.read_state()
+            if st.map_id != map_id:
+                continue
+            dx, dy = tgt[0] - st.x, tgt[1] - st.y
+            btn = {(0, -1): "up", (0, 1): "down",
+                   (-1, 0): "left", (1, 0): "right"}.get((dx, dy))
+            if btn is None:
+                continue
+            emu.press(btn)
+            emu.tick(15)
+            _press10(emu, "a")
+            emu.tick(40)
+            if emu.read_state().in_battle:
+                _fight_now(emu, drv)
+            elif emu.read_state().in_dialog:
+                emu.close_dialog(max_presses=4)
+            continue
+        try:
+            ex._follow_tiles(map_id, path)
+        except StuckError:
+            if ex._blocked_tile is not None:
+                blocked.add(ex._blocked_tile)
+                ex._blocked_tile = None
+            if emu.read_state().in_battle:
+                _fight_now(emu, drv)
+            emu.tick(10)
+    st = emu.read_state()
+    if st.map_id == map_id and (st.x, st.y) == tile:
+        return "tile"
+    if st.map_id in ok_maps:
+        return "warp"
+    return "stuck"
+
+
+def _step_walk_to(emu: PyBoyEmulator, ex: Executor, map_id: int,
+                  tile, max_rounds: int = 300) -> bool:
+    """Walk to `tile` one hand-rolled step at a time (bounded
+    presses, each step proven by the RAM coordinates). The
+    outdoor counterpart of _walk_tile_leg: Executor._follow_tiles
+    wedged silently on Route 10's south corridor in two probe144
+    runs - its inner loop can spin without a StuckError when a
+    press keeps changing state without reaching the target (the
+    Super Nerd engagement at (14,64) is the local suspect) - so
+    this corridor is stepped manually. A blackout is detected
+    by the money drop and reported as failure."""
+    from agent.executor import _DELTA_TO_BUTTON  # press per delta
+    world = ex.world
+    drv = _BattleDriver(emu)
+    blocked = set()
+    money_prev = emu.read_state().money
+    for _rnd in range(max_rounds):
+        st = emu.read_state()
+        if st.money < money_prev:
+            return False                       # blackout
+        money_prev = st.money
+        if st.map_id != map_id:
+            return False
+        if (st.x, st.y) == tile:
+            return True
+        if st.in_battle:
+            _fight_now(emu, drv)
+            continue
+        if st.in_dialog:
+            emu.close_dialog(max_presses=3)
+            continue
+        p = world.tile_path(
+            map_id, (st.x, st.y), tile,
+            blocked=frozenset(blocked),
+            capabilities=st.capabilities())
+        if p is None or len(p) < 2:
+            return False
+        nxt = p[1]
+        btn = _DELTA_TO_BUTTON[(nxt[0] - st.x, nxt[1] - st.y)]
+        before = (st.x, st.y)
+        for _att in range(40):
+            emu.press(btn)
+            emu.tick(28)
+            st2 = emu.read_state()
+            if (st2.map_id != map_id or st2.in_battle
+                    or st2.in_dialog):
+                break
+            if (st2.x, st2.y) != before:
+                break
+        st2 = emu.read_state()
+        if (st2.map_id == map_id and (st2.x, st2.y) == before
+                and not st2.in_battle and not st2.in_dialog):
+            blocked.add(nxt)
+    st = emu.read_state()
+    return st.map_id == map_id and (st.x, st.y) == tile
+
+
+def traverse_rock_tunnel(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Rock Tunnel, entered from the Route 10 (north) side:
+    Flash on entry (verified in wMapPalOffset), Repel up, then
+    the ladder zigzag the game's elevation rules force -
+    1F (37,3) down to B1F (33,25), B1F (27,3) up to 1F (5,3),
+    1F (17,11) down to B1F (23,11), B1F (3,3) up to 1F south
+    (37,17), out the south exit (15,33) - and the stepped walk
+    down Route 10's south segment into Lavender Town.
+
+    The world model used to plan a single B1F walk along the
+    south corridor; that path crosses a forbidden tile pair
+    ($20 -> $05 at (14,28) -> (13,28)) and the game refuses the
+    step. The model now carries TilePairCollisionsLand (see
+    agent/world.py), so its tile paths ARE the zigzag - this
+    scene drives them leg by leg with the persistent-blocked
+    walker because the tunnel's STAY trainers stand on the
+    through-path and journey-level replans orbit them.
+
+    Darkness is NOT capability-gated in the model: wMapPalOffset
+    is palette-only in the engine and RAM navigation does not
+    read the screen, so the agent could cross blind. Canonical
+    play is enforced here instead - the scene lights the cave
+    on entry and verifies it before walking."""
+    world = ex.world
+    rt1 = world.map_id("RockTunnel1F")
+    b1 = world.map_id("RockTunnelB1F")
+    r10 = world.map_id("Route10")
+    lav = world.map_id("LavenderTown")
+    st = emu.read_state()
+    if st.map_id == lav:
+        return True
+    if st.map_id == r10 and st.y > 40:
+        pass                                   # already south:
+        # fall through to the hop below via the leg chain check
+    else:
+        if st.map_id not in (rt1, b1):
+            if not _ride_battling(emu, ex, rt1):
+                return False
+        st = emu.read_state()
+        if st.map_id == rt1 and (st.x, st.y) == (15, 3):
+            if not use_flash(emu):
+                return False
+            if not use_repel(emu):
+                return False
+        if emu.read_state().map_id == rt1:
+            r = _walk_tile_leg(emu, ex, rt1, (37, 3), {b1})
+            if r != "warp":
+                return False
+        if emu.read_state().map_id == b1:
+            # From the (33,25) landing the pair-legal road runs
+            # north to the (27,3) ladder, not west along B1F.
+            r = _walk_tile_leg(emu, ex, b1, (27, 3), {rt1},
+                               repel_every=15)
+            if r != "warp":
+                return False
+        if emu.read_state().map_id == rt1:
+            r = _walk_tile_leg(emu, ex, rt1, (17, 11), {b1})
+            if r != "warp":
+                return False
+        if emu.read_state().map_id == b1:
+            r = _walk_tile_leg(emu, ex, b1, (3, 3), {rt1},
+                               repel_every=15)
+            if r != "warp":
+                return False
+        if emu.read_state().map_id == rt1:
+            use_repel(emu)
+            r = _walk_tile_leg(emu, ex, rt1, (15, 33), {r10})
+            if r != "warp":
+                return False
+    # Route 10 south segment -> step off the south edge.
+    st = emu.read_state()
+    if st.map_id != r10:
+        return emu.read_state().map_id == lav
+    use_repel(emu)
+    if not _step_walk_to(emu, ex, r10, (8, 71)):
+        return False
+    drv = _BattleDriver(emu)
+    for _ in range(30):
+        st = emu.read_state()
+        if st.map_id == lav:
+            return True
+        if st.in_battle:
+            _fight_now(emu, drv)
+            continue
+        emu.press("down")
+        emu.tick(45)
+    return emu.read_state().map_id == lav
+
+
 def _cut_tree_at_gym(emu: PyBoyEmulator, ex: Executor) -> bool:
     """The gym door's tree stands at Vermilion City (15, 18),
     faced from (14, 18) (front tile 0x3D, pokered cut.asm). The
@@ -1891,6 +2619,84 @@ def vermilion_leg(emu: PyBoyEmulator, ex: Executor) -> bool:
     if not catch_diglett(emu, ex):
         return False
     return beat_surge(emu, ex)
+
+
+def rock_tunnel_leg(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """The whole Rock Tunnel chain, as proven by probe144:
+    ride the long way round to Cerulean (Saffron's gates are
+    shut - the road is the Underground Path), stock up, ride
+    Route 9/10 to the tunnel-side Pokecenter, catch a Voltorb
+    (the Flash carrier - Oddish cannot learn Flash, see
+    teach_flash), swap it into the party for Spearow at Bill's
+    PC, teach it Flash, ride BACK to Cerulean for Repels and
+    more Potions (the first crossing attempt blacked out on
+    pure HP attrition; the resupply is what makes the tunnel
+    survivable), heal at the tunnel-side center, traverse,
+    and heal in Lavender. Each stage verifies itself from RAM
+    and is skipped when its effect is already in place."""
+    world = ex.world
+    vpc = world.map_id("VermilionPokecenter")
+    cerpc = world.map_id("CeruleanPokecenter")
+    cermart = world.map_id("CeruleanMart")
+    rtpc = world.map_id("RockTunnelPokecenter")
+    lavpc = world.map_id("LavenderPokecenter")
+    st = emu.read_state()
+    if st.map_id == world.map_id("LavenderTown") and \
+            any(MOVE_FLASH in m.moves for m in st.party):
+        return heal_at_pokecenter(emu, ex, lavpc)
+    if ITEM_HM05 not in _bag_items(emu):
+        return False                     # collect_flash's stage
+    if not _ride_battling(emu, ex, vpc):
+        return False
+    if not heal_at_pokecenter(emu, ex, vpc):
+        return False
+    if not _ride_battling(emu, ex, cerpc):
+        return False
+    if not heal_at_pokecenter(emu, ex, cerpc):
+        return False
+    if not buy_poke_balls(emu, ex, want=15, mart=cermart):
+        return False
+    if buy_mart_item(emu, ex, cermart,
+                     CERULEAN_MART_LIST.index(ITEM_POTION),
+                     ITEM_POTION, 2) < 2:
+        return False
+    if buy_mart_item(emu, ex, cermart,
+                     CERULEAN_MART_LIST.index(ITEM_ANTIDOTE),
+                     ITEM_ANTIDOTE, 2) < 2:
+        return False
+    if not catch_voltorb(emu, ex):
+        return False
+    if not pc_swap(emu, ex, rtpc, SPECIES_SPEAROW,
+                   SPECIES_VOLTORB):
+        return False
+    v_idx = _party_index_of(emu, SPECIES_VOLTORB)
+    if v_idx is None:
+        return False
+    if not teach_flash(emu, v_idx):
+        return False
+    # The attrition resupply: Repels kill the wild-battle half
+    # of the tunnel's HP toll, Potions cover the trainer half.
+    if not _ride_battling(emu, ex, cerpc):
+        return False
+    if not heal_at_pokecenter(emu, ex, cerpc):
+        return False
+    if buy_mart_item(emu, ex, cermart,
+                     CERULEAN_MART_LIST.index(ITEM_REPEL),
+                     ITEM_REPEL, 3) < 3:
+        return False
+    if buy_mart_item(emu, ex, cermart,
+                     CERULEAN_MART_LIST.index(ITEM_POTION),
+                     ITEM_POTION, 5) < 5:
+        return False
+    if not _ride_battling(emu, ex, rtpc):
+        return False
+    if not heal_at_pokecenter(emu, ex, rtpc):
+        return False
+    if not traverse_rock_tunnel(emu, ex):
+        return False
+    if not _ride_to(emu, ex, lavpc):
+        return False
+    return heal_at_pokecenter(emu, ex, lavpc)
 
 
 MAP_MT_MOON_B2F = 61

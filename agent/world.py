@@ -115,6 +115,16 @@ class GameMap:
     # `cut_blocks` maps every cell of a tree block to its face tile.
     cut_trees: FrozenSet[Tile] = frozenset()
     cut_blocks: Dict[Tile, Tile] = field(default_factory=dict)
+    # Tile-pair collisions (TilePairCollisionsLand, CAVERN and
+    # FOREST tilesets only): the engine refuses a step whose
+    # standing/front sampled tile ids form a forbidden pair, in
+    # either direction (an elevation rule - CAVERN $20 floor may
+    # not cross to $05 raised floor). `tiles` is the per-cell
+    # sampled (bottom-left) tile id grid the passability rule and
+    # the pair rule both read; None on maps whose tileset has no
+    # pair table. Modelled in _bfs_steps like ledges and Cut.
+    tiles: Optional[List[List[int]]] = None
+    pair_forbidden: FrozenSet[FrozenSet[int]] = frozenset()
 
     def cut_block_cells(self, face: Tile) -> FrozenSet[Tile]:
         """All cells of the tree block whose face is `face`."""
@@ -201,6 +211,9 @@ class World:
                 tileset=m.get("tileset", ""),
                 cut_trees=cut_trees,
                 cut_blocks=cut_blocks,
+                tiles=m.get("tiles"),
+                pair_forbidden=frozenset(
+                    frozenset(p) for p in m.get("pair_forbidden", [])),
             )
         # Exit warps (dest = LAST_MAP) lead back to wherever warps into this
         # map. Precompute entrance maps for graph edges.
@@ -350,6 +363,16 @@ class World:
         replaces the whole block with ground), and a block whose face
         is in `cut_done` (cut earlier this map visit) is plain ground.
         Without the capability, tree cells are walls, full stop.
+
+        Tile-pair collisions (gm.pair_forbidden, CAVERN/FOREST
+        only) refuse a plain step whose two cells' sampled tile
+        ids form a forbidden pair, either direction - the engine's
+        CheckForTilePairCollisions compares wTilePlayerStandingOn
+        with wTileInFrontOfPlayer, both bottom-left samples. The
+        rule is applied to the walkable branch only: ledge jumps
+        skip the pair check in the engine too (HandleLedges runs
+        first and sets BIT_LEDGE_OR_FISHING), and Cut tilesets
+        (OVERWORLD/GYM) have no pair entries at all.
         """
         cx, cy = cur
         if cur in gm.ledges:
@@ -367,6 +390,12 @@ class World:
             if gm.walkable(n[0], n[1], dx, dy):
                 if n in warp_tiles and n not in exempt:
                     continue
+                if gm.pair_forbidden:
+                    t_cur = gm.tiles[cy][cx]
+                    t_n = gm.tiles[n[1]][n[0]]
+                    if t_cur != t_n and \
+                            frozenset((t_cur, t_n)) in gm.pair_forbidden:
+                        continue
                 yield n
                 continue
             face = gm.cut_blocks.get(n)
