@@ -3044,6 +3044,13 @@ def _switch_menu_index(moves) -> int:
     return 1 + sum(1 for mv in moves if mv in FIELD_MOVE_IDS)
 
 
+START_MENU_POKEMON = 1
+# START menu order: POKEDEX 0, POKEMON 1, ITEM 2, trainer 3,
+# SAVE 4, OPTION 5, EXIT 6 (probe148: the first port of
+# _swap_party_slots steered to 3 - the trainer-card entry -
+# and every live swap failed; probe147's proven helper used 1).
+
+
 def _swap_party_slots(emu: PyBoyEmulator, i: int, j: int) -> bool:
     """Swap party slots i and j via START -> POKEMON -> slot i
     -> SWITCH (field-move-aware index) -> slot j, verified by
@@ -3058,10 +3065,12 @@ def _swap_party_slots(emu: PyBoyEmulator, i: int, j: int) -> bool:
     _press10(emu, "start")
     if not _wait_menu_y(emu, 2):
         return False
-    if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 3):
+    if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM],
+                       START_MENU_POKEMON):
         return False
     _press10(emu, "a")                         # POKEMON
-    emu.tick(80)
+    if not _wait_menu_y(emu, 1):
+        return False
     if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], i):
         return False
     _press10(emu, "a")                         # open submenu
@@ -3609,6 +3618,562 @@ def celadon_leg(emu: PyBoyEmulator, ex: Executor) -> bool:
     st = emu.read_state()
     return "Rainbow" in st.badges and \
         _bag_count(emu, ITEM_FRESH_WATER) >= 1
+
+
+# ------------------------------------------------------------------
+# Rocket Hideout (probe148): empirical learned-graph navigation.
+#
+# The shipped world model's indoor grids are NOT reliable at
+# cell granularity in the FACILITY tileset: block quadrants mix
+# floor and machine tiles (on B2F's strip (25,8)/(26,8) are
+# floor but (24,8) is a wall, whatever the grid says), B4F's
+# grid is the all-open coherence fallback, and B2F/B3F arrow
+# tiles relocate the player by script (map_coord_movement
+# tables: RLE joypad lists played in reverse db order with
+# input ignored). So hideout interiors are navigated
+# EMPIRICALLY: explore_nav presses one direction, settles
+# (spins run out), reads the landing cell from RAM and records
+# the edge (cell, dir) -> landing | wall | warp in a per-map
+# graph held in EXPLORE_LEARN; BFS plans over observed edges
+# only, and frontier steps expand the graph toward the target,
+# using the model grid only as a prior for where to speculate.
+# Arrow rides are deterministic, so a recorded ride replays
+# exactly; recorded walls may be re-probed once per call
+# (doors change state - B4F's office door was recorded shut
+# during the key run and opened after the guards fell).
+# The graph is per-process (the probe persisted it to JSON
+# across its phases; a single leg run here rebuilds it).
+# ------------------------------------------------------------------
+ITEM_LIFT_KEY = 0x4A
+ITEM_SILPH_SCOPE = 0x48
+ITEM_NUGGET = 0x31
+ITEM_HP_UP = 0x23
+ITEM_TM02 = 0xCA  # TM ids run $C9 + (n - 1)
+
+# wEventFlags ids (constants/event_constants.asm, const_next
+# regions; anchored on EVENT_67F = 1663 by construction and on
+# the B2F/B3F trainer bits read off flag diffs between probe
+# saves - two naive counts of that file are wrong in print:
+# it uses const_def/const_next, not const_event, and a bare
+# const_skip still advances the counter).
+EV_FOUND_ROCKET_HIDEOUT = 441
+EV_HIDEOUT_B1_TRAINERS = (1649, 1650, 1651, 1652, 1653)
+EV_HIDEOUT_B2_TRAINER = 1665
+EV_HIDEOUT_B3_TRAINERS = (1681, 1682)
+EV_HIDEOUT_B4_TRAINERS = (1698, 1699, 1700)
+EV_HIDEOUT_B4_DOOR = 1701
+EV_ROCKET_DROPPED_LIFT_KEY = 1702
+EV_BEAT_HIDEOUT_GIOVANNI = 1703
+
+# arrow/spinner cells, from the pokered map_coord_movement
+# tables for RocketHideoutB2F/B3F (converted (y,x) -> (x,y)).
+HIDEOUT_ARROWS = {
+    "RocketHideoutB2F": {(2, 11), (4, 11), (5, 11), (7, 10),
+                         (7, 11), (8, 9), (9, 12), (11, 9),
+                         (11, 10), (11, 12), (14, 9), (16, 12),
+                         (18, 9), (19, 9), (21, 9), (23, 9),
+                         (25, 9)},
+    "RocketHideoutB3F": {(2, 12), (2, 13), (4, 13), (6, 13),
+                         (8, 12), (10, 13), (12, 13), (13, 13),
+                         (15, 13), (19, 17), (19, 18), (19, 19),
+                         (19, 20), (19, 21), (21, 14), (23, 14)},
+}
+
+EXPLORE_LEARN: dict = {}
+_EXPLORE_DIRS = {"up": (0, -1), "down": (0, 1),
+                 "left": (-1, 0), "right": (1, 0)}
+_EXPLORE_DELTAS = {v: k for k, v in _EXPLORE_DIRS.items()}
+
+
+def _explore_graph(map_id: int) -> dict:
+    return EXPLORE_LEARN.setdefault(
+        map_id, {"edges": {}, "cells": set()})
+
+
+def _explore_settle(emu: PyBoyEmulator, max_frames: int = 1200):
+    """Poll until the player is genuinely still (an arrow spin
+    has run out) or a battle/dialog/map change interrupts."""
+    last = None
+    stable = 0
+    spent = 0
+    while spent < max_frames:
+        emu.tick(12)
+        spent += 12
+        st = emu.read_state()
+        if st.in_battle or st.in_dialog:
+            return st
+        pos = (st.map_id, st.x, st.y)
+        if pos == last:
+            stable += 1
+            if stable >= 4:
+                return st
+        else:
+            stable = 0
+            last = pos
+    return emu.read_state()
+
+
+def _explore_step(emu: PyBoyEmulator, ex: Executor, map_id: int,
+                  cell, btn):
+    """Press one direction from `cell`, settle, fight/close
+    whatever interrupts, and record the true outcome edge.
+    Returns (outcome, battles): a landing cell, None (wall),
+    or "warp" (the map changed)."""
+    g = _explore_graph(map_id)
+    emu.press(btn)
+    st = _explore_settle(emu)
+    battles = 0
+    for _ in range(6):
+        if st.in_battle:
+            _drive_battle_typed(emu)
+            battles += 1
+            st = _explore_settle(emu)
+            continue
+        if st.in_dialog:
+            emu.close_dialog(max_presses=3)
+            st = _explore_settle(emu)
+            continue
+        break
+    if st.map_id != map_id:
+        g["edges"][(cell, btn)] = "warp"
+        return "warp", battles
+    land = (st.x, st.y)
+    g["cells"].add(land)
+    if land == cell:
+        g["edges"][(cell, btn)] = None
+        return None, battles
+    g["edges"][(cell, btn)] = land
+    return land, battles
+
+
+def _explore_bfs(map_id: int, start, goals):
+    """Shortest path over RECORDED edges only; returns a list
+    of (cell, dir) steps or None."""
+    from collections import deque
+    g = _explore_graph(map_id)
+    if start in goals:
+        return []
+    prev = {start: None}
+    dq = deque([start])
+    while dq:
+        cur = dq.popleft()
+        for btn in _EXPLORE_DIRS:
+            out = g["edges"].get((cur, btn), "untried")
+            if out in ("untried", None, "warp"):
+                continue
+            if out not in prev:
+                prev[out] = (cur, btn)
+                if out in goals:
+                    path = []
+                    node = out
+                    while prev[node] is not None:
+                        path.append(prev[node])
+                        node = prev[node][0]
+                    return path[::-1]
+                dq.append(out)
+    return None
+
+
+def explore_nav(emu: PyBoyEmulator, ex: Executor, map_id: int,
+                target, max_steps: int = 6000):
+    """Navigate to `target` inside one map over the learned
+    graph (probe148), exploring frontier steps when no known
+    route exists. Returns (status, battles): status in
+    {"tile", "warp", "blackout", "stuck"}."""
+    from collections import deque
+    world = ex.world
+    gm = world.maps[map_id]
+    g = _explore_graph(map_id)
+    arrows = HIDEOUT_ARROWS.get(gm.name, ())
+    target = tuple(target)
+    battles = 0
+    retested = set()
+    money0 = emu.read_state().money
+    for _ in range(max_steps):
+        st = emu.read_state()
+        if st.map_id != map_id:
+            return ("warp", battles)
+        if st.money < money0:
+            return ("blackout", battles)
+        if st.in_battle:
+            _drive_battle_typed(emu)
+            battles += 1
+            continue
+        if st.in_dialog:
+            emu.close_dialog(max_presses=3)
+            continue
+        cur = (st.x, st.y)
+        g["cells"].add(cur)
+        if cur == target:
+            return ("tile", battles)
+        path = _explore_bfs(map_id, cur, {target})
+        if path:
+            cell, btn = path[0]
+            _, b = _explore_step(emu, ex, map_id, cell, btn)
+            battles += b
+            continue
+        dist = {cur: 0}
+        dq = deque([cur])
+        while dq:
+            c = dq.popleft()
+            for btn in _EXPLORE_DIRS:
+                o = g["edges"].get((c, btn), "untried")
+                if o not in ("untried", None, "warp") \
+                        and o not in dist:
+                    dist[o] = dist[c] + 1
+                    dq.append(o)
+        warp_cells = {(w.x, w.y) for w in gm.warps}
+        best = None
+        for c, d in dist.items():
+            for btn, (dx, dy) in _EXPLORE_DIRS.items():
+                rec = g["edges"].get((c, btn), "untried")
+                nb = (c[0] + dx, c[1] + dy)
+                if not gm.in_bounds(nb[0], nb[1]):
+                    continue
+                if nb in warp_cells and nb != target:
+                    continue  # never teleport speculatively
+                score = d + abs(nb[0] - target[0]) \
+                    + abs(nb[1] - target[1])
+                if not gm.walkable(nb[0], nb[1]):
+                    score += 6
+                if nb in arrows:
+                    score += 10
+                if rec is None:
+                    if (c, btn) in retested:
+                        continue
+                    score += 80  # wall re-probe, last resort
+                elif rec != "untried":
+                    continue
+                if best is None or score < best[0]:
+                    best = (score, c, btn)
+        if best is None:
+            return ("stuck", battles)
+        _, fc, fbtn = best
+        if fc != cur:
+            path = _explore_bfs(map_id, cur, {fc})
+            cell, btn = path[0]
+        else:
+            cell, btn = fc, fbtn
+            if g["edges"].get((cell, btn), "untried") is None:
+                retested.add((cell, btn))
+        _, b = _explore_step(emu, ex, map_id, cell, btn)
+        battles += b
+    return ("stuck", battles)
+
+
+def _face_and_talk(emu: PyBoyEmulator, cell) -> None:
+    """Face `cell` from the current adjacent position and
+    press A (the press toward the cell only turns: it is
+    occupied or a bg tile)."""
+    st = emu.read_state()
+    btn = _EXPLORE_DELTAS.get((cell[0] - st.x, cell[1] - st.y))
+    assert btn, f"not adjacent: at {(st.x, st.y)}, cell {cell}"
+    emu.press(btn)
+    emu.tick(15)
+    _press10(emu, "a")
+    emu.tick(45)
+
+
+def _advance_to_battle(emu: PyBoyEmulator,
+                       max_rounds: int = 60) -> bool:
+    """Advance dialog (A presses) until a battle starts, then
+    drive it. Returns True if a battle was fought."""
+    for _ in range(max_rounds):
+        st = emu.read_state()
+        if st.in_battle:
+            _drive_battle_typed(emu)
+            return True
+        if st.in_dialog:
+            _press10(emu, "a")
+            emu.tick(30)
+        else:
+            emu.tick(30)
+    return False
+
+
+def pickup_ball(emu: PyBoyEmulator, ex: Executor, map_id: int,
+                ball, item_id: int) -> bool:
+    """Stand next to an item ball, face it, take it, and
+    verify the bag count from RAM. Tries each stance."""
+    want = _bag_count(emu, item_id)
+    bx, by = ball
+    for dx, dy in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+        stance = (bx + dx, by + dy)
+        status, _ = explore_nav(emu, ex, map_id, stance)
+        st = emu.read_state()
+        if status != "tile" or (st.x, st.y) != stance:
+            continue
+        _face_and_talk(emu, ball)
+        emu.wait_free(max_rounds=30, stable_needed=3)
+        st = emu.read_state()
+        if st.in_battle:
+            _drive_battle_typed(emu)
+        if _bag_count(emu, item_id) > want:
+            return True
+    return False
+
+
+def talk_fight_event(emu: PyBoyEmulator, ex: Executor,
+                     map_id: int, npc_cell, event_id: int,
+                     stance_order=((0, 1), (0, -1), (1, 0),
+                                   (-1, 0))) -> bool:
+    """Navigate to a stance next to an NPC, face it, talk, and
+    fight if a battle starts; verified by the trainer event
+    flag. (A sight-triggered battle during the approach also
+    satisfies it: the flag is checked first and after.)"""
+    if _event_flag(emu, event_id):
+        return True
+    nx, ny = npc_cell
+    for dx, dy in stance_order:
+        stance = (nx + dx, ny + dy)
+        status, _ = explore_nav(emu, ex, map_id, stance)
+        st = emu.read_state()
+        if status != "tile" or (st.x, st.y) != stance:
+            continue
+        if _event_flag(emu, event_id):
+            return True
+        _face_and_talk(emu, npc_cell)
+        _advance_to_battle(emu)
+        emu.wait_free(max_rounds=60, stable_needed=6)
+        if _event_flag(emu, event_id):
+            return True
+    return _event_flag(emu, event_id)
+
+
+def elevator_ride(emu: PyBoyEmulator, ex: Executor,
+                  dest_index: int) -> bool:
+    """Ride the Rocket Hideout elevator from inside the cab to
+    floor index dest_index (0=B1F, 1=B2F, 2=B4F) (probe148).
+    The panel bg is at (1,1) with stance (1,2); the floor menu
+    is steered by wCurrentMenuItem; choosing a floor rewrites
+    the door warps' (2,1)/(3,1) destinations. Needs the LIFT
+    KEY in the bag. Returns True when a hideout floor is
+    reached."""
+    world = ex.world
+    elev = world.map_id("RocketHideoutElevator")
+    mem = emu.pb.memory
+    st = emu.read_state()
+    if st.map_id != elev or _bag_count(emu, ITEM_LIFT_KEY) < 1:
+        return False
+    for _ in range(10):
+        st = emu.read_state()
+        if (st.x, st.y) == (1, 2):
+            break
+        if st.x > 1:
+            emu.press("left")
+        elif st.y < 2:
+            emu.press("down")
+        elif st.y > 2:
+            emu.press("up")
+        _explore_settle(emu)
+    emu.press("up")   # face the panel (turn only)
+    emu.tick(15)
+    _press10(emu, "a")
+    emu.tick(60)
+    if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM],
+                       dest_index, rounds=12):
+        return False
+    _press10(emu, "a")
+    emu.tick(120)
+    emu.wait_free(max_rounds=40, stable_needed=4)
+    for btn in ("right", "right", "up", "up", "left", "up"):
+        st = emu.read_state()
+        if st.map_id != elev:
+            break
+        emu.press(btn)
+        _explore_settle(emu)
+    return emu.read_state().map_id != elev
+
+
+def rocket_hideout(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Celadon Game Corner -> Rocket Hideout -> the LIFT KEY
+    (probe148). The poster route needs no coins: beat the
+    Rocket guarding it (Raticate/Zubat Lv20), advance his
+    exit scene, then examine the poster - its text_asm sets
+    EVENT_FOUND_ROCKET_HIDEOUT and swaps in the staircase.
+    Descent B1F -> B2F -> B3F is empirical navigation (see
+    explore_nav); on B4F's west side, Rocket3 (11,2) drops
+    the LIFT KEY ball at (10,2) when talked to after his
+    battle. Also picks up TM02 (9,4) and the HP Up (10,12)
+    on that floor. The B2F Nugget was left: two probe
+    attempts slid into the south-west arrow pocket and the
+    learned component there is a dead end - optional loot,
+    not worth the maze. Ends on B4F with the key in the bag.
+    Assumes Celadon (Rainbow Badge held), Blastoise in the
+    party to lead. Every stage skips when already done."""
+    world = ex.world
+    gc = world.map_id("GameCorner")
+    b1f = world.map_id("RocketHideoutB1F")
+    b2f = world.map_id("RocketHideoutB2F")
+    b3f = world.map_id("RocketHideoutB3F")
+    b4f = world.map_id("RocketHideoutB4F")
+    if _bag_count(emu, ITEM_LIFT_KEY) >= 1:
+        return True
+    if not party_lead(emu, SPECIES_BLASTOISE):
+        return False
+    st = emu.read_state()
+    if st.map_id != gc:
+        if not _ride_battling(emu, ex, gc):
+            return False
+    if not _event_flag(emu, EV_FOUND_ROCKET_HIDEOUT):
+        ok, _ = _walk_fighting(emu, ex, gc, (9, 6))
+        st = emu.read_state()
+        if not ok or (st.x, st.y) != (9, 6):
+            return False
+        _face_and_talk(emu, (9, 5))
+        if not _advance_to_battle(emu):
+            return False
+        emu.wait_free(max_rounds=120, stable_needed=10)
+        emu.wait_free(max_rounds=60, stable_needed=10)
+        ok, _ = _walk_fighting(emu, ex, gc, (9, 5))
+        st = emu.read_state()
+        if not ok or (st.x, st.y) != (9, 5):
+            return False
+        _face_and_talk(emu, (9, 4))
+        for _ in range(40):
+            if _event_flag(emu, EV_FOUND_ROCKET_HIDEOUT):
+                break
+            if emu.read_state().in_dialog:
+                _press10(emu, "a")
+            emu.tick(30)
+        emu.wait_free(max_rounds=40, stable_needed=4)
+        if not _event_flag(emu, EV_FOUND_ROCKET_HIDEOUT):
+            return False
+    # descend: Game Corner stairs -> B1F -> B2F -> B3F -> B4F
+    legs = ((gc, (17, 4), b1f), (b1f, (23, 2), b2f),
+            (b2f, (21, 8), b3f), (b3f, (19, 18), b4f))
+    for src_map, warp_cell, dst_map in legs:
+        st = emu.read_state()
+        if st.map_id == dst_map:
+            continue
+        if st.map_id != src_map:
+            return False
+        status, _ = explore_nav(emu, ex, src_map, warp_cell)
+        if emu.read_state().map_id != dst_map:
+            return False
+    # B4F west: Rocket3, the key drop, the two cheap items
+    if not talk_fight_event(emu, ex, b4f, (11, 2),
+                            EV_HIDEOUT_B4_TRAINERS[2]):
+        return False
+    for _ in range(3):
+        if _event_flag(emu, EV_ROCKET_DROPPED_LIFT_KEY):
+            break
+        status, _ = explore_nav(emu, ex, b4f, (11, 3))
+        st = emu.read_state()
+        if (st.x, st.y) != (11, 3):
+            continue
+        _face_and_talk(emu, (11, 2))
+        emu.wait_free(max_rounds=40, stable_needed=4)
+    if not _event_flag(emu, EV_ROCKET_DROPPED_LIFT_KEY):
+        return False
+    if not pickup_ball(emu, ex, b4f, (10, 2), ITEM_LIFT_KEY):
+        return False
+    pickup_ball(emu, ex, b4f, (9, 4), ITEM_TM02)
+    pickup_ball(emu, ex, b4f, (10, 12), ITEM_HP_UP)
+    return _bag_count(emu, ITEM_LIFT_KEY) >= 1
+
+
+def beat_giovanni_hq(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """B4F -> elevator -> Giovanni -> the SILPH SCOPE, then
+    out and healed (probe148). From B4F's west side: stairs
+    back to B2F, elevator up to B4F's east side. Rocket1
+    (23,12) and Rocket2 (26,12) have sight range 0 - they
+    fight only when talked to; beating both unlocks the
+    office door (its blocks swap via the map-load callback,
+    which has run by the time the second battle ends).
+    Giovanni (25,3) stands behind a 2x2 desk - cells
+    (24-25,4-5) are wall tiles and FACILITY's only counter
+    tile ($12) is not among them, so he is talked to from
+    the north room at (24,3)/(26,3)/(25,2), reached around
+    the desk's west side. His team (Onix 25 / Rhyhorn 24 /
+    Kangaskhan 29) fainted the probe's Blastoise from 81 HP -
+    it had taken hideout attrition with no heal; Arcanine
+    closed the fight out. The Scope ball appears at (25,2)
+    behind his desk. Exit: elevator to B1F, Rocket5 (28,18)
+    guards the door out of the elevator room, then walk out
+    and heal at Celadon. Ends healed with the Scope in the
+    bag and the Fresh Water unspent."""
+    world = ex.world
+    celpc = world.map_id("CeladonPokecenter")
+    cel = world.map_id("CeladonCity")
+    gc = world.map_id("GameCorner")
+    b1f = world.map_id("RocketHideoutB1F")
+    b2f = world.map_id("RocketHideoutB2F")
+    b3f = world.map_id("RocketHideoutB3F")
+    b4f = world.map_id("RocketHideoutB4F")
+    elev = world.map_id("RocketHideoutElevator")
+    if _bag_count(emu, ITEM_SILPH_SCOPE) >= 1:
+        return _ride_battling(emu, ex, celpc) and \
+            heal_at_pokecenter(emu, ex, celpc)
+    if _bag_count(emu, ITEM_LIFT_KEY) < 1:
+        return False
+    st = emu.read_state()
+    if st.map_id == b4f and st.x < 20:
+        # west side: back up to B2F for the elevator
+        status, _ = explore_nav(emu, ex, b4f, (19, 10))
+        if emu.read_state().map_id != b3f:
+            return False
+        status, _ = explore_nav(emu, ex, b3f, (25, 6))
+        if emu.read_state().map_id != b2f:
+            return False
+    if emu.read_state().map_id == b2f:
+        status, _ = explore_nav(emu, ex, b2f, (24, 19))
+        if emu.read_state().map_id != elev:
+            return False
+        if not elevator_ride(emu, ex, 2):
+            return False
+    if emu.read_state().map_id != b4f:
+        return False
+    if not talk_fight_event(emu, ex, b4f, (23, 12),
+                            EV_HIDEOUT_B4_TRAINERS[0]):
+        return False
+    if not talk_fight_event(emu, ex, b4f, (26, 12),
+                            EV_HIDEOUT_B4_TRAINERS[1]):
+        return False
+    for _ in range(30):
+        if _event_flag(emu, EV_HIDEOUT_B4_DOOR):
+            break
+        emu.tick(30)
+    if not _event_flag(emu, EV_HIDEOUT_B4_DOOR):
+        return False
+    if not talk_fight_event(emu, ex, b4f, (25, 3),
+                            EV_BEAT_HIDEOUT_GIOVANNI,
+                            stance_order=((1, 0), (-1, 0),
+                                          (0, -1))):
+        return False
+    emu.wait_free(max_rounds=120, stable_needed=10)
+    if not _event_flag(emu, EV_BEAT_HIDEOUT_GIOVANNI):
+        return False
+    if not pickup_ball(emu, ex, b4f, (25, 2), ITEM_SILPH_SCOPE):
+        return False
+    # exit: elevator to B1F, past Rocket5, out, heal
+    status, _ = explore_nav(emu, ex, b4f, (24, 15))
+    if emu.read_state().map_id != elev:
+        return False
+    if not elevator_ride(emu, ex, 0):
+        return False
+    if emu.read_state().map_id != b1f:
+        return False
+    if not talk_fight_event(emu, ex, b1f, (28, 18),
+                            EV_HIDEOUT_B1_TRAINERS[4]):
+        return False
+    status, _ = explore_nav(emu, ex, b1f, (21, 2))
+    if emu.read_state().map_id != gc:
+        return False
+    _walk_fighting(emu, ex, gc, (15, 17))
+    if emu.read_state().map_id == gc:
+        emu.press("down")
+        _explore_settle(emu)
+    if emu.read_state().map_id != cel:
+        return False
+    if not _ride_battling(emu, ex, celpc):
+        return False
+    if not heal_at_pokecenter(emu, ex, celpc):
+        return False
+    st = emu.read_state()
+    return _bag_count(emu, ITEM_SILPH_SCOPE) >= 1 and \
+        _bag_count(emu, ITEM_FRESH_WATER) >= 1 and \
+        all(m.hp == m.max_hp for m in st.party)
 
 
 MAP_MT_MOON_B2F = 61

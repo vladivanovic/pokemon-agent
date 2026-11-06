@@ -730,3 +730,97 @@ TM24 still unspent; Saffron never entered.
 sha256 8e58b3dfe0c49016e96ad52f2204960b2e0c48eafc0d54b7e31b2e93ae3c85c3.
 Save states stay out of git as ever; the chain head moves
 to the Orin by hand with its sha256.
+
+## 14. Rocket Hideout (2026-11-07, probe148): learned-graph navigation, the elevator, and Giovanni
+
+The Game Corner poster route needs no coins: beat the Rocket
+guarding the poster (Raticate/Zubat Lv20, +Y600), ride his
+scripted exit, then examine the poster — its text_asm sets
+EVENT_FOUND_ROCKET_HIDEOUT (441) only after the "Hey! A switch
+behind the poster!?" text is advanced through, and swaps in
+the staircase block. Ported as `rocket_hideout` /
+`beat_giovanni_hq` in run_real.py (faithful ports of the
+probe flow, not cold-replayed end to end).
+
+Navigation is the section's real content. The shipped indoor
+grids are not reliable at cell granularity in the FACILITY
+tileset: a block's four quadrants mix floor and machine tiles,
+so a per-cell sample lies both ways (B2F's strip: (25,8) and
+(26,8) are floor, (24,8) is a wall, whatever the grid says),
+B4F's grid is the all-open coherence fallback, and B2F/B3F
+arrow tiles relocate the player by script (per-map
+map_coord_movement tables: RLE joypad lists played in reverse
+db order with input ignored). The hideout is therefore
+navigated empirically by `explore_nav`: one press, settle
+until the spin runs out, read the landing cell from RAM, and
+record the edge (cell, dir) -> landing | wall | warp in a
+per-map graph. BFS plans over observed edges only; frontier
+steps expand the graph toward the target, using the model
+grid only as a prior (model-wall +6, arrow cell +10, never
+speculate onto a warp cell). Arrow rides are deterministic,
+so a recorded ride replays exactly. Recorded walls may be
+re-probed once per call at +80: doors change state, and B4F's
+office door was first recorded shut, then walked through
+after its guards fell — the door blocks swap via the map
+script's load callback, which has run by the time the second
+guard's battle ends. One honest failure: the B2F Nugget
+(16,8) was attempted twice and abandoned — stepping off the
+strip drops into the south-west arrow pocket, whose learned
+component is a dead end for the stances around the ball;
+optional loot, not worth the maze. A general spinner model
+for the world model would need the map_coord_movement tables
+compiled in as forced-move edges (entry cell + simulated
+joypad RLE -> landing cell, chainable), plus per-quadrant
+(tile-level, not block-level) passability for FACILITY
+interiors — the learned graph is the empirical stopgap.
+
+The elevator protocol, cracked in one attempt from a saved
+cab state: panel bg at (1,1), stance (1,2) facing up (the
+(2,1) stance is itself a door warp); the floor menu is
+steered by wCurrentMenuItem (B1F/B2F/B4F = 0/1/2); choosing
+a floor rewrites the door warps' destinations, and stepping
+north out lands on the matching floor's door cell (B4F:
+(25,15)). It refuses without the LIFT KEY in the bag.
+
+Floor notes. B1F: no arrows; the NE stairs hop (23,2) avoids
+all five Rockets — only Rocket5 (28,18) was fought, on the
+way out, because he guards the elevator room's door. B3F's
+two Rockets both fell to arrow-ride sight lines during the
+crossing. B4F's west side: Rocket3 (11,2) drops the LIFT KEY
+ball at (10,2) when talked to *after* his battle (event
+1702); TM02 Razor Wind (9,4) and an HP Up (10,12) were the
+cheap pickups. The office guards Rocket1 (23,12) / Rocket2
+(26,12) have sight range 0 — they fight only when talked to.
+Giovanni (25,3) stands behind a 2x2 desk: cells (24-25,4-5)
+are wall tiles (block $47), and FACILITY's only counter tile
+($12) is not among them, so there is no talk-over — he is
+talked to from the north room at (26,3), reached around the
+desk's west side. His Kangaskhan fainted Blastoise, which
+had entered at 81/139 after a no-heal hideout run; Arcanine
+closed the fight (event 1703). The SILPH SCOPE ball at
+(25,2) was taken from his own cell (25,3) once he left.
+
+Two tooling bugs found and fixed on the way. (1)
+`_swap_party_slots` steered the START menu to item 3 (the
+trainer card) — the port of probe147's helper drifted from
+its source, which uses item 1 (POKEMON); every live swap
+failed until `START_MENU_POKEMON = 1` was pinned with a
+test. (2) Event-id counting from event_constants.asm is a
+trap twice over: the file uses const_def/const_next (not
+const_event), and a bare `const_skip` still advances the
+counter. The hideout ids used here are anchored on
+EVENT_67F = 1663 by construction and on wEventFlags diffs
+between probe saves (B2F trainer = 1665; B3F = 1681/1682;
+B4F = 1698/1699/1700, door 1701, key drop 1702, Giovanni
+1703).
+
+Chain: probe148/scope.state — Celadon City outside the PC,
+party healed (Blastoise Lv43, Arcanine Lv27, Diglett Lv22,
+NidoranM Lv3, Voltorb Lv16 Flash, Oddish Lv23 Cut), money
+Y12,194, bag: 8 Poke Balls, 4 Great Balls, 4 Super Potions,
+Fresh Water x1 (unspent, Saffron untouched), LIFT KEY,
+SILPH SCOPE, TM02 + TM21 + TM24 (all unspent), HP Up.
+Tests 97/97.
+sha256 df1ebb8ec263e707094123273d5dee464ce2f5c46e0863d31f62cad202d125c6.
+Save states stay out of git as ever; the chain head moves
+to the Orin by hand with its sha256.

@@ -199,5 +199,89 @@ class TestSwitchMenuIndex(unittest.TestCase):
         self.assertEqual(rr._switch_menu_index([91, 100]), 3)  # Dig, Teleport
 
 
+class TestStartMenuPokemon(unittest.TestCase):
+    """probe148: the first port of _swap_party_slots steered
+    the START menu to item 3 (the trainer card) and every live
+    swap failed; POKEMON is item 1 (POKEDEX 0, POKEMON 1,
+    ITEM 2, trainer 3, SAVE 4, OPTION 5, EXIT 6), as in
+    probe147's proven helper."""
+
+    def test_pokemon_is_start_menu_item_1(self):
+        self.assertEqual(rr.START_MENU_POKEMON, 1)
+
+
+class TestExploreBfs(unittest.TestCase):
+    """probe148's learned-graph BFS: plans over recorded edges
+    only; walls and warps are never traversed."""
+
+    MAP_ID = 99999
+
+    def tearDown(self):
+        rr.EXPLORE_LEARN.pop(self.MAP_ID, None)
+
+    def _graph(self, edges):
+        rr.EXPLORE_LEARN[self.MAP_ID] = {"edges": edges,
+                                         "cells": set()}
+
+    def test_path_over_recorded_edges(self):
+        self._graph({((0, 0), "right"): (1, 0),
+                     ((1, 0), "down"): (1, 1),
+                     ((0, 0), "down"): None})
+        self.assertEqual(
+            rr._explore_bfs(self.MAP_ID, (0, 0), {(1, 1)}),
+            [((0, 0), "right"), ((1, 0), "down")])
+
+    def test_walls_and_warps_not_traversed(self):
+        self._graph({((0, 0), "right"): None,
+                     ((0, 0), "down"): "warp",
+                     ((0, 0), "up"): (0, -1)})
+        self.assertIsNone(
+            rr._explore_bfs(self.MAP_ID, (0, 0), {(1, 0)}))
+
+    def test_start_in_goals_is_empty_path(self):
+        self._graph({})
+        self.assertEqual(
+            rr._explore_bfs(self.MAP_ID, (3, 3), {(3, 3)}), [])
+
+
+class TestHideoutConstants(unittest.TestCase):
+    """probe148's event ids, anchored on EVENT_67F = 1663 by
+    construction in the source and on the B2F/B3F trainer
+    bits (1665; 1681/1682) read off wEventFlags diffs."""
+
+    def test_event_ids(self):
+        self.assertEqual(rr.EV_FOUND_ROCKET_HIDEOUT, 441)
+        self.assertEqual(rr.EV_HIDEOUT_B1_TRAINERS,
+                         (1649, 1650, 1651, 1652, 1653))
+        self.assertEqual(rr.EV_HIDEOUT_B2_TRAINER, 1665)
+        self.assertEqual(rr.EV_HIDEOUT_B3_TRAINERS, (1681, 1682))
+        self.assertEqual(rr.EV_HIDEOUT_B4_TRAINERS,
+                         (1698, 1699, 1700))
+        self.assertEqual(rr.EV_HIDEOUT_B4_DOOR, 1701)
+        self.assertEqual(rr.EV_ROCKET_DROPPED_LIFT_KEY, 1702)
+        self.assertEqual(rr.EV_BEAT_HIDEOUT_GIOVANNI, 1703)
+
+    def test_item_ids(self):
+        self.assertEqual(rr.ITEM_LIFT_KEY, 0x4A)
+        self.assertEqual(rr.ITEM_SILPH_SCOPE, 0x48)
+        self.assertEqual(rr.ITEM_NUGGET, 0x31)
+        self.assertEqual(rr.ITEM_HP_UP, 0x23)
+        self.assertEqual(rr.ITEM_TM02, 0xCA)
+
+
+class TestHideoutArrows(unittest.TestCase):
+    """The B2F/B3F arrow tables come from pokered's
+    map_coord_movement lists, converted (y,x) -> (x,y)."""
+
+    def test_arrow_tables(self):
+        b2f = rr.HIDEOUT_ARROWS["RocketHideoutB2F"]
+        b3f = rr.HIDEOUT_ARROWS["RocketHideoutB3F"]
+        self.assertEqual(len(b2f), 17)
+        self.assertEqual(len(b3f), 16)
+        self.assertIn((21, 9), b2f)    # east y=9 arrow run
+        self.assertIn((19, 18), b3f)   # on the B4F stairs cell
+        self.assertIn((2, 12), b3f)
+
+
 if __name__ == "__main__":
     unittest.main()
