@@ -67,5 +67,39 @@ class TestCounters(unittest.TestCase):
         self.assertEqual(rr.ITEM_HM05, rr.ITEM_HM01 + 4)
 
 
+class RankerEmu:
+    """Fake emu whose party is (moves, pp) tuples."""
+
+    def __init__(self, mons):
+        self._mons = [SimpleNamespace(moves=list(m), pp=list(p))
+                      for m, p in mons]
+
+    def read_state(self):
+        return SimpleNamespace(party=list(self._mons))
+
+
+class TestRankedMoveFn(unittest.TestCase):
+    """The PP-dry fallback (probe145's Exeggcute wedge): the
+    ranker must never hand the driver a 0-PP move."""
+
+    def test_prefers_strongest_damaging_with_pp(self):
+        # Water Gun 55 (40) dry, Bubblebeam 61 (65) live.
+        emu = RankerEmu([([55, 61], [0, 20])])
+        self.assertEqual(rr._ranked_move_fn(emu)(0), [1])
+
+    def test_fallback_is_pp_status_move_not_slot0(self):
+        # Both damaging moves dry; Tail Whip (39, status)
+        # still has PP - the old `or [0]` returned the dry
+        # Water Gun and the battle wedged on "no PP" text.
+        emu = RankerEmu([([55, 39, 61], [0, 30, 0])])
+        self.assertEqual(rr._ranked_move_fn(emu)(0), [1])
+
+    def test_all_dry_returns_slot0(self):
+        # Nothing has PP at all: the game force-Struggles,
+        # so the value is moot, but it must not crash.
+        emu = RankerEmu([([55, 39], [0, 0])])
+        self.assertEqual(rr._ranked_move_fn(emu)(0), [0])
+
+
 if __name__ == "__main__":
     unittest.main()

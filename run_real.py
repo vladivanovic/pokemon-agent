@@ -900,12 +900,25 @@ def _ranked_move_fn(emu: PyBoyEmulator):
         st = emu.read_state()
         mon = st.party[idx]
         cands = []
+        any_pp = None
         for i, mv in enumerate(mon.moves):
-            if mv and mv not in STATUS_MOVE_IDS \
+            if not mv:
+                continue
+            if i < len(mon.pp) and mon.pp[i] > 0 \
+                    and any_pp is None:
+                any_pp = i
+            if mv not in STATUS_MOVE_IDS \
                     and i < len(mon.pp) and mon.pp[i] > 0:
                 cands.append((_MOVE_POWER.get(mv, 30), i))
         cands.sort(reverse=True)
-        return [i for _p, i in cands] or [0]
+        # The fallback must NEVER be a 0-PP move: selecting
+        # one just prints "no PP left" and reopens the menu
+        # forever (the probe145 Exeggcute wedge). Fall back
+        # to any PP'd move, status included; [0] only when
+        # literally nothing has PP (the game force-Struggles
+        # then and the menu never really opens).
+        return [i for _p, i in cands] or \
+            ([any_pp] if any_pp is not None else [0])
     return fn
 
 
@@ -937,6 +950,12 @@ class _BattleDriver:
         self._rejected = set()
         self._pending = None
         self._rejects = 0
+        # Faint-pick screen bookkeeping: how many steering
+        # presses in a row failed to move the party cursor
+        # (a text box is eating them) and where the cursor
+        # last was.
+        self._pick_stuck = 0
+        self._pick_last_item = -1
 
     def sig(self):
         m = self.mem
@@ -970,7 +989,19 @@ class _BattleDriver:
                         break
                 switched = True
                 continue
-            if stale >= 3:
+            if stale >= 3 and not (
+                    my == 1
+                    and (mem[ADDR_BATTLE_MON_HP] << 8
+                         | mem[ADDR_BATTLE_MON_HP + 1]) == 0):
+                # Never blind-A the faint-replacement pick
+                # screen: the cursor starts on the FAINTED
+                # mon, A there only prints "There's no will
+                # to fight!" and the sig never changes, so
+                # the stale branch would re-fire forever and
+                # the steering branch below never runs (the
+                # gym14/grind wedge: a fainted trainee in a
+                # wild battle froze the driver for 15+
+                # drives). The party branch must steer.
                 _press10(emu, "a")
                 emu.tick(15)
                 continue
@@ -1017,10 +1048,28 @@ class _BattleDriver:
                         | mem[ADDR_BATTLE_MON_HP + 1]) == 0:
                     repl = self._replacement()
                     if item == repl:
+                        self._pick_stuck = 0
                         _press10(emu, "a")
                     else:
-                        _press10(emu, "down" if item < repl
-                                 else "up")
+                        # Steer to the replacement - but if
+                        # the cursor will not move, a text
+                        # box ("There's no will to fight!"
+                        # after an accidental pick of the
+                        # fainted mon, or the faint message
+                        # itself) is eating the presses:
+                        # dismiss it with A, then steer on.
+                        if item == self._pick_last_item:
+                            self._pick_stuck += 1
+                        else:
+                            self._pick_stuck = 0
+                        self._pick_last_item = item
+                        if self._pick_stuck >= 2:
+                            self._pick_stuck = 0
+                            _press10(emu, "a")
+                        else:
+                            _press10(emu,
+                                     "down" if item < repl
+                                     else "up")
                 else:
                     _press10(emu, "b")
                 continue
@@ -1031,6 +1080,8 @@ class _BattleDriver:
             self._rejected = set()
             self._pending = None
             self._rejects = 0
+            self._pick_stuck = 0
+            self._pick_last_item = -1
         return over
 
     def _replacement(self) -> int:
