@@ -788,10 +788,30 @@ def eastward_from_cerulean(emu: PyBoyEmulator, ex: Executor) -> bool:
 
 ITEM_POKE_BALL = 0x04
 ITEM_HM01 = 0xC4
+ITEM_HM05 = 0xC8               # HM ids are 0xC4 + (n - 1) in the pocket
 MOVE_CUT = 15
 MOVE_DIG = 91
 SPECIES_ODDISH = 0xB9
 SPECIES_DIGLETT = 0x3B
+# Species ids are Gen 1 INTERNAL indices (party struct byte 0),
+# not National Dex numbers - pokered constants/pokemon_constants.
+SPECIES_NIDORAN_M = 0x03
+SPECIES_SPEAROW = 0x05
+SPECIES_NIDORAN_F = 0x0F
+SPECIES_PIDGEY = 0x24
+SPECIES_PIKACHU = 0x54
+SPECIES_WEEDLE = 0x70
+SPECIES_KAKUNA = 0x71
+SPECIES_CATERPIE = 0x7B
+SPECIES_METAPOD = 0x7C
+SPECIES_RATTATA = 0xA5
+
+# wPokedexOwned: 151 flags in DEX order (probe142 read it raw).
+ADDR_POKEDEX_OWNED = 0xD2F7
+# The current PC box's count / species list in WRAM (the box data
+# is banked in; box 1 is current until someone uses a PC).
+ADDR_BOX_COUNT = 0xDA80        # wBoxCount
+ADDR_BOX_SPECIES = 0xDA81      # wBoxSpecies, 0xFF-terminated
 
 ADDR_MENU_TOP_Y = 0xCC24
 ADDR_MENU_ITEM = 0xCC26
@@ -840,6 +860,27 @@ def _party_index_of(emu: PyBoyEmulator, species_id: int):
         if mon.species_id == species_id:
             return i
     return None
+
+
+def _dex_owned_count(emu: PyBoyEmulator) -> int:
+    """Species registered as owned in the Pokedex - the Route 2
+    aide's HM05 gate, and the cheapest proof a catch was new."""
+    mem = emu.pb.memory
+    return sum(bin(mem[ADDR_POKEDEX_OWNED + i]).count("1")
+               for i in range(19))
+
+
+def _box_count(emu: PyBoyEmulator) -> int:
+    """Mons in the current PC box (wBoxCount)."""
+    return emu.pb.memory[ADDR_BOX_COUNT]
+
+
+def _stored_count(emu: PyBoyEmulator) -> int:
+    """Party + box: everywhere a fresh catch can land. Catch
+    verification must use this, not the party size alone - with
+    a full party the engine sends the catch straight to the box
+    (item_effects.asm SendNewMonToBox) and the party never grows."""
+    return len(emu.read_state().party) + _box_count(emu)
 
 
 def _ranked_move_fn(emu: PyBoyEmulator):
@@ -1130,11 +1171,17 @@ def _throw_ball(emu: PyBoyEmulator) -> bool:
     return _bag_count(emu, ITEM_POKE_BALL) < before
 
 
-def _catch_epilogue(emu: PyBoyEmulator, party_target: int) -> bool:
-    """Ride the catch text and the first-catch Pokedex page, then
-    decline the nickname: the yes/no cursor starts on YES, so a
-    *verified* down + A picks NO (probe115's blind As typed a
-    junk nickname; probe126's verified version is this)."""
+def _catch_epilogue(emu: PyBoyEmulator, stored_target: int) -> bool:
+    """Ride the catch text and the first-catch Pokedex page (and,
+    for a box catch, the transfer text), then decline the
+    nickname: the yes/no cursor starts on YES, so a *verified*
+    down + A picks NO (probe115's blind As typed a junk
+    nickname; probe126's verified version is this). Completion
+    is judged by the STORED count (party + box): the original
+    version keyed on party size, which a box catch never moves -
+    SendNewMonToBox files the mon without asking for a nickname
+    (item_effects.asm), so only the party path shows the prompt
+    this declines."""
     mem = emu.pb.memory
 
     def press(button):
@@ -1143,7 +1190,7 @@ def _catch_epilogue(emu: PyBoyEmulator, party_target: int) -> bool:
 
     for _ in range(160):
         st = emu.read_state()
-        if not st.in_battle and len(st.party) >= party_target \
+        if not st.in_battle and _stored_count(emu) >= stored_target \
                 and mem[ADDR_MENU_TOP_Y] == 0 and not st.in_dialog:
             return True
         if st.in_battle and mem[ADDR_MENU_TOP_Y] not in (0, 12, 14) \
@@ -1157,17 +1204,29 @@ def _catch_epilogue(emu: PyBoyEmulator, party_target: int) -> bool:
         press("a")
         emu.tick(65)
     st = emu.read_state()
-    return not st.in_battle and len(st.party) >= party_target
+    return not st.in_battle and _stored_count(emu) >= stored_target
 
 
-def _catch_species(emu: PyBoyEmulator, ex: Executor,
-                   want_species: int, max_encounters: int = 40
-                   ) -> bool:
+def _catch_any(emu: PyBoyEmulator, ex: Executor,
+               want_species, max_encounters: int = 60):
     """Pace in place for wild encounters; run from everything
-    that is not want_species, throw balls at it until caught.
-    The caller's party must have balls and room."""
+    that is not in want_species, throw balls at a want until it
+    is caught. Returns the species id caught, or None.
+
+    Generalised from probe115/126's single-species hunter
+    (probe143): a SET of wanted species (a whole map's uncaught
+    pool in one grass session), and box-aware success detection -
+    the catch is proven by the stored count (party + box)
+    ticking up inside the battle, so hunts keep working after
+    the party fills at 6. Balls at full HP: nothing in this
+    party can weaken a Lv2-6 wild without one-shotting it, and
+    the Gen 1 formula gives ~1/3 per ball at catch rate 255
+    regardless (item_effects.asm: X = 85 at full HP), ~3 balls
+    per catch in practice. A battle that cannot be fled (a
+    trainer who found us mid-hunt) is fought out with the
+    battle driver instead of wedging the hunt."""
     mem = emu.pb.memory
-    before = len(emu.read_state().party)
+    wants = set(want_species)
     for _enc in range(max_encounters):
         for i in range(150):
             if emu.read_state().in_battle:
@@ -1181,17 +1240,80 @@ def _catch_species(emu: PyBoyEmulator, ex: Executor,
                     and mem[ADDR_ENEMY_MAX_HP] != 0:
                 break
             emu.tick(10)
-        if mem[ADDR_ENEMY_SPECIES] != want_species:
-            _run_away(emu)
+        species = mem[ADDR_ENEMY_SPECIES]
+        if species not in wants:
+            if not _run_away(emu) and emu.read_state().in_battle:
+                drv = _BattleDriver(emu)
+                drv.fight_until_end(_ranked_move_fn(emu),
+                                    max_actions=300)
+                emu.wait_free(max_rounds=8, stable_needed=2)
             continue
-        for _attempt in range(14):
-            _throw_ball(emu)
-            st = emu.read_state()
-            if len(st.party) > before:
+        if _bag_count(emu, ITEM_POKE_BALL) == 0:
+            return None
+        if _catch_current(emu):
+            return species
+    return None
+
+
+def _catch_current(emu: PyBoyEmulator) -> bool:
+    """Throw balls at the wild mon already in front of us until
+    it is caught (proven by the stored count ticking up, then
+    the epilogue) or the battle ends some other way. Assumes a
+    battle is live. Split out of _catch_any (probe143): a hunt
+    interrupted mid-walk by exactly the species it came for
+    should catch THAT mon, not run and re-roll the grass.
+
+    The throw needs an explicit ride (probe143's first hunt
+    wedged on exactly this): in the item effect's order -
+    catch text, set the dex flag, ShowPokedexData, AddPartyMon /
+    SendNewMonToBox, remove the ball - a first-of-species catch
+    parks on the full-screen Pokedex page BEFORE the mon is
+    filed. That page is not a dialog (in_dialog reads False) and
+    only a plain A/B press dismisses it, while the stored count
+    cannot tick until it is gone - so a caller that waits for
+    the count before pressing anything deadlocks with the catch
+    already made. The ride below presses A through everything
+    that is not a live decision menu (the throw text, the
+    shakes, the enemy's turn, the dex page) and stops the
+    moment the main battle menu (menuY 14) is genuinely back,
+    which is the broke-free case."""
+    mem = emu.pb.memory
+
+    def press_a():
+        _raw(emu, "a", hold=4, settle=22)
+        emu.tick(30)
+
+    before = _stored_count(emu)
+    for _attempt in range(20):
+        if _bag_count(emu, ITEM_POKE_BALL) == 0:
+            return False
+        _throw_ball(emu)
+        for _ride in range(240):
+            if _stored_count(emu) > before:
                 return _catch_epilogue(emu, before + 1)
-            if _advance_battle(emu) == "over":
-                break
+            st = emu.read_state()
+            if not st.in_battle:
+                return False
+            if mem[ADDR_MENU_TOP_Y] == 14 and not st.in_dialog:
+                break                # broke free; menu is live
+            if st.in_dialog or mem[ADDR_MENU_TOP_Y] not in (12, 14):
+                press_a()
+            else:
+                emu.tick(30)
+        else:
+            return False             # the throw never resolved
+        if _advance_battle(emu) == "over":
+            return False
     return False
+
+
+def _catch_species(emu: PyBoyEmulator, ex: Executor,
+                   want_species: int, max_encounters: int = 40
+                   ) -> bool:
+    """Single-species wrapper over _catch_any (the probe115/126
+    call shape the Vermilion scenes were built against)."""
+    return _catch_any(emu, ex, {want_species},
+                      max_encounters) == want_species
 
 
 # -- bag item use: the menuY stage machine (probes 122-124) ---------
@@ -1358,15 +1480,20 @@ def board_ss_anne(emu: PyBoyEmulator, ex: Executor) -> bool:
 
 
 def buy_poke_balls(emu: PyBoyEmulator, ex: Executor,
-                   want: int = 10) -> bool:
-    """Buy Poke Balls at Vermilion Mart, verifying the bag count
-    after every press. The shop's stages all read dialog=True and
-    A-riding walks them (welcome -> item list, cursor starts on
-    the ball -> quantity 1 -> confirm), so a press loop gated on
-    the RAM count buys one ball per cycle without the runaway
-    probe104 hit when its loop-riding bought 31."""
+                   want: int = 10, mart: int = None) -> bool:
+    """Buy Poke Balls, verifying the bag count after every press.
+    The shop's stages all read dialog=True and A-riding walks
+    them (welcome -> item list, cursor starts on the ball ->
+    quantity 1 -> confirm), so a press loop gated on the RAM
+    count buys one ball per cycle without the runaway probe104
+    hit when its loop-riding bought 31. Proven at Vermilion Mart
+    (probe104 lineage); every mart interior shares the counter
+    layout (clerk at (0,5), stance (2,5) facing left across the
+    counter), so `mart` just retargets the ride - Viridian Mart
+    uses it from probe143 on."""
     world = ex.world
-    mart = world.map_id("VermilionMart")
+    if mart is None:
+        mart = world.map_id("VermilionMart")
     mem = emu.pb.memory
     if _bag_count(emu, ITEM_POKE_BALL) >= want:
         return True
@@ -1454,6 +1581,45 @@ def catch_diglett(emu: PyBoyEmulator, ex: Executor) -> bool:
     if not _ride_to(emu, ex, cave):
         return False
     return _catch_species(emu, ex, SPECIES_DIGLETT)
+
+
+def collect_flash(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Route 2 Gate: Professor Oak's aide hands over HM05 Flash
+    once the Pokedex holds 10 owned species (scripts/
+    Route2Gate.asm: hOaksAideRequirement = 10, reward HM_FLASH).
+    The aide stands at (1,4) facing left; talk to him from (2,4).
+    Verified by HM05 appearing in the bag - the aide's refusal
+    path (fewer than 10 species) leaves the bag untouched, so
+    this returns False instead of a false positive. Idempotent:
+    EVENT_GOT_HM05 makes later talks explanation-only, and the
+    bag check short-circuits them anyway."""
+    world = ex.world
+    gate = world.map_id("Route2Gate")
+    if ITEM_HM05 in _bag_items(emu):
+        return True
+    if _dex_owned_count(emu) < 10:
+        return False
+    if not _ride_to(emu, ex, gate):
+        return False
+    try:
+        ex._walk_to(gate, (2, 4))
+    except StuckError:
+        return False
+    emu.press("left")                        # face the aide
+    emu.tick(20)
+    _press10(emu, "a")
+    for _ in range(120):
+        if ITEM_HM05 in _bag_items(emu):
+            break
+        if emu.read_state().in_dialog:
+            _press10(emu, "a")
+        emu.tick(25)
+    for _ in range(30):                      # ride out the talk
+        if not emu.read_state().in_dialog:
+            break
+        _press10(emu, "a")
+        emu.tick(20)
+    return ITEM_HM05 in _bag_items(emu)
 
 
 def _cut_tree_at_gym(emu: PyBoyEmulator, ex: Executor) -> bool:

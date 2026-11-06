@@ -361,3 +361,74 @@ Read-only aside (same probe, RAM wPokedexOwned): 4 species owned
 - Squirtle, Wartortle, Oddish, Diglett. The Route 2 aide's HM05
 Flash needs >= 10, so a catching detour is a decision for Vlad
 before any Rock Tunnel leg.
+
+## 11. Catching detour + HM05 Flash (2026-11-06, probe143)
+
+The Route 2 Gate aide gates HM05 Flash on 10 owned species
+(scripts/Route2Gate.asm); the chain head's dex held 4. The
+detour caught the six cheapest neighbours of Viridian City,
+all Lv3, all verified in RAM (stored count, dex count, and
+the receiving list):
+
+- Route 22 grass: Spearow (9 balls - unlucky; the ride math
+  below says ~3 is par), Nidoran (m) (2), Nidoran (f) (2) -
+  party slots 4-6, filling the party.
+- Route 1: Rattata (2), Pidgey (3) - both to Box 1.
+- Route 2 south grass: Weedle (2) - Box 1. Dex 4 -> 10.
+
+Balls are thrown at full HP on purpose: nothing in this party
+can weaken a Lv2-6 wild without one-shotting it, and the Gen 1
+formula caps at ~1/3 per ball at catch rate 255 regardless
+(item_effects.asm: at full HP the shake value X is 85). 20
+balls thrown across the six catches, 10 left; the only money
+spent was a 2-ball top-up (2450 -> 2050) that doubled as the
+live test of the buyer port below.
+
+Ported into run_real.py (the probe drove the ported code, not
+a private copy):
+- _catch_any(emu, ex, want_set): multi-species grass hunts,
+  box-aware - success is the STORED count (party + box,
+  _stored_count) ticking, so hunts keep working after the
+  party fills at 6. _catch_species is now a wrapper with the
+  probe115/126 call shape. _catch_epilogue's completion test
+  moved from party size to stored count for the same reason.
+- _catch_current(emu): catch the mon already in front of you
+  (a walk interruption that IS the target gets caught, not
+  fled). Its throw ride is the pass's real find: in the item
+  effect's order - catch text, dex flag, ShowPokedexData,
+  AddPartyMon/SendNewMonToBox, remove ball - a first-of-
+  species catch parks on the full-screen Pokedex page BEFORE
+  the mon is filed. The page is not a dialog (in_dialog reads
+  False) and only a plain A/B press dismisses it, while the
+  stored count cannot tick until it is gone: wait-for-count-
+  before-pressing deadlocks with the catch already made
+  (probe143's first hunt22 sat on Spearow's dex page for the
+  full 280 s timeout). The ride presses A through everything
+  that is not a live decision menu (throw text, shakes, the
+  enemy turn, the dex page) and stops when menuY 14 is
+  genuinely back (broke free). The old single-species hunter
+  survived this by press-spam luck in _throw_ball's steering.
+- _dex_owned_count / _box_count readers (wPokedexOwned /
+  wBoxCount), unit-tested against a fake emulator.
+- buy_poke_balls(..., mart=None): the Vermilion buyer
+  retargeted - every mart shares the counter layout (clerk
+  (0,5), stance (2,5) facing left); exercised live at Viridian
+  Mart (28 -> 30 balls, count-verified per press as before).
+- collect_flash(emu, ex): the aide scene - dex gate checked
+  first (a refusal leaves the bag untouched, so no false
+  positives), ride to Route2Gate, talk from (2,4) facing left,
+  verified by HM05 appearing in the bag.
+
+Live result: collect_flash returned True on the first ride;
+final state probe143/flash.state stands in Viridian City with
+the party healed - dex owned [Squirtle, Wartortle, Weedle,
+Pidgey, Rattata, Spearow, Nidoran (f), Nidoran (m), Oddish,
+Diglett], HM05 in the bag untaught (nobody in the story party
+is a sensible Flash carrier yet; Oddish can learn it if a
+carrier is wanted for Rock Tunnel), TM24 unspent, story
+party untouched in slots 1-3. Tests: 73/73 (67 + 6 new
+counter tests). Not done, deliberately: teaching Flash,
+Rock Tunnel, and any nickname for the new catches (the
+epilogue's verified NO held - all six carry species names;
+box catches are never offered the prompt at all,
+item_effects.asm SendNewMonToBox).
