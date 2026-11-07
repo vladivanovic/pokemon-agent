@@ -2945,15 +2945,34 @@ def _ride_text(emu: PyBoyEmulator, rounds: int = 80) -> bool:
     return free >= 2
 
 
+ADDR_BATTLE_KIND = 0xD057   # wIsInBattle: 1 = wild, 2 = trainer
+
+
 def _drive_battle_typed(emu: PyBoyEmulator,
-                        switch_first=None) -> bool:
+                        switch_first=None,
+                        flee_wild: bool = False) -> bool:
     """Drive the live battle to its honest end (in_battle
     clears) with the typed ranker (probe145's drive_battle).
     fight_until_end's own exit can fire seconds early on menu
     flicker; this loop re-drives until the battle flag is
     really down. A PP-dry active mon is rescued by switching
     to the first teammate holding PP (the Exeggcute wedge's
-    lesson); switch_first rides only the first drive."""
+    lesson); switch_first rides only the first drive.
+    flee_wild (probe149): a WILD battle (wIsInBattle == 1)
+    is fled with _run_away first - two attempts, then the
+    fight proceeds as usual. Trainer and scripted battles
+    are never fled. NOTE: the ghost Marowak's scripted
+    battle also reads kind 1, and fleeing it counts as
+    not-defeated - beat_ghost_marowak therefore drives it
+    with flee_wild left off."""
+    if flee_wild and emu.read_state().in_battle and \
+            emu.pb.memory[ADDR_BATTLE_KIND] == 1:
+        for _ in range(2):
+            if _run_away(emu):
+                emu.wait_free(max_rounds=8, stable_needed=2)
+                return not emu.read_state().in_battle
+            if not emu.read_state().in_battle:
+                return True
     drv = _BattleDriver(emu)
     first = True
     drives = 0
@@ -2985,18 +3004,20 @@ def _drive_battle_typed(emu: PyBoyEmulator,
 
 
 def _walk_fighting(emu: PyBoyEmulator, ex: Executor, map_id: int,
-                   tile, attempts: int = 25):
+                   tile, attempts: int = 25,
+                   flee_wild: bool = False):
     """Walk to a tile inside one map, fighting whatever
     intercepts (probe145). Returns (arrived, battles fought).
     Needed wherever sight trainers guard the path: a raw
     _walk_to sometimes threads a sight line without triggering
     the trainer at all, and a challenge built on it talks to
-    thin air (the probe145 Lasses)."""
+    thin air (the probe145 Lasses). flee_wild passes through
+    to the battle drive (probe149's Tower walks)."""
     fought = 0
     for _try in range(attempts):
         st = emu.read_state()
         if st.in_battle:
-            _drive_battle_typed(emu)
+            _drive_battle_typed(emu, flee_wild=flee_wild)
             fought += 1
             continue
         if (st.x, st.y) == tile and st.map_id == map_id:
@@ -3010,7 +3031,7 @@ def _walk_fighting(emu: PyBoyEmulator, ex: Executor, map_id: int,
             pass
         st = emu.read_state()
         if st.in_battle:
-            _drive_battle_typed(emu)
+            _drive_battle_typed(emu, flee_wild=flee_wild)
             fought += 1
     st = emu.read_state()
     return (st.x, st.y) == tile and st.map_id == map_id, fought
@@ -3714,7 +3735,7 @@ def _explore_settle(emu: PyBoyEmulator, max_frames: int = 1200):
 
 
 def _explore_step(emu: PyBoyEmulator, ex: Executor, map_id: int,
-                  cell, btn):
+                  cell, btn, flee_wild: bool = False):
     """Press one direction from `cell`, settle, fight/close
     whatever interrupts, and record the true outcome edge.
     Returns (outcome, battles): a landing cell, None (wall),
@@ -3725,7 +3746,7 @@ def _explore_step(emu: PyBoyEmulator, ex: Executor, map_id: int,
     battles = 0
     for _ in range(6):
         if st.in_battle:
-            _drive_battle_typed(emu)
+            _drive_battle_typed(emu, flee_wild=flee_wild)
             battles += 1
             st = _explore_settle(emu)
             continue
@@ -3775,7 +3796,8 @@ def _explore_bfs(map_id: int, start, goals):
 
 
 def explore_nav(emu: PyBoyEmulator, ex: Executor, map_id: int,
-                target, max_steps: int = 6000):
+                target, max_steps: int = 6000,
+                flee_wild: bool = False):
     """Navigate to `target` inside one map over the learned
     graph (probe148), exploring frontier steps when no known
     route exists. Returns (status, battles): status in
@@ -3796,7 +3818,7 @@ def explore_nav(emu: PyBoyEmulator, ex: Executor, map_id: int,
         if st.money < money0:
             return ("blackout", battles)
         if st.in_battle:
-            _drive_battle_typed(emu)
+            _drive_battle_typed(emu, flee_wild=flee_wild)
             battles += 1
             continue
         if st.in_dialog:
@@ -3809,7 +3831,8 @@ def explore_nav(emu: PyBoyEmulator, ex: Executor, map_id: int,
         path = _explore_bfs(map_id, cur, {target})
         if path:
             cell, btn = path[0]
-            _, b = _explore_step(emu, ex, map_id, cell, btn)
+            _, b = _explore_step(emu, ex, map_id, cell, btn,
+                                 flee_wild=flee_wild)
             battles += b
             continue
         dist = {cur: 0}
@@ -3856,7 +3879,8 @@ def explore_nav(emu: PyBoyEmulator, ex: Executor, map_id: int,
             cell, btn = fc, fbtn
             if g["edges"].get((cell, btn), "untried") is None:
                 retested.add((cell, btn))
-        _, b = _explore_step(emu, ex, map_id, cell, btn)
+        _, b = _explore_step(emu, ex, map_id, cell, btn,
+                             flee_wild=flee_wild)
         battles += b
     return ("stuck", battles)
 
@@ -3875,13 +3899,14 @@ def _face_and_talk(emu: PyBoyEmulator, cell) -> None:
 
 
 def _advance_to_battle(emu: PyBoyEmulator,
-                       max_rounds: int = 60) -> bool:
+                       max_rounds: int = 60,
+                       flee_wild: bool = False) -> bool:
     """Advance dialog (A presses) until a battle starts, then
     drive it. Returns True if a battle was fought."""
     for _ in range(max_rounds):
         st = emu.read_state()
         if st.in_battle:
-            _drive_battle_typed(emu)
+            _drive_battle_typed(emu, flee_wild=flee_wild)
             return True
         if st.in_dialog:
             _press10(emu, "a")
@@ -3916,24 +3941,29 @@ def pickup_ball(emu: PyBoyEmulator, ex: Executor, map_id: int,
 def talk_fight_event(emu: PyBoyEmulator, ex: Executor,
                      map_id: int, npc_cell, event_id: int,
                      stance_order=((0, 1), (0, -1), (1, 0),
-                                   (-1, 0))) -> bool:
+                                   (-1, 0)),
+                     flee_wild: bool = False) -> bool:
     """Navigate to a stance next to an NPC, face it, talk, and
     fight if a battle starts; verified by the trainer event
     flag. (A sight-triggered battle during the approach also
-    satisfies it: the flag is checked first and after.)"""
+    satisfies it: the flag is checked first and after.)
+    flee_wild passes through to the navigation and battle
+    drives (probe149's Tower floors, where wild Gastly
+    interrupt the learned-graph walks)."""
     if _event_flag(emu, event_id):
         return True
     nx, ny = npc_cell
     for dx, dy in stance_order:
         stance = (nx + dx, ny + dy)
-        status, _ = explore_nav(emu, ex, map_id, stance)
+        status, _ = explore_nav(emu, ex, map_id, stance,
+                                flee_wild=flee_wild)
         st = emu.read_state()
         if status != "tile" or (st.x, st.y) != stance:
             continue
         if _event_flag(emu, event_id):
             return True
         _face_and_talk(emu, npc_cell)
-        _advance_to_battle(emu)
+        _advance_to_battle(emu, flee_wild=flee_wild)
         emu.wait_free(max_rounds=60, stable_needed=6)
         if _event_flag(emu, event_id):
             return True
@@ -4172,6 +4202,405 @@ def beat_giovanni_hq(emu: PyBoyEmulator, ex: Executor) -> bool:
         return False
     st = emu.read_state()
     return _bag_count(emu, ITEM_SILPH_SCOPE) >= 1 and \
+        _bag_count(emu, ITEM_FRESH_WATER) >= 1 and \
+        all(m.hp == m.max_hp for m in st.party)
+
+
+ITEM_POKE_FLUTE = 0x49
+ITEM_RARE_CANDY = 0x28
+# Tower event ids (probe149): computed from
+# event_constants.asm with pokered's own const macros
+# (const_def/const_next/const_skip, expressions included -
+# line 67 is `const_next $F0 - 2`, which a plain-number
+# parser silently skips, shifting the whole Tower block
+# +2) and anchored on 441 FOUND_ROCKET_HIDEOUT, 1663
+# EVENT_67F, 1703 BEAT_ROCKET_HIDEOUT_GIOVANNI, plus the
+# empirical rival diff: the beaten-rival save flips exactly
+# bit 239. NUM_EVENTS = $A00, so wEventFlags is 320 bytes;
+# bits past that are the toggleable-object flags.
+EV_TOWER_RIVAL = 239
+EV_TOWER_3F_TRAINERS = (241, 242, 243)
+EV_TOWER_4F_TRAINERS = (249, 250, 251)
+EV_TOWER_5F_TRAINERS = (258, 259, 260, 261)
+EV_TOWER_PURIFIED_ZONE = 263
+EV_TOWER_6F_TRAINERS = (265, 266, 267)
+EV_BEAT_GHOST_MAROWAK = 271
+EV_TOWER_7F_ROCKETS = (273, 274, 275)
+EV_RESCUED_MR_FUJI_2 = 279
+EV_GOT_POKE_FLUTE = 296
+EV_RESCUED_MR_FUJI = 1231
+TOWER_PURIFIED_ZONE = ((10, 8), (11, 8), (10, 9), (11, 9))
+TOWER_MAROWAK_TRIGGER = (10, 16)
+TOWER_RIVAL_TRIGGER = (14, 6)   # the other is (15, 5)
+
+
+def _tower_stairs(emu: PyBoyEmulator, ex: Executor,
+                  src_map: int, warp_cell, dst_map: int) -> bool:
+    """Walk onto a Tower stair warp cell and verify the map
+    change (probe149). Wild battles on the way are fled via
+    flee_wild; if the walk ends standing on the warp without
+    it firing, nudge off and back on."""
+    ok, _ = _walk_fighting(emu, ex, src_map, warp_cell,
+                           flee_wild=True)
+    if emu.read_state().map_id == dst_map:
+        return True
+    for _ in range(6):
+        st = emu.read_state()
+        if st.map_id == dst_map:
+            return True
+        if st.in_battle:
+            _drive_battle_typed(emu, flee_wild=True)
+            continue
+        emu.press("down")
+        _explore_settle(emu)
+        if emu.read_state().map_id == dst_map:
+            return True
+        _walk_fighting(emu, ex, src_map, warp_cell,
+                       attempts=6, flee_wild=True)
+    return emu.read_state().map_id == dst_map
+
+
+def _tower_trainers(emu: PyBoyEmulator, ex: Executor,
+                    map_id: int, cells_events) -> bool:
+    """Beat a floor's trainers by (npc cell, event id),
+    skipping any already flagged (probe149). Sight-triggered
+    fights during one approach regularly set the NEXT
+    trainer's flag too - on 5F one talk_fight's navigation
+    set two further flags, on 6F all three fell in a single
+    sweep - so the flag check comes first, every time."""
+    for cell, event_id in cells_events:
+        if _event_flag(emu, event_id):
+            continue
+        if not talk_fight_event(emu, ex, map_id, cell,
+                                event_id, flee_wild=True):
+            return False
+    return True
+
+
+def beat_tower_rival(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """The 2F rival ambush (probe149). Assumes the player is
+    on PokemonTower2F with the rival unbeaten. Stepping on
+    (14,6) or (15,5) starts his script: text, then the
+    battle (Rival2 #4 - the Squirtle line: Pidgeotto 25,
+    Growlithe 23, Exeggcute 22, Kadabra 20, Wartortle 25),
+    then his scripted exit. Verified by EVENT 239 (his
+    DefeatedRival script sets it only on a win)."""
+    world = ex.world
+    t2 = world.map_id("PokemonTower2F")
+    if _event_flag(emu, EV_TOWER_RIVAL):
+        return True
+    if emu.read_state().map_id != t2:
+        return False
+    _walk_fighting(emu, ex, t2, TOWER_RIVAL_TRIGGER,
+                   flee_wild=True)
+    for _ in range(240):
+        st = emu.read_state()
+        if _event_flag(emu, EV_TOWER_RIVAL) \
+                and not st.in_dialog and not st.in_battle:
+            emu.tick(120)
+            st = emu.read_state()
+            if not st.in_dialog and not st.in_battle:
+                break
+        if st.in_battle:
+            _drive_battle_typed(emu, flee_wild=True)
+            continue
+        if st.in_dialog:
+            _press10(emu, "a")
+            emu.tick(30)
+            continue
+        emu.tick(30)
+    return _event_flag(emu, EV_TOWER_RIVAL)
+
+
+def _use_purified_zone(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Step into the 5F purified zone and let its script
+    heal the party (probe149). The zone - cells (10-11,
+    8-9) - heals on ENTRY (EVENT 263 via CheckAndSetEvent,
+    HealParty, fade to white, text); leaving resets the
+    event, so it is reusable within the climb. Verified by
+    party HP from RAM. The mid-climb arrival in the probe
+    had Blastoise at 16/142, restored to full here before
+    the floor's Channelers were touched."""
+    world = ex.world
+    t5 = world.map_id("PokemonTower5F")
+
+    def full():
+        st = emu.read_state()
+        return all(m.hp == m.max_hp for m in st.party)
+
+    if full():
+        return True
+    _walk_fighting(emu, ex, t5, TOWER_PURIFIED_ZONE[0],
+                   flee_wild=True)
+    for _ in range(60):
+        if full():
+            break
+        st = emu.read_state()
+        if st.in_dialog:
+            emu.close_dialog(max_presses=3)
+        emu.tick(30)
+    return full()
+
+
+def beat_ghost_marowak(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """6F: the Channelers, the Rare Candy chokepoint, and
+    the ghost MAROWAK (probe149). Assumes the player is on
+    PokemonTower6F; ends on 7F.
+
+    The world model's only south corridor on 6F runs
+    through (6,8) - the Rare Candy ball's cell. The grid
+    reads the cell as open floor (item balls are objects,
+    not tiles), so _walk_to wedges against the ball
+    forever; taking the candy (bag-verified) clears the
+    corridor. The Marowak event itself: stepping on
+    (10,16) runs "Be gone..." and starts the RESTLESS_SOUL
+    Lv30 battle. In RAM it reads as a WILD battle
+    (wIsInBattle == 1) - but fleeing counts as
+    not-defeated (the script shoves the player right and
+    re-arms), and thrown balls are dodged by script, so
+    the fight is driven with flee_wild OFF and the ball
+    counts are compared before/after. Winning sets EVENT
+    271 and opens the (9,16) stairs."""
+    world = ex.world
+    t6 = world.map_id("PokemonTower6F")
+    t7 = world.map_id("PokemonTower7F")
+    if emu.read_state().map_id not in (t6, t7):
+        return False
+    if not _tower_trainers(
+            emu, ex, t6,
+            [((12, 10), EV_TOWER_6F_TRAINERS[0]),
+             ((9, 5), EV_TOWER_6F_TRAINERS[1]),
+             ((16, 5), EV_TOWER_6F_TRAINERS[2])]):
+        return False
+    if not _event_flag(emu, EV_BEAT_GHOST_MAROWAK):
+        if _bag_count(emu, ITEM_RARE_CANDY) == 0:
+            ok, _ = _walk_fighting(emu, ex, t6, (6, 7),
+                                   flee_wild=True)
+            st = emu.read_state()
+            if not ok or (st.x, st.y) != (6, 7):
+                return False
+            _face_and_talk(emu, (6, 8))
+            _ride_text(emu, rounds=60)
+            if _bag_count(emu, ITEM_RARE_CANDY) != 1:
+                return False
+        balls0 = _bag_count(emu, ITEM_POKE_BALL)
+        gballs0 = _bag_count(emu, ITEM_GREAT_BALL)
+        ok, _ = _walk_fighting(emu, ex, t6,
+                               TOWER_MAROWAK_TRIGGER,
+                               flee_wild=True)
+        if not ok:
+            explore_nav(emu, ex, t6, TOWER_MAROWAK_TRIGGER,
+                        flee_wild=True)
+        fought = False
+        for _ in range(240):
+            st = emu.read_state()
+            if _event_flag(emu, EV_BEAT_GHOST_MAROWAK) \
+                    and not st.in_dialog and not st.in_battle:
+                emu.tick(90)
+                if not emu.read_state().in_dialog:
+                    break
+            if st.in_battle:
+                _drive_battle_typed(emu)   # never flee, ever
+                fought = True
+                continue
+            if st.in_dialog:
+                _press10(emu, "a")
+                emu.tick(30)
+                continue
+            emu.tick(30)
+        if not fought or not _event_flag(
+                emu, EV_BEAT_GHOST_MAROWAK):
+            return False
+        if _bag_count(emu, ITEM_POKE_BALL) != balls0 or \
+                _bag_count(emu, ITEM_GREAT_BALL) != gballs0:
+            return False
+    if emu.read_state().map_id == t7:
+        return True
+    return _tower_stairs(emu, ex, t6, (9, 16), t7)
+
+
+def rescue_mr_fuji(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """7F: the three Rockets and Mr. Fuji (probe149).
+    Assumes the player is on PokemonTower7F; ends in
+    MrFujisHouse with the POKE FLUTE in the bag. The
+    Rockets (#19 Zubat/Zubat/Golbat 25, #20 Koffing/
+    Drowzee 26, #21 Zubat/Rattata/Raticate/Zubat 23, all
+    sight 3) each walk off after their battle. Fuji (10,3)
+    is talked to once they are gone: his text sets EVENTS
+    1231 + 279 and his map script warps the player to his
+    house, where Fuji (3,1) hands over the flute (EVENT
+    296, bag-verified)."""
+    world = ex.world
+    t7 = world.map_id("PokemonTower7F")
+    house = world.map_id("MrFujisHouse")
+    if _bag_count(emu, ITEM_POKE_FLUTE) >= 1:
+        return True
+    if emu.read_state().map_id != t7:
+        return False
+    if not _tower_trainers(
+            emu, ex, t7,
+            [((9, 11), EV_TOWER_7F_ROCKETS[0]),
+             ((12, 9), EV_TOWER_7F_ROCKETS[1]),
+             ((9, 7), EV_TOWER_7F_ROCKETS[2])]):
+        return False
+    talked = False
+    for dx, dy in ((0, 1), (1, 0), (-1, 0), (0, -1)):
+        stance = (10 + dx, 3 + dy)
+        ok, _ = _walk_fighting(emu, ex, t7, stance,
+                               flee_wild=True)
+        st = emu.read_state()
+        if (st.x, st.y) != stance:
+            continue
+        _face_and_talk(emu, (10, 3))
+        talked = True
+        break
+    if not talked:
+        return False
+    for _ in range(300):
+        st = emu.read_state()
+        if st.map_id == house:
+            break
+        if st.in_battle:
+            _drive_battle_typed(emu, flee_wild=True)
+            continue
+        if st.in_dialog:
+            _press10(emu, "a")
+            emu.tick(30)
+            continue
+        emu.tick(30)
+    st = emu.read_state()
+    if st.map_id != house or not _event_flag(
+            emu, EV_RESCUED_MR_FUJI) or not _event_flag(
+            emu, EV_RESCUED_MR_FUJI_2):
+        return False
+    ok, _ = _walk_fighting(emu, ex, house, (3, 2),
+                           flee_wild=True)
+    st = emu.read_state()
+    if not ok or (st.x, st.y) != (3, 2):
+        return False
+    _face_and_talk(emu, (3, 1))
+    _ride_text(emu, rounds=120)
+    for _ in range(120):
+        if _bag_count(emu, ITEM_POKE_FLUTE) >= 1:
+            break
+        st = emu.read_state()
+        if st.in_dialog:
+            _press10(emu, "a")
+            emu.tick(30)
+        else:
+            emu.tick(30)
+    return _bag_count(emu, ITEM_POKE_FLUTE) >= 1 and \
+        _event_flag(emu, EV_GOT_POKE_FLUTE)
+
+
+def pokemon_tower(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Celadon -> Lavender -> the Pokemon Tower -> the
+    POKE FLUTE (probe149). Travel is per-map HOP rides
+    through the Underground Path (the Saffron gatehouses
+    are never entered; the Fresh Water is re-verified in
+    the bag at the end). Inside the Tower: the CEMETERY
+    grids serve _walk_to well (unlike the hideout's
+    FACILITY set), talk_fight_event's learned graph does
+    the trainer approaches, and wild Gastly/Cubone/Haunter
+    on 3F+ are FLED (flee_wild) - in the probe every wild
+    battle was escaped, none fought. The climb order on
+    5F is purified-zone heal FIRST, then the Channelers,
+    then heal again before 6F: the 3F/4F Channelers'
+    Night Shade / status attrition is the leg's real cost
+    (Blastoise arrived on 5F at 16/142 in the probe).
+    Ends back in Lavender Town, healed at the Pokecenter,
+    flute + Scope + Fresh Water all in the bag. Faithful
+    port of probe149's phases; NOT cold-replayed
+    end-to-end (the probe ran phase-by-phase from saved
+    intermediates)."""
+    world = ex.world
+    lav = world.map_id("LavenderTown")
+    lavpc = world.map_id("LavenderPokecenter")
+    t1 = world.map_id("PokemonTower1F")
+    t2 = world.map_id("PokemonTower2F")
+    t3 = world.map_id("PokemonTower3F")
+    t4 = world.map_id("PokemonTower4F")
+    t5 = world.map_id("PokemonTower5F")
+    t6 = world.map_id("PokemonTower6F")
+    house = world.map_id("MrFujisHouse")
+    if _bag_count(emu, ITEM_POKE_FLUTE) < 1:
+        st = emu.read_state()
+        if st.map_id not in (lav, t1, t2, t3, t4, t5, t6,
+                             house):
+            if not _hop_ride(emu, ex,
+                             ["Route7",
+                              "UndergroundPathRoute7",
+                              "UndergroundPathWestEast",
+                              "UndergroundPathRoute8",
+                              "Route8", "LavenderTown"]):
+                return False
+            if _bag_count(emu, ITEM_FRESH_WATER) < 1:
+                return False
+        if emu.read_state().map_id == lav:
+            if not _ride_battling(emu, ex, t1):
+                return False
+        if emu.read_state().map_id == t1:
+            if not _tower_stairs(emu, ex, t1, (18, 9), t2):
+                return False
+        if emu.read_state().map_id == t2:
+            if not beat_tower_rival(emu, ex):
+                return False
+            if not _tower_stairs(emu, ex, t2, (3, 9), t3):
+                return False
+        if emu.read_state().map_id == t3:
+            if not _tower_trainers(
+                    emu, ex, t3,
+                    [((12, 3), EV_TOWER_3F_TRAINERS[0]),
+                     ((9, 8), EV_TOWER_3F_TRAINERS[1]),
+                     ((10, 13), EV_TOWER_3F_TRAINERS[2])]):
+                return False
+            if not _tower_stairs(emu, ex, t3, (18, 9), t4):
+                return False
+        if emu.read_state().map_id == t4:
+            if not _tower_trainers(
+                    emu, ex, t4,
+                    [((5, 10), EV_TOWER_4F_TRAINERS[0]),
+                     ((15, 7), EV_TOWER_4F_TRAINERS[1]),
+                     ((14, 12), EV_TOWER_4F_TRAINERS[2])]):
+                return False
+            if not _tower_stairs(emu, ex, t4, (3, 9), t5):
+                return False
+        if emu.read_state().map_id == t5:
+            if not _use_purified_zone(emu, ex):
+                return False
+            if not _tower_trainers(
+                    emu, ex, t5,
+                    [((17, 7), EV_TOWER_5F_TRAINERS[0]),
+                     ((14, 3), EV_TOWER_5F_TRAINERS[1]),
+                     ((6, 10), EV_TOWER_5F_TRAINERS[2]),
+                     ((9, 16), EV_TOWER_5F_TRAINERS[3])]):
+                return False
+            if not _use_purified_zone(emu, ex):
+                return False
+            if not _tower_stairs(emu, ex, t5, (18, 9), t6):
+                return False
+        if emu.read_state().map_id == t6:
+            if not beat_ghost_marowak(emu, ex):
+                return False
+        if not rescue_mr_fuji(emu, ex):
+            return False
+    # out of the house, heal in Lavender, final checks
+    if emu.read_state().map_id == house:
+        _walk_fighting(emu, ex, house, (3, 7), flee_wild=True)
+        for _ in range(10):
+            if emu.read_state().map_id == lav:
+                break
+            emu.press("down")
+            _explore_settle(emu)
+    if emu.read_state().map_id != lav:
+        return False
+    if not _ride_battling(emu, ex, lavpc):
+        return False
+    if not heal_at_pokecenter(emu, ex, lavpc):
+        return False
+    st = emu.read_state()
+    return _bag_count(emu, ITEM_POKE_FLUTE) >= 1 and \
+        _bag_count(emu, ITEM_SILPH_SCOPE) >= 1 and \
         _bag_count(emu, ITEM_FRESH_WATER) >= 1 and \
         all(m.hp == m.max_hp for m in st.party)
 

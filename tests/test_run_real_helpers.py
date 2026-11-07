@@ -283,5 +283,68 @@ class TestHideoutArrows(unittest.TestCase):
         self.assertIn((2, 12), b3f)
 
 
+class TestTowerConstants(unittest.TestCase):
+    """probe149's Tower event ids: computed with pokered's
+    own const macros (expressions included - `const_next
+    $F0 - 2` at line 67 shifts the block if skipped) and
+    anchored on 441/1663/1703 plus the empirical rival
+    diff, which flipped exactly bit 239."""
+
+    def test_event_ids(self):
+        self.assertEqual(rr.EV_TOWER_RIVAL, 239)
+        self.assertEqual(rr.EV_TOWER_3F_TRAINERS,
+                         (241, 242, 243))
+        self.assertEqual(rr.EV_TOWER_4F_TRAINERS,
+                         (249, 250, 251))
+        self.assertEqual(rr.EV_TOWER_5F_TRAINERS,
+                         (258, 259, 260, 261))
+        self.assertEqual(rr.EV_TOWER_PURIFIED_ZONE, 263)
+        self.assertEqual(rr.EV_TOWER_6F_TRAINERS,
+                         (265, 266, 267))
+        self.assertEqual(rr.EV_BEAT_GHOST_MAROWAK, 271)
+        self.assertEqual(rr.EV_TOWER_7F_ROCKETS,
+                         (273, 274, 275))
+        self.assertEqual(rr.EV_RESCUED_MR_FUJI_2, 279)
+        self.assertEqual(rr.EV_GOT_POKE_FLUTE, 296)
+        self.assertEqual(rr.EV_RESCUED_MR_FUJI, 1231)
+
+    def test_item_ids(self):
+        self.assertEqual(rr.ITEM_POKE_FLUTE, 0x49)
+        self.assertEqual(rr.ITEM_RARE_CANDY, 0x28)
+
+    def test_scripted_coords(self):
+        self.assertEqual(rr.TOWER_PURIFIED_ZONE,
+                         ((10, 8), (11, 8), (10, 9), (11, 9)))
+        self.assertEqual(rr.TOWER_MAROWAK_TRIGGER, (10, 16))
+        self.assertEqual(rr.TOWER_RIVAL_TRIGGER, (14, 6))
+
+
+class TestFleeWildDefault(unittest.TestCase):
+    """probe149: fleeing wilds is opt-in per call - every
+    pre-Tower battle path keeps the fight-through default,
+    and the Marowak's scripted battle (which reads as a
+    wild battle in RAM) depends on the default staying
+    off in beat_ghost_marowak."""
+
+    def test_defaults_off(self):
+        import inspect
+        self.assertEqual(
+            inspect.signature(
+                rr._drive_battle_typed).parameters[
+                    "flee_wild"].default, False)
+        self.assertEqual(
+            inspect.signature(
+                rr._walk_fighting).parameters[
+                    "flee_wild"].default, False)
+        self.assertEqual(
+            inspect.signature(
+                rr.explore_nav).parameters[
+                    "flee_wild"].default, False)
+        self.assertEqual(
+            inspect.signature(
+                rr.talk_fight_event).parameters[
+                    "flee_wild"].default, False)
+
+
 if __name__ == "__main__":
     unittest.main()

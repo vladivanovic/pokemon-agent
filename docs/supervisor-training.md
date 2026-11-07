@@ -824,3 +824,99 @@ Tests 97/97.
 sha256 df1ebb8ec263e707094123273d5dee464ce2f5c46e0863d31f62cad202d125c6.
 Save states stay out of git as ever; the chain head moves
 to the Orin by hand with its sha256.
+
+## 15. Pokemon Tower (2026-11-07, probe149): fleeing wilds, a miscounted event block, and the Poké Flute
+
+Travel first, because it is the discipline that keeps paying:
+Celadon -> Lavender went as six per-map hop rides through the
+Underground Path (Route 7 -> UP Route 7 -> WE path -> UP
+Route 8 -> Route 8 -> Lavender), the Fresh Water re-verified
+in the bag after every hop, Saffron never entered, money
+untouched (no battles at all on the road).
+
+The climb's new machinery is `flee_wild`, threaded through
+`_drive_battle_typed` / `_walk_fighting` / `explore_nav` /
+`talk_fight_event` with the default OFF everywhere. Wild
+battles are told from trainer battles by wIsInBattle
+(0xD057: 1 wild, 2 trainer); a wild battle is fled with
+`_run_away` (two attempts, then fight). In the probe every
+wild battle was escaped - 72 fled on 5F alone, where the
+learned-graph approaches step a long time in Gastly grass -
+and none had to be fought. Gen 1 type trivia the typed
+ranker needed no help with, but worth writing down: Bite /
+Scratch / Cut / the 100-power Normal move are all NORMAL
+and bounce off Ghost; Water, Ember and Dig all hit
+Gastly's Ghost/Poison fine.
+
+Event ids bit us again, differently. The Tower block was
+first computed 2 too high (rival at 241) because
+event_constants.asm line 67 is `const_next $F0 - 2` - an
+EXPRESSION, which a plain-number parser silently skips.
+The beaten rival exposed it: his save's wEventFlags diff
+flips exactly one bit, 239. With expressions evaluated
+(and const_def's optional increment honoured), the whole
+file reproduces every anchor (441, 1663 EVENT_67F, 1703
+Giovanni) AND the empirical 239. Tower ids: rival 239;
+3F 241/242/243; 4F 249/250/251; 5F 258-261; purified zone
+263; 6F 265/266/267; Marowak 271; 7F Rockets 273/274/275;
+rescued-2 279; flute 296; rescued 1231 (the Fuji pair is
+split across the file - _2 sits in the Tower block, the
+main flag 900 lines later). NUM_EVENTS is $A00, so the
+flag array is 320 bytes; bits past it in a wide diff are
+toggleable-object flags (the rival hiding, etc.), not
+events.
+
+The fights, briefly. Rival (trigger (14,6)/(15,5); Rival2
+#4: Pidgeotto 25 / Growlithe 23 / Exeggcute 22 / Kadabra
+20 / Wartortle 25) paid Y1,625 and cut Blastoise to 87/139.
+The Channelers are the leg's real cost - thirteen of them,
+all single/double Gastly 22-24 or Haunter 22-23 - and
+their Night Shade / status attrition ground Blastoise from
+87 to 16/142 across 3F/4F (levelling it to 44 on the way).
+Sight lines do the scheduling: on 5F one talk-fight's
+approach set two further trainer flags, and on 6F all
+three flags fell in a single navigation sweep. The 5F
+purified zone (cells (10-11, 8-9), heal on entry, resets
+on leaving, reusable) is therefore used FIRST on arrival,
+again before the 6F stairs - the probe's original
+trainers-first order was revised mid-leg for exactly this.
+On 7F the three Rockets (Zubat/Zubat/Golbat 25; Koffing/
+Drowzee 26; Zubat/Rattata/Raticate/Zubat 23) dropped
+Blastoise to 15/148 but never threatened a blackout.
+
+Two traps documented for the next legs. (1) The ghost
+MAROWAK's scripted battle reads as a WILD battle in RAM
+(wIsInBattle == 1) - a flee-aware driver would run from
+it, and running counts as not-defeated (the script shoves
+the player right and re-arms the (10,16) trigger).
+`beat_ghost_marowak` drives it with flee_wild off and
+compares ball counts before/after (thrown balls are
+dodged by script; none were thrown). Lv30 Marowak took
+one Water Gun. (2) 6F's only southern corridor in the
+world model runs through (6,8) - the Rare Candy ball's
+cell. Item balls are objects, not tiles, so the grid
+reads the cell open and `_walk_to` wedges on the ball;
+taking the candy (bag-verified) clears the corridor. The
+model has no notion of object-occupied cells; that is the
+general gap.
+
+Fuji: talking to him on 7F sets 1231 + 279 and his script
+warps the player to MrFujisHouse, where Fuji (3,1) hands
+over the POKE FLUTE (bag count 1, event 296). Exit south,
+heal in Lavender.
+
+Chain: probe149/flute.state - Lavender Town, party healed
+(Blastoise Lv46, Arcanine Lv27, Diglett Lv22, NidoranM
+Lv3, Voltorb Lv16 Flash, Oddish Lv23 Cut), money Y25,009,
+bag: POKE FLUTE, SILPH SCOPE, LIFT KEY, RARE CANDY, HP Up,
+TM02 + TM21 + TM24 (all unspent), 8 Poke Balls, 4 Great
+Balls, 4 Super Potions, Fresh Water x1 (unspent). Dex 14.
+Ports: `pokemon_tower` + `beat_tower_rival` +
+`beat_ghost_marowak` + `rescue_mr_fuji` - and for once the
+port is better than faithful: it was cold-replayed
+end-to-end from probe148/scope.state in 345 s and reached
+the identical end state (same money; Arcanine Lv28 rather
+than 27 on battle RNG). Tests 101/101.
+sha256 629b3a4f26cfacef8a9cc4bc5ca4126b9408a5ead2d99e150a2c3b57c97f58bd.
+Save states stay out of git as ever; the chain head moves
+to the Orin by hand with its sha256.
