@@ -4605,6 +4605,1586 @@ def pokemon_tower(emu: PyBoyEmulator, ex: Executor) -> bool:
         all(m.hp == m.max_hp for m in st.party)
 
 
+
+
+# ------------------------------------------------------------------
+# Saffron gates + Silph Co. (probes 150/151). The gates were
+# opened in probe150 (Fresh Water to the Route 8 guard), TM29
+# came from Mr. Psychic, and the Card Key circuit, the rival,
+# Lapras, Giovanni and the Master Ball were finished in
+# probe151 after a two-lead grind. Three pieces of machinery
+# generalise beyond this leg and are ported with it:
+#   * _silph_dfs: a MODEL-FREE single-step DFS navigator for
+#     FACILITY interiors. explore_nav's learned graph cannot
+#     cross Silph's pad/door-split components and its block
+#     grid lies about half-block features; the DFS probes
+#     every step against the real game (the only oracle),
+#     records empirical edges, A-presses card-key doors when
+#     a step into a door block fails, and fences warp cells.
+#   * the elevator cab ride (panel menu steered by
+#     wListScrollOffset + wCurrentMenuItem).
+#   * the route-grind discipline (lead-and-solo, HP/PP gate,
+#     heal anchors, hand-crossed gatehouses and waypoint
+#     chains where journey rides strand).
+ITEM_CARD_KEY = 0x30
+ITEM_MASTER_BALL = 0x01
+ITEM_TM29 = 0xE5                # TM ids are 0xC9 + (n - 1)
+ITEM_ANTIDOTE = 0x0B
+ADDR_STATUS_FLAGS1 = 0xD728     # bit 6: gave the guards a drink
+ADDR_STATUS_FLAGS4 = 0xD72E     # bit 0: BIT_GOT_LAPRAS
+EV_TM29 = 944
+EV_SILPH_RIVAL = 1856
+EV_GOT_MASTER_BALL = 1933
+EV_SILPH_GIOVANNI = 1935
+EV_SILPH_11F_ROCKET_WEST = 1924
+SPECIES_LAPRAS = 0x13
+SILPH_BLASTOISE = 28            # internal species ids
+SILPH_ARCANINE = 20
+# Silph trainer events / object cells by FLOOR NUMBER
+# (probe151lib; event ids anchored on 1826/1856/1935).
+SILPH_EV = {
+    2: (1778, 1779, 1780, 1781),
+    3: (1794, 1795),
+    4: (1810, 1811, 1812),
+    5: (1826, 1827, 1828, 1829),
+    6: (1846, 1847, 1848),
+    7: (1861, 1862, 1863, 1864),
+    8: (1874, 1875, 1876),
+    9: (1890, 1891, 1892),
+    10: (1905, 1906),
+    11: (1924, 1925),
+}
+SILPH_XY = {
+    2: ((5, 12), (24, 13), (16, 11), (24, 7)),
+    3: ((20, 7), (7, 9)),
+    4: ((9, 14), (14, 6), (26, 10)),
+    5: ((8, 16), (8, 3), (18, 10), (28, 4)),
+    6: ((17, 3), (7, 8), (14, 15)),
+    7: ((13, 1), (2, 13), (20, 2), (19, 14)),
+    8: ((19, 2), (10, 2), (12, 15)),
+    9: ((2, 4), (21, 13), (13, 16)),
+    10: ((1, 9), (10, 2)),
+    11: ((3, 16), (15, 9)),
+}
+# Card-key door blocks by floor (tile top-lefts, from the
+# .GateCoordinates in each floor's pokered script; 11F's
+# office door is the special block at (6, 12)).
+SILPH_GATES = {
+    2: ((4, 4), (4, 10)),
+    3: ((8, 8), (16, 8)),
+    4: ((4, 12), (12, 8)),
+    5: ((6, 4), (6, 12), (14, 10)),
+    6: ((4, 12),),
+    7: ((10, 6), (20, 4), (20, 12)),
+    8: ((6, 8),),
+    9: ((2, 8), (18, 4), (18, 10), (10, 12)),
+    10: ((10, 8),),
+    11: ((6, 12),),
+}
+SILPH_FLOOR_NAMES = {
+    1: "SilphCo1F", 2: "SilphCo2F", 3: "SilphCo3F",
+    4: "SilphCo4F", 5: "SilphCo5F", 6: "SilphCo6F",
+    7: "SilphCo7F", 8: "SilphCo8F", 9: "SilphCo9F",
+    10: "SilphCo10F", 11: "SilphCo11F",
+}
+SILPH_FLOOR_NUM = {name: n for n, name in
+                   SILPH_FLOOR_NAMES.items()}
+SILPH_ELEV_DOOR = {1: (20, 0), 2: (20, 0), 3: (20, 0),
+                   4: (20, 0), 5: (20, 0), 6: (18, 0),
+                   7: (18, 0), 8: (18, 0), 9: (18, 0),
+                   10: (12, 0), 11: (13, 0)}
+# Fences for the rival-floor circuits (warp cells + NPC
+# bodies), from probe150o/probe151r-t.
+SILPH_W9 = {(14, 0), (16, 0), (18, 0), (9, 3), (17, 15)}
+SILPH_D9 = {(18, 4), (18, 10), (10, 12), (2, 8)}
+SILPH_W3 = {(26, 0), (24, 0), (20, 0), (23, 11), (3, 3),
+            (3, 15), (27, 3), (3, 11), (11, 11), (27, 15),
+            (20, 7), (7, 9)}
+SILPH_W7 = {(16, 0), (22, 0), (18, 0), (5, 7), (5, 3),
+            (21, 15), (3, 7), (1, 5)}
+SILPH_W7B = SILPH_W7 | {(1, 9)}
+SILPH_DOOR11 = {(6, 12), (7, 12), (6, 13), (7, 13)}
+SILPH_W11 = {(9, 0), (13, 0), (5, 5), (3, 2), (7, 5),
+             (10, 5), (6, 9), (15, 9)}
+SILPH_W11B = SILPH_W11 | {(3, 16)}
+# Route-grind trainer tables (event, object cell), in the
+# order probe151 fought them. Route 12's Fisher5 (ev1160,
+# (6, 87)) is DELIBERATELY ABSENT: his west-shore pocket
+# is tile-sealed (one-way ledge in, no walk-out; Dig is
+# cave-only in Gen 1) - the probe lineage that beat him
+# was abandoned and he is skipped by design.
+GRIND_R8 = [(1073, (8, 5)), (1076, (26, 3)), (1077, (26, 4)),
+            (1078, (26, 5)), (1079, (26, 6)), (1075, (42, 6)),
+            (1080, (46, 13)), (1081, (51, 12))]
+GRIND_R10 = [(1110, (7, 54)), (1106, (3, 57)),
+             (1109, (3, 61)), (1107, (14, 64))]
+GRIND_R12N = [(1154, (14, 31)), (1155, (5, 39)),
+              (1158, (12, 40)), (1159, (9, 52))]
+GRIND_R12S = [(1157, (14, 76)), (1156, (11, 92))]
+GRIND_R13 = [(1173, (50, 5)), (1169, (49, 10)),
+             (1170, (48, 10)), (1175, (33, 6)),
+             (1176, (32, 6)), (1171, (27, 9)),
+             (1172, (23, 10)), (1174, (12, 4)),
+             (1177, (10, 7)), (1178, (7, 13))]
+GRIND_R14 = [(1186, (15, 6)), (1187, (12, 11)),
+             (1188, (14, 15)), (1185, (4, 4)),
+             (1194, (4, 31)), (1192, (4, 30)),
+             (1193, (15, 30)), (1191, (5, 39)),
+             (1190, (6, 49)), (1189, (15, 31))]
+# Route 12 pier waypoint chain (the executor's planner
+# stalls on the ~85-cell pier; hop the through-cells).
+PIER_WAYPOINTS_S = [(10, 25), (14, 28), (11, 30), (10, 45),
+                    (10, 61), (13, 73), (14, 78), (5, 80),
+                    (11, 85), (13, 95), (11, 106)]
+PIER_WAYPOINTS_N = [(13, 95), (11, 85), (14, 78), (13, 73),
+                    (10, 61), (10, 45), (11, 30), (14, 28),
+                    (10, 25)]
+
+
+class _SilphWhiteout(Exception):
+    """A battle was lost during a Silph/route beat: the
+    party whiteouted (money halved, map changed to the
+    respawn town). Callers treat it as a failed beat."""
+
+
+_SILPH_WALK = None
+
+
+def _silph_walkability():
+    global _SILPH_WALK
+    if _SILPH_WALK is None:
+        import json as _json
+        path = (Path(__file__).parent / "data" / "maps"
+                / "pokered_walkability.json")
+        _SILPH_WALK = _json.loads(path.read_text())
+    return _SILPH_WALK
+
+
+def _silph_warps_of(map_id: int) -> set:
+    return {(wp["x"], wp["y"]) for wp in
+            _silph_walkability()[str(map_id)]["warps"]}
+
+
+def _silph_doors_of(floor_num: int) -> set:
+    cells = set()
+    for (bx, by) in SILPH_GATES.get(floor_num, ()):
+        for dx in (0, 1):
+            for dy in (0, 1):
+                cells.add((bx + dx, by + dy))
+    return cells
+
+
+def _silph_floor_map(emu: PyBoyEmulator, ex: Executor,
+                     floor_num: int) -> int:
+    return ex.world.map_id(SILPH_FLOOR_NAMES[floor_num])
+
+
+def _party_xp(emu: PyBoyEmulator, idx: int) -> int:
+    """EXP from the party struct (3-byte big-endian at +14
+    in each 44-byte mon, probe151lib)."""
+    from agent.state import ADDR_PARTY_MONS
+    base = ADDR_PARTY_MONS + 44 * idx + 14
+    mem = emu.pb.memory
+    return (mem[base] << 16) | (mem[base + 1] << 8) | \
+        mem[base + 2]
+
+
+def _silph_ride_scene(emu: PyBoyEmulator, done,
+                      rounds: int = 300) -> bool:
+    """Ride a scripted scene (dialog -> battle -> dialog)
+    until done(); battles are fought with the typed ranker,
+    never fled (probe150's ride_scene)."""
+    for _ in range(rounds):
+        if done():
+            emu.tick(60)
+            if done():
+                return True
+        st = emu.read_state()
+        if st.in_battle:
+            _drive_battle_typed(emu)
+            continue
+        if st.in_dialog:
+            _press10(emu, "a")
+            emu.tick(30)
+            continue
+        emu.tick(30)
+    return done()
+
+
+def _silph_settle(emu: PyBoyEmulator) -> None:
+    """The grind's battle settle: fight with the typed
+    ranker, close dialogs, NO bag maintenance (healing is
+    the nurse's / PC's job; the bag's Super Potions are
+    reserved for the rival top-off). A lost battle is a
+    whiteout - money halves and the map changes - and
+    raises _SilphWhiteout instead of letting a walk
+    continue on a respawned map (probe151b's lesson)."""
+    for _ in range(10):
+        st = emu.read_state()
+        if st.in_battle:
+            money0, map0 = st.money, st.map_id
+            _drive_battle_typed(emu)
+            st2 = emu.read_state()
+            if st2.map_id != map0 or st2.money < money0:
+                raise _SilphWhiteout(
+                    f"whiteout on map {map0}: money "
+                    f"{money0}->{st2.money}")
+            if all(m.hp == 0 for m in st2.party):
+                raise _SilphWhiteout("blackout: party down")
+            continue
+        if st.in_dialog:
+            emu.close_dialog(max_presses=3)
+            continue
+        break
+
+
+_SILPH_DIRS = {"up": (0, -1), "down": (0, 1),
+               "left": (-1, 0), "right": (1, 0)}
+_SILPH_REV = {"up": "down", "down": "up",
+              "left": "right", "right": "left"}
+
+
+def _silph_dfs(emu: PyBoyEmulator, map_id: int, fences,
+               targets, stop_pred=None, doors=(),
+               step_cap: int = 9000):
+    """Model-free single-step DFS (silphlib, probes
+    150/151): probe every step against the real game,
+    record empirical edges, backtrack on recorded edges.
+    Warp cells and NPC bodies belong in `fences`; a step
+    that fails into a `doors` cell is retried after an
+    A-press (card-key doors open by facing them - using
+    the key from the bag is a decoy). Returns the target
+    cell reached, or None (also None when a probe step
+    warps unexpectedly). Battles met en route are fought
+    by _silph_settle; a whiteout raises _SilphWhiteout."""
+    def pos():
+        st = emu.read_state()
+        return (st.map_id, st.x, st.y)
+
+    def settle():
+        _silph_settle(emu)
+
+    edges = {}
+    start = pos()[1:]
+    visited = {start}
+    stack = [(start, iter(_SILPH_DIRS), None)]
+
+    def probe_step(cell, btn):
+        emu.press(btn)
+        _explore_settle(emu)
+        settle()
+        for _ in range(3):
+            emu.tick(25)
+            settle()
+        st = emu.read_state()
+        if st.map_id != map_id:
+            edges[(cell, btn)] = "warp"
+            return "warp"
+        land = (st.x, st.y)
+        if land == cell and (cell[0] + _SILPH_DIRS[btn][0],
+                             cell[1] + _SILPH_DIRS[btn][1]) \
+                in doors:
+            _press10(emu, "a")
+            emu.tick(60)
+            settle()
+            emu.press(btn)
+            _explore_settle(emu)
+            settle()
+            st = emu.read_state()
+            if st.map_id != map_id:
+                edges[(cell, btn)] = "warp"
+                return "warp"
+            land = (st.x, st.y)
+        edges[(cell, btn)] = None if land == cell else land
+        return edges[(cell, btn)]
+
+    steps = 0
+    while stack:
+        if steps > step_cap:
+            return None
+        cur = pos()[1:]
+        if stop_pred is not None and steps > 0 and \
+                stop_pred():
+            break
+        if cur in targets and steps > 0:
+            break
+        cell, it, entry = stack[-1]
+        if cur != cell:
+            if cur not in visited:
+                visited.add(cur)
+            stack = [(cur, iter(_SILPH_DIRS), None)]
+            continue
+        advanced = False
+        for btn in it:
+            if (cell, btn) in edges:
+                continue
+            dx, dy = _SILPH_DIRS[btn]
+            nb = (cell[0] + dx, cell[1] + dy)
+            if nb in fences:
+                edges[(cell, btn)] = None
+                continue
+            land = probe_step(cell, btn)
+            steps += 1
+            if land in (None, "warp"):
+                if land == "warp":
+                    return None
+                continue
+            if land not in visited:
+                visited.add(land)
+                stack.append((land, iter(_SILPH_DIRS), btn))
+                advanced = True
+                break
+            probe_step(land, _SILPH_REV[btn])
+        if not advanced:
+            stack.pop()
+            if stack and entry is not None:
+                probe_step(cell, _SILPH_REV[entry])
+    if stop_pred is not None and stop_pred():
+        return pos()[1:]
+    return pos()[1:] if pos()[1:] in targets else None
+
+
+def _silph_step(emu: PyBoyEmulator, btn: str):
+    emu.press(btn)
+    _explore_settle(emu)
+    _silph_settle(emu)
+    return emu.read_state()
+
+
+def _silph_step_onto(emu: PyBoyEmulator, tx: int, ty: int,
+                     stance) -> None:
+    dx, dy = tx - stance[0], ty - stance[1]
+    btn = {(0, 1): "down", (0, -1): "up", (1, 0): "right",
+           (-1, 0): "left"}[(dx, dy)]
+    _silph_step(emu, btn)
+
+
+def _silph_step_off(emu: PyBoyEmulator, map_id: int):
+    """Step off a warp cell we just landed on (any
+    direction that moves us within the same map)."""
+    for btn in ("up", "down", "left", "right"):
+        before = emu.read_state()
+        _silph_step(emu, btn)
+        st = emu.read_state()
+        if st.map_id == map_id and \
+                (st.x, st.y) != (before.x, before.y):
+            return (st.x, st.y)
+    return None
+
+
+def _silph_transit(emu: PyBoyEmulator, map_id: int,
+                   targets, floor_num=None,
+                   extra_fences=(), doors=None) -> bool:
+    """DFS to any of `targets` on the current component
+    (probe151lib's transit)."""
+    fences = _silph_warps_of(map_id) | set(extra_fences)
+    if doors is None:
+        doors = _silph_doors_of(floor_num) \
+            if floor_num is not None else ()
+    _silph_dfs(emu, map_id, fences, set(targets),
+               doors=doors)
+    st = emu.read_state()
+    return (st.x, st.y) in targets and st.map_id == map_id
+
+
+def _silph_elevator(emu: PyBoyEmulator, ex: Executor,
+                    floor_map: int) -> bool:
+    """Ride the Silph elevator from inside the cab to
+    floor_map, then step out (probe150's silph_elevator).
+    The panel is at (3, 0): stand at (3, 1), face up, and
+    steer the floor list by scroll + item."""
+    world = ex.world
+    elev = world.map_id("SilphCoElevator")
+    if emu.read_state().map_id != elev:
+        return False
+    mem = emu.pb.memory
+    for _ in range(24):
+        st = emu.read_state()
+        if (st.x, st.y) == (3, 1):
+            break
+        if st.x < 3:
+            _step(emu, ex, "right")
+        elif st.y > 1:
+            _step(emu, ex, "up")
+        elif st.y < 1:
+            _step(emu, ex, "down")
+        else:
+            _step(emu, ex, "left")
+    if (emu.read_state().x, emu.read_state().y) != (3, 1):
+        return False
+    emu.press("up")
+    emu.tick(15)
+    _press10(emu, "a")
+    emu.tick(90)
+    want = SILPH_FLOOR_NUM[world.map_name(floor_map)] - 1
+    getter = lambda: mem[ADDR_MENU_SCROLL] + \
+        mem[ADDR_MENU_ITEM]
+    if not _steer_menu(emu, getter, want, rounds=40):
+        return False
+    _press10(emu, "a")
+    emu.tick(240)
+    emu.wait_free(max_rounds=40, stable_needed=4)
+    for _ in range(24):
+        st = emu.read_state()
+        if (st.x, st.y) == (2, 1):
+            break
+        if st.x > 2:
+            _step(emu, ex, "left")
+        elif st.x < 2:
+            _step(emu, ex, "right")
+        elif st.y > 1:
+            _step(emu, ex, "up")
+        else:
+            _step(emu, ex, "down")
+    for _ in range(8):
+        if emu.read_state().map_id != elev:
+            break
+        _step(emu, ex, "down")
+        _explore_settle(emu)
+    return emu.read_state().map_id == floor_map
+
+
+def _silph_enter_cab(emu: PyBoyEmulator, ex: Executor,
+                     floor_map: int) -> bool:
+    world = ex.world
+    elev = world.map_id("SilphCoElevator")
+    if emu.read_state().map_id == elev:
+        return True
+    num = SILPH_FLOOR_NUM[world.map_name(floor_map)]
+    explore_nav(emu, ex, floor_map, SILPH_ELEV_DOOR[num])
+    for _ in range(10):
+        if emu.read_state().map_id == elev:
+            return True
+        emu.tick(30)
+    return emu.read_state().map_id == elev
+
+
+def _silph_cab_to(emu: PyBoyEmulator, ex: Executor,
+                  floor_map: int) -> bool:
+    """Elevator travel from the current floor's elevator
+    component (probe151lib's cab_to): DFS to the cab door
+    stance (transit crosses card-key doors), step in,
+    ride, and step off the arrival warp cell so later DFS
+    trees are not rooted on a live warp. From pad-only
+    components (7F west room, 3F island) the caller must
+    pad to an elevator component first - cab_to does NOT
+    cross pads."""
+    world = ex.world
+    cur = emu.read_state().map_id
+    if cur == floor_map:
+        return True
+    if cur == world.map_id("SilphCoElevator"):
+        return _silph_elevator(emu, ex, floor_map)
+    num = SILPH_FLOOR_NUM[world.map_name(cur)]
+    door = SILPH_ELEV_DOOR[num]
+    stance = (door[0], door[1] + 1)
+    st = emu.read_state()
+    if (st.x, st.y) != stance:
+        if not _silph_transit(emu, cur, {stance},
+                              floor_num=num):
+            if not _silph_enter_cab(emu, ex, cur):
+                return False
+            return _silph_elevator(emu, ex, floor_map)
+    _silph_step(emu, "up")
+    if emu.read_state().map_id != \
+            world.map_id("SilphCoElevator"):
+        return False
+    if not _silph_elevator(emu, ex, floor_map):
+        return False
+    num2 = SILPH_FLOOR_NUM[world.map_name(floor_map)]
+    st = emu.read_state()
+    if (st.x, st.y) == SILPH_ELEV_DOOR[num2]:
+        _silph_step(emu, "down")
+    return True
+
+
+def _silph_nurse_heal(emu: PyBoyEmulator, ex: Executor) \
+        -> bool:
+    """The 9F nurse (3, 14): a free full heal inside the
+    building (probe150/probe151lib). Caller must be on
+    9F; ends at the nurse stance."""
+    world = ex.world
+    s9 = world.map_id("SilphCo9F")
+    if emu.read_state().map_id != s9:
+        return False
+
+    def full():
+        st = emu.read_state()
+        return all(m.hp == m.max_hp for m in st.party)
+
+    if full():
+        return True
+    if not _silph_transit(emu, s9, {(3, 13), (3, 15),
+                                    (2, 14), (4, 14)},
+                          floor_num=9):
+        return False
+    _face_and_talk(emu, (3, 14))
+    _silph_ride_scene(emu, full, rounds=120)
+    return full()
+
+
+def _step_until_map(emu: PyBoyEmulator, btn: str,
+                    want_map: int, tries: int = 16) -> bool:
+    """Press a direction until the map changes (border
+    crossings and door warps on foot)."""
+    for _ in range(tries):
+        if emu.read_state().map_id == want_map:
+            return True
+        emu.press(btn)
+        _explore_settle(emu)
+        st = emu.read_state()
+        if st.in_dialog:
+            emu.close_dialog(max_presses=3)
+    return emu.read_state().map_id == want_map
+
+
+def _cross_r8_gate_west(emu: PyBoyEmulator,
+                        ex: Executor) -> bool:
+    """Cross the Route 8 gatehouse WESTBOUND by hand
+    (probe151r): journey rides strand ON the gatehouse
+    warp cell without firing it, and the warp tile is
+    the door's BOTTOM cell - (8, 10), not (8, 9), which
+    is a dead floor tile at the building front. Enter at
+    (8, 10), walk the corridor west on row 4, exit at
+    (1, 10), then off Route 8's west edge into Saffron."""
+    world = ex.world
+    r8 = world.map_id("Route8")
+    gate = world.map_id("Route8Gate")
+    saf = world.map_id("SaffronCity")
+    if emu.read_state().map_id != r8:
+        return False
+    ok, _ = _walk_fighting(emu, ex, r8, (9, 10),
+                           attempts=30)
+    st = emu.read_state()
+    if (st.x, st.y) != (9, 10):
+        return False
+    if not _step_until_map(emu, "left", gate):
+        return False
+    if not _step_until_map(emu, "left", r8):
+        return False
+    return _step_until_map(emu, "left", saf)
+
+
+def saffron_gates(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Lavender -> Saffron through the Route 8 gatehouse
+    (the guards take the Fresh Water; wStatusFlags1 bit 6
+    is the RAM proof) and TM29 Psychic from Mr. Psychic's
+    house (probe150's gate/saffron phases + probe151r's
+    hand-crossed gate). The Fresh Water itself is bought
+    in celadon_leg's vending beat. Idempotent: with the
+    bit set and TM29 held there is nothing to do."""
+    world = ex.world
+    saf = world.map_id("SaffronCity")
+    safpc = world.map_id("SaffronPokecenter")
+    psy = world.map_id("MrPsychicsHouse")
+    mem = emu.pb.memory
+    if not (mem[ADDR_STATUS_FLAGS1] & 0x40):
+        if _bag_count(emu, ITEM_FRESH_WATER) < 1:
+            return False
+        if emu.read_state().map_id != \
+                world.map_id("Route8"):
+            if not _hop_ride(emu, ex, ["Route8"]):
+                return False
+        if not _cross_r8_gate_west(emu, ex):
+            return False
+    if emu.read_state().map_id == saf:
+        if not _ride_battling(emu, ex, safpc):
+            return False
+        if not heal_at_pokecenter(emu, ex, safpc):
+            return False
+    if _bag_count(emu, ITEM_TM29) < 1:
+        if not _ride_battling(emu, ex, psy):
+            return False
+        # Mr. Psychic (5, 3): talk until the gift event
+        for dx, dy in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+            stance = (5 + dx, 3 + dy)
+            ok, _ = _walk_fighting(emu, ex, psy, stance)
+            st = emu.read_state()
+            if not ok or (st.x, st.y) != stance:
+                continue
+            _face_and_talk(emu, (5, 3))
+            if _silph_ride_scene(
+                    emu, lambda: _event_flag(emu, EV_TM29),
+                    rounds=120):
+                break
+    return bool(mem[ADDR_STATUS_FLAGS1] & 0x40) and \
+        _bag_count(emu, ITEM_TM29) >= 1
+
+
+def _mart_clerk_menu(emu: PyBoyEmulator, ex: Executor,
+                     mart: int) -> bool:
+    """Face the Saffron Mart clerk from (2, 5) and open
+    the BUY/SELL/QUIT menu (menuY 1; probe150i)."""
+    mem = emu.pb.memory
+    try:
+        ex._walk_to(mart, (2, 5))
+    except StuckError:
+        return False
+    _step(emu, ex, "left")          # stand (1, 5)
+    _press10(emu, "a")
+    emu.tick(60)
+    for _ in range(40):
+        if mem[ADDR_MENU_TOP_Y] == 1:
+            return True
+        _press10(emu, "a")
+        emu.tick(25)
+    return mem[ADDR_MENU_TOP_Y] == 1
+
+
+def _mart_sell_stack(emu: PyBoyEmulator, item_id: int) \
+        -> int:
+    """Sell the whole bag stack of item_id at the open
+    clerk menu; money delta is the ground truth
+    (probe150i's sell_stack)."""
+    mem = emu.pb.memory
+    idx = _bag_index(emu, item_id)
+    if idx is None:
+        return 0
+    qty = mem[ADDR_BAG_ITEMS + 2 * idx + 1]
+    money0 = emu.read_state().money
+    if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 1):
+        return 0
+    _press10(emu, "a")              # SELL -> list
+
+    def _menu_y4():
+        for _ in range(60):
+            if mem[ADDR_MENU_TOP_Y] == 4:
+                return True
+            emu.tick(20)
+        return mem[ADDR_MENU_TOP_Y] == 4
+
+    if not _menu_y4():
+        return 0
+    if not _steer_menu(
+            emu, lambda: mem[ADDR_MENU_SCROLL]
+            + mem[ADDR_MENU_ITEM], idx):
+        return 0
+    _press10(emu, "a")
+    emu.tick(60)
+    for _ in range(qty - 1):        # max the quantity out
+        _press10(emu, "up")
+        emu.tick(25)
+    for _ in range(40):
+        _press10(emu, "a")
+        emu.tick(25)
+        if emu.read_state().money != money0:
+            break
+    return emu.read_state().money - money0
+
+
+def _free_bag_space(emu: PyBoyEmulator, ex: Executor) \
+        -> bool:
+    """Gen 1's bag holds 20 item STACKS; the probe's
+    first Card Key pickup failed on the cap with the bag
+    at 20/20. Before the key, free space the way the
+    probe did (probe150i): sell the Nugget (¥5,000) and
+    the Antidote stack at Saffron Mart, ending at <= 19
+    stacks. Caller must be in Saffron City."""
+    world = ex.world
+    mart = world.map_id("SaffronMart")
+    mem = emu.pb.memory
+    if mem[ADDR_NUM_BAG_ITEMS] <= 19:
+        return True
+    if not _ride_battling(emu, ex, mart):
+        return False
+    for item in (ITEM_NUGGET, ITEM_ANTIDOTE):
+        if _bag_count(emu, item) < 1:
+            continue
+        if not _mart_clerk_menu(emu, ex, mart):
+            return False
+        _mart_sell_stack(emu, item)
+        for _ in range(12):
+            if mem[ADDR_MENU_TOP_Y] == 1:
+                break
+            _press10(emu, "b")
+            emu.tick(25)
+        if mem[ADDR_MENU_TOP_Y] == 1:
+            _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 2)
+            _press10(emu, "a")
+            emu.tick(40)
+        if mem[ADDR_NUM_BAG_ITEMS] <= 19:
+            break
+    # leave the mart (LAST_MAP exit mat, south)
+    gm = world.maps[mart]
+    _walk_fighting(emu, ex, mart,
+                   (gm.warps[0].x, gm.warps[0].y))
+    for _ in range(12):
+        if emu.read_state().map_id != mart:
+            break
+        emu.press("down")
+        _explore_settle(emu)
+    return mem[ADDR_NUM_BAG_ITEMS] <= 19 and \
+        emu.read_state().map_id != mart
+
+
+def silph_card_key(emu: PyBoyEmulator, ex: Executor) \
+        -> bool:
+    """The Card Key (5F, ball at (21, 16)) via the (9, 15)
+    pad bounce (probe150i's key7 route): 1F -> elevator
+    -> 5F -> stance (9, 14) -> step down onto the pad ->
+    9F landing -> step down/up back to (9, 15) on 5F ->
+    east along the south room to (20, 16) -> take the
+    ball. Bag space is freed FIRST if the bag is at the
+    20-stack cap (see _free_bag_space)."""
+    world = ex.world
+    s1 = world.map_id("SilphCo1F")
+    s5 = world.map_id("SilphCo5F")
+    s9 = world.map_id("SilphCo9F")
+    if _bag_count(emu, ITEM_CARD_KEY) >= 1:
+        return True
+    if emu.read_state().map_id not in (s1, s5, s9):
+        if not _free_bag_space(emu, ex):
+            return False
+        if not _ride_battling(emu, ex, s1):
+            return False
+    if emu.read_state().map_id == s1:
+        if not _silph_cab_to(emu, ex, s5):
+            return False
+    if emu.read_state().map_id == s5:
+        ok, _ = _walk_fighting(emu, ex, s5, (9, 14))
+        st = emu.read_state()
+        if not ok or (st.x, st.y) != (9, 14):
+            return False
+        _silph_step(emu, "down")            # pad -> 9F
+        if emu.read_state().map_id != s9:
+            return False
+        _silph_step(emu, "down")
+        _silph_step(emu, "up")
+        st = emu.read_state()
+        if st.map_id != s5 or (st.x, st.y) != (9, 15):
+            return False
+        _silph_step(emu, "down")            # (9, 16)
+        ok, _ = _walk_fighting(emu, ex, s5, (20, 16))
+        st = emu.read_state()
+        if (st.x, st.y) != (20, 16):
+            # the south room walk can stop a cell short
+            # against the Rocket's body; step east by hand
+            for _ in range(12):
+                if (emu.read_state().x,
+                        emu.read_state().y) == (20, 16):
+                    break
+                _silph_step(emu, "right")
+        if (emu.read_state().x, emu.read_state().y) != \
+                (20, 16):
+            return False
+        _face_and_talk(emu, (21, 16))
+        emu.wait_free(max_rounds=30, stable_needed=3)
+    return _bag_count(emu, ITEM_CARD_KEY) >= 1
+
+
+def _silph_floor_done(emu: PyBoyEmulator,
+                      floor_num: int) -> bool:
+    return all(_event_flag(emu, e)
+               for e in SILPH_EV[floor_num])
+
+
+def _silph_sweep_for(emu: PyBoyEmulator, map_id: int,
+                     floor_num: int, evs) -> list:
+    """One DFS pass over the current component, stopping
+    as soon as every event in `evs` is set (probe151lib's
+    sweep_for)."""
+    if all(_event_flag(emu, e) for e in evs):
+        return [True] * len(evs)
+    want = lambda: all(_event_flag(emu, e) for e in evs)
+    _silph_dfs(emu, map_id, _silph_warps_of(map_id), set(),
+               stop_pred=want,
+               doors=_silph_doors_of(floor_num))
+    return [_event_flag(emu, e) for e in evs]
+
+
+def _silph_sweep_floor(emu: PyBoyEmulator, ex: Executor,
+                       floor_num: int, evs=None,
+                       max_rounds: int = 3) -> bool:
+    """Sweep the current component of a floor until the
+    given trainer events are all set (default: the
+    floor's full table), with the probe's resilient
+    loop: a grinder faint (raised as _SilphWhiteout by
+    the settle when the battle is actually lost, or
+    detected from RAM when the battle was won by the
+    rest of the party) routes a nurse trip to 9F and
+    resumes the same floor."""
+    world = ex.world
+    fmap = _silph_floor_map(emu, ex, floor_num)
+    s9 = world.map_id("SilphCo9F")
+    if evs is None:
+        evs = SILPH_EV[floor_num]
+
+    def done():
+        return all(_event_flag(emu, e) for e in evs)
+
+    for _attempt in range(6):
+        try:
+            for _ in range(max_rounds):
+                if done():
+                    return True
+                before = [_event_flag(emu, e) for e in evs]
+                _silph_sweep_for(emu, fmap, floor_num, evs)
+                after = [_event_flag(emu, e) for e in evs]
+                if after == before:
+                    break
+        except _SilphWhiteout:
+            return False
+        if done():
+            return True
+        st = emu.read_state()
+        if not any(m.hp == 0 for m in st.party):
+            break
+        # someone fainted mid-sweep: nurse, then resume
+        if not _silph_cab_to(emu, ex, s9):
+            return False
+        if not _silph_nurse_heal(emu, ex):
+            return False
+        if not _silph_cab_to(emu, ex, fmap):
+            return False
+    return done()
+
+
+def _grind_fight(emu: PyBoyEmulator, ex: Executor,
+                 species: int, map_name: str, ev: int,
+                 cell) -> str:
+    """The route grind's per-trainer discipline
+    (probe151f-h2): skip if beaten; gate on the grinder
+    at >= 55% HP with > 10 damaging PP (else ask for a
+    heal); walk to the trainer (walk-ins trigger most
+    sights; fall back to adjacent stances + face-and-
+    talk); a lost battle raises _SilphWhiteout via the
+    money signature."""
+    if _event_flag(emu, ev):
+        return "done"
+    world = ex.world
+    idx = _party_index_of(emu, species)
+    if idx is None:
+        return "heal"
+    mon = emu.read_state().party[idx]
+    if mon.hp < 0.55 * mon.max_hp or \
+            _damaging_pp(emu, idx) <= 10:
+        return "heal"
+    mid = world.map_id(map_name)
+    money0 = emu.read_state().money
+    if emu.read_state().map_id != mid:
+        _ride_battling(emu, ex, mid)
+    if map_name == "Route12":
+        st = emu.read_state()
+        if st.y < 21 and cell[1] > 21:
+            _cross_gate12_south(emu, ex)
+        elif st.y >= 21 and cell[1] <= 21:
+            _cross_gate12_north(emu, ex)
+    _walk_fighting(emu, ex, mid, cell, attempts=8)
+    if not _event_flag(emu, ev):
+        nx, ny = cell
+        for dx, dy in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+            stance = (nx + dx, ny + dy)
+            _walk_fighting(emu, ex, mid, stance,
+                           attempts=8)
+            if _event_flag(emu, ev):
+                break
+            st = emu.read_state()
+            if st.map_id != mid or \
+                    abs(st.x - nx) + abs(st.y - ny) != 1:
+                continue
+            _face_and_talk(emu, cell)
+            for _ in range(40):
+                st = emu.read_state()
+                if st.in_battle:
+                    _drive_battle_typed(emu)
+                    continue
+                if st.in_dialog:
+                    emu.close_dialog(max_presses=3)
+                    continue
+                break
+            if _event_flag(emu, ev):
+                break
+    st = emu.read_state()
+    if not _event_flag(emu, ev):
+        if st.money < money0:
+            raise _SilphWhiteout(
+                f"whiteout vs ev{ev} on {map_name}")
+        return "heal"
+    return "done"
+
+
+def _grind_leg(emu: PyBoyEmulator, ex: Executor,
+               species: int, target_level: int,
+               pc_name: str, map_name: str,
+               trainers) -> bool:
+    """Fight a route's trainers in order until the
+    grinder reaches target_level, healing at pc_name
+    whenever the gate asks (probe151f-h2's leg)."""
+    world = ex.world
+    pc = world.map_id(pc_name)
+    for ev, cell in trainers:
+        idx = _party_index_of(emu, species)
+        if idx is not None and \
+                emu.read_state().party[idx].level >= \
+                target_level:
+            return True
+        res = _grind_fight(emu, ex, species, map_name,
+                           ev, cell)
+        if res == "heal":
+            if not _grind_heal(emu, ex, species, pc_name):
+                return False
+            res = _grind_fight(emu, ex, species, map_name,
+                               ev, cell)
+            if res != "done":
+                return False
+    idx = _party_index_of(emu, species)
+    return idx is not None and \
+        emu.read_state().party[idx].level >= target_level
+
+
+def _grind_heal(emu: PyBoyEmulator, ex: Executor,
+                species: int, pc_name: str) -> bool:
+    """Heal at a town PC from wherever the grind is,
+    crossing the Route 12 gatehouse north by hand when
+    south of it (probe151h2's heal_full), then re-lead
+    the grinder."""
+    world = ex.world
+    r12 = world.map_id("Route12")
+    st = emu.read_state()
+    if st.map_id == r12 and st.y >= 21:
+        _cross_gate12_north(emu, ex)
+    elif st.map_id in (world.map_id("Route13"),
+                       world.map_id("Route14")):
+        _ride_battling(emu, ex, r12)
+        st = emu.read_state()
+        if st.map_id == r12 and st.y >= 21:
+            _cross_gate12_north(emu, ex)
+    pc = world.map_id(pc_name)
+    if not _ride_battling(emu, ex, pc):
+        return False
+    if not heal_at_pokecenter(emu, ex, pc):
+        return False
+    return party_lead(emu, species)
+
+
+def _cross_gate12_south(emu: PyBoyEmulator,
+                        ex: Executor) -> bool:
+    """Route12Gate1F is a straight x4-5 corridor that
+    journey rides strand on: cross it on foot
+    (probe151g). Caller is on Route 12 north (y < 21);
+    ends on the pier (y >= 21)."""
+    world = ex.world
+    r12 = world.map_id("Route12")
+    gate = world.map_id("Route12Gate1F")
+    _walk_fighting(emu, ex, r12, (10, 14), attempts=25)
+    emu.press("down")
+    _explore_settle(emu)
+    if emu.read_state().map_id != gate:
+        return False
+    for _ in range(14):
+        if emu.read_state().map_id == r12:
+            break
+        st = emu.read_state()
+        before = (st.x, st.y)
+        emu.press("down")
+        _explore_settle(emu)
+        st = emu.read_state()
+        if (st.x, st.y) == before and st.map_id == gate:
+            emu.press("left" if before[0] >= 5 else "right")
+            _explore_settle(emu)
+    st = emu.read_state()
+    return st.map_id == r12 and st.y >= 21
+
+
+def _cross_gate12_north(emu: PyBoyEmulator,
+                        ex: Executor) -> bool:
+    """Northbound gate cross (probe151h2): from the pier,
+    walk to the gate's south doors and up the corridor.
+    Fisher4's beaten body seals the (9, 52) dock cell:
+    if the walk starts west of it, detour via the (5, 49)
+    shelf first (the block grid lies about these
+    half-block dock tiles)."""
+    world = ex.world
+    r12 = world.map_id("Route12")
+    gate = world.map_id("Route12Gate1F")
+    st = emu.read_state()
+    if st.map_id != r12 or st.y < 21:
+        return False
+    if st.x < 10:
+        _walk_fighting(emu, ex, r12, (5, 49), attempts=25)
+    _walk_fighting(emu, ex, r12, (10, 22), attempts=25)
+    emu.press("up")
+    _explore_settle(emu)
+    st = emu.read_state()
+    if st.map_id != gate or (st.x, st.y) != (4, 6):
+        return False
+    for _ in range(12):
+        emu.press("up")
+        _explore_settle(emu)
+        st = emu.read_state()
+        if st.in_dialog:
+            emu.close_dialog(max_presses=3)
+        if st.map_id == r12 and st.y <= 16:
+            return True
+    st = emu.read_state()
+    return st.map_id == r12 and st.y <= 16
+
+
+def _pier_walk(emu: PyBoyEmulator, ex: Executor,
+               waypoints) -> bool:
+    """Hop the Route 12 pier waypoint chain (the
+    executor's planner stalls on the ~85-cell walk; each
+    hop is short enough to inch through)."""
+    world = ex.world
+    r12 = world.map_id("Route12")
+    for wp in waypoints:
+        _walk_fighting(emu, ex, r12, wp, attempts=30)
+        st = emu.read_state()
+        if (st.x, st.y) != wp:
+            return False
+    return True
+
+
+def _wake_snorlax(emu: PyBoyEmulator, ex: Executor) \
+        -> bool:
+    """Route 12's Snorlax blocks the only path south at
+    (10, 62). Wake it with the Poke Flute from the bag
+    (the probe's menu idiom: START -> ITEM -> USE) and
+    beat it - no ball is thrown. Passage is verified by
+    walking through its cell to (10, 65) (probe151g)."""
+    world = ex.world
+    r12 = world.map_id("Route12")
+    if emu.read_state().map_id != r12:
+        _ride_battling(emu, ex, r12)
+    st = emu.read_state()
+    if st.y < 21:
+        if not _cross_gate12_south(emu, ex):
+            return False
+    ok, _ = _walk_fighting(emu, ex, r12, (10, 61),
+                           attempts=25)
+    st = emu.read_state()
+    if (st.x, st.y) != (10, 61):
+        return False
+    emu.press("down")       # face Snorlax (turn only)
+    _explore_settle(emu)
+    mem = emu.pb.memory
+    bag_idx = _bag_index(emu, ITEM_POKE_FLUTE)
+    if bag_idx is None:
+        return False
+    _press10(emu, "start")
+    if not _wait_menu_y(emu, 2):
+        return False
+    if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM],
+                       2):
+        return False
+    _press10(emu, "a")              # ITEM
+    if not _wait_menu_y(emu, 4):
+        return False
+    if not _steer_menu(
+            emu, lambda: mem[ADDR_MENU_SCROLL]
+            + mem[ADDR_MENU_ITEM], bag_idx):
+        return False
+    _press10(emu, "a")
+    if not _wait_menu_y(emu, 11):
+        return False
+    _press10(emu, "a")              # USE
+    fought = False
+    for _ in range(80):
+        st = emu.read_state()
+        if st.in_battle:
+            _drive_battle_typed(emu)
+            fought = True
+            continue
+        if st.in_dialog:
+            emu.close_dialog(max_presses=3)
+            continue
+        break
+    if not fought:
+        return False
+    _walk_fighting(emu, ex, r12, (10, 65), attempts=25)
+    st = emu.read_state()
+    return (st.x, st.y) == (10, 65)
+
+
+def _silph_top_off(emu: PyBoyEmulator, idx: int,
+                   threshold: int) -> int:
+    """Field-menu Super Potion top-up for party[idx]
+    while below `threshold` HP (probe151lib's
+    top_off_super; the rival's pre-fight top-off - the
+    in-battle potion wrapper from the first Silph pass
+    wedged silently and is NOT resurrected)."""
+    used = 0
+    while True:
+        st = emu.read_state()
+        mon = st.party[idx]
+        if mon.hp == 0 or mon.hp >= min(threshold,
+                                        mon.max_hp):
+            break
+        if _bag_count(emu, ITEM_SUPER_POTION) == 0:
+            break
+        if not _use_bag_item_on_mon(emu,
+                                    ITEM_SUPER_POTION, idx):
+            break
+        used += 1
+        emu.tick(90)
+        _close_menus(emu)
+        emu.wait_free(max_rounds=8, stable_needed=2)
+    return used
+
+
+def silph_grind(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Vlad's chosen grind (probe151 phases A-C): raise
+    BOTH leads lead-and-solo (Gen 1 switch-training pays
+    nothing to a fainted participant and splits XP, so
+    the grinder leads every fight it takes XP from).
+    Blastoise -> ~52 inside Silph (the building's own
+    trainers pay the best XP + money; the 9F nurse is a
+    free in-building heal), then Arcanine -> ~38
+    finishing Silph's 4F/11F-east and walking the
+    Lavender-side route pools (R8, R10, R12 with the
+    Snorlax wake, R13, R14). Ends healed at Lavender PC
+    with Arcanine still in front... caller re-leads.
+    NOT done: Route 6 / Route 11 (untapped reserves -
+    the westward gate chain stranded repeatedly) and
+    R12's Fisher5 (see GRIND_R12S note)."""
+    world = ex.world
+    s1 = world.map_id("SilphCo1F")
+    s9 = world.map_id("SilphCo9F")
+    lavpc = world.map_id("LavenderPokecenter")
+
+    def level_of(species):
+        idx = _party_index_of(emu, species)
+        if idx is None:
+            return 0
+        return emu.read_state().party[idx].level
+
+    if emu.read_state().map_id not in (
+            s1, *[world.map_id(n) for n in
+                  SILPH_FLOOR_NAMES.values()]):
+        if not _ride_battling(emu, ex, s1):
+            return False
+    # ---- Blastoise inside Silph ----
+    if not party_lead(emu, SILPH_BLASTOISE):
+        return False
+    for floor_num in (3, 2, 6, 8, 7, 10):
+        if level_of(SILPH_BLASTOISE) >= 52:
+            break
+        fmap = _silph_floor_map(emu, ex, floor_num)
+        if emu.read_state().map_id != fmap:
+            if not _silph_cab_to(emu, ex, fmap):
+                return False
+        evs = SILPH_EV[floor_num]
+        if floor_num == 7:
+            # the west-block trainer (2, 13) is pad-only
+            # and the rival's room is off-limits pre-grind;
+            # the cab-component three are the grind's 7F
+            evs = (1861, 1863, 1864)
+        _silph_sweep_floor(emu, ex, floor_num, evs)
+    if level_of(SILPH_BLASTOISE) < 52:
+        return False
+    # ---- Arcanine: Silph leftovers, then routes ----
+    if not party_lead(emu, SILPH_ARCANINE):
+        return False
+    for floor_num, evs in ((4, SILPH_EV[4]),
+                           (11, (1925,))):
+        if level_of(SILPH_ARCANINE) >= 38:
+            break
+        fmap = _silph_floor_map(emu, ex, floor_num)
+        if emu.read_state().map_id != fmap:
+            if not _silph_cab_to(emu, ex, fmap):
+                return False
+        _silph_sweep_floor(emu, ex, floor_num, evs)
+    if level_of(SILPH_ARCANINE) < 38:
+        # out of the building, heal, and walk the routes
+        if not _silph_cab_to(emu, ex, s1):
+            return False
+        _walk_fighting(emu, ex, s1, (10, 16))
+        for _ in range(6):
+            if emu.read_state().map_id == \
+                    world.map_id("SaffronCity"):
+                break
+            emu.press("down")
+            _explore_settle(emu)
+        if not _grind_heal(emu, ex, SILPH_ARCANINE,
+                           "LavenderPokecenter"):
+            return False
+        legs = [("Route8", GRIND_R8), ("Route10", GRIND_R10),
+                ("Route12", GRIND_R12N)]
+        for map_name, trainers in legs:
+            if level_of(SILPH_ARCANINE) >= 38:
+                break
+            if not _grind_leg(emu, ex, SILPH_ARCANINE, 38,
+                              "LavenderPokecenter", map_name,
+                              trainers):
+                return False
+        if level_of(SILPH_ARCANINE) < 38:
+            if not _wake_snorlax(emu, ex):
+                return False
+            r12 = world.map_id("Route12")
+            if not _pier_walk(emu, ex, PIER_WAYPOINTS_S):
+                return False
+            if not _grind_leg(emu, ex, SILPH_ARCANINE, 38,
+                              "LavenderPokecenter", "Route12",
+                              GRIND_R12S):
+                return False
+        if level_of(SILPH_ARCANINE) < 38:
+            # R12 south end -> R13 (a SOUTH connection,
+            # offset -20: step off the pier's bottom edge)
+            r13 = world.map_id("Route13")
+            st = emu.read_state()
+            if st.map_id == world.map_id("Route12"):
+                if (st.x, st.y) != (11, 106):
+                    if not _pier_walk(
+                            emu, ex,
+                            [(11, 106)] if st.y < 100 else
+                            [(13, 95), (11, 106)]):
+                        return False
+                if not _step_until_map(emu, "down", r13):
+                    return False
+            if not _grind_leg(emu, ex, SILPH_ARCANINE, 38,
+                              "LavenderPokecenter", "Route13",
+                              GRIND_R13):
+                return False
+        if level_of(SILPH_ARCANINE) < 38:
+            # R13 -> R14 is a WEST connection at row 10
+            r14 = world.map_id("Route14")
+            r13 = world.map_id("Route13")
+            st = emu.read_state()
+            if st.map_id == r13:
+                _walk_fighting(emu, ex, r13, (1, 10),
+                               attempts=30)
+                if not _step_until_map(emu, "left", r14):
+                    return False
+            if not _grind_leg(emu, ex, SILPH_ARCANINE, 38,
+                              "LavenderPokecenter", "Route14",
+                              GRIND_R14):
+                return False
+    if not _grind_heal(emu, ex, SILPH_ARCANINE,
+                       "LavenderPokecenter"):
+        return False
+    return level_of(SILPH_BLASTOISE) >= 52 and \
+        level_of(SILPH_ARCANINE) >= 38
+
+
+def silph_rival(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """The 7F rival (event 1856), third attempt at the
+    ground-up levels (probe151r): nurse to 100% on 9F,
+    the far-side circuit (doors (18, 4)/(18, 10)/(10, 12)
+    -> closet pad (9, 3) -> 3F island -> pad (11, 11) ->
+    7F west room), a FIELD-MENU Super Potion top-off
+    only if the lead was chipped on the way in, then the
+    trigger cells (3, 2)/(3, 3) with the stock typed
+    driver. The first pass lost twice from ~2/3-HP
+    starts at Lv48/27; at 52/38 Blastoise soloed the
+    team and fainted on the ace, Arcanine closed it
+    out. A loss here whiteouts - _silph_settle raises
+    and the beat reports False (the mission's stop rule
+    is the caller's)."""
+    world = ex.world
+    s3 = world.map_id("SilphCo3F")
+    s7 = world.map_id("SilphCo7F")
+    s9 = world.map_id("SilphCo9F")
+    if _event_flag(emu, EV_SILPH_RIVAL):
+        return True
+    if not party_lead(emu, SILPH_BLASTOISE):
+        return False
+    try:
+        if emu.read_state().map_id != s9:
+            if not _silph_cab_to(emu, ex, s9):
+                return False
+        if not _silph_nurse_heal(emu, ex):
+            return False
+        st = emu.read_state()
+        if not all(m.hp == m.max_hp for m in st.party):
+            return False
+        stance = _silph_dfs(emu, s9, SILPH_W9,
+                            {(9, 2), (9, 4), (8, 3), (10, 3)},
+                            doors=SILPH_D9)
+        if stance is None:
+            return False
+        _silph_step_onto(emu, 9, 3, stance)
+        st = emu.read_state()
+        if st.map_id != s3 or (st.x, st.y) != (3, 11):
+            return False
+        if not _silph_step_off(emu, s3):
+            return False
+        stance = _silph_dfs(emu, s3, SILPH_W3,
+                            {(11, 10), (11, 12), (10, 11),
+                             (12, 11)},
+                            doors={(8, 8), (16, 8)})
+        if stance is None:
+            return False
+        _silph_step_onto(emu, 11, 11, stance)
+        st = emu.read_state()
+        if st.map_id != s7 or (st.x, st.y) != (5, 3):
+            return False
+        if not _silph_step_off(emu, s7):
+            return False
+        st = emu.read_state()
+        lead_mon = st.party[0]
+        if lead_mon.hp < lead_mon.max_hp:
+            _silph_top_off(emu, 0, lead_mon.max_hp)
+        _silph_dfs(emu, s7, SILPH_W7, {(3, 3), (3, 2)},
+                   stop_pred=lambda: _event_flag(
+                       emu, EV_SILPH_RIVAL))
+        if not _event_flag(emu, EV_SILPH_RIVAL):
+            _silph_ride_scene(
+                emu, lambda: _event_flag(emu,
+                                         EV_SILPH_RIVAL),
+                rounds=500)
+    except _SilphWhiteout:
+        return False
+    return _event_flag(emu, EV_SILPH_RIVAL)
+
+
+def silph_lapras(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """The Lapras gift from the 7F worker (1, 5)
+    (probe151s): the party is full, so it routes to the
+    box. GivePokemon stops at the NICKNAME screen -
+    not a dialog state, so dialog closers wedge on it;
+    START confirms an empty name, then the description
+    text runs and BIT_GOT_LAPRAS sets. Verified three
+    ways from RAM: the status bit, the dex count +1,
+    and Lapras (0x13) in the box. Nobody is deposited
+    or released."""
+    world = ex.world
+    s7 = world.map_id("SilphCo7F")
+    mem = emu.pb.memory
+    if mem[ADDR_STATUS_FLAGS4] & 0x01:
+        return True
+    if emu.read_state().map_id != s7:
+        return False
+    dex0 = _dex_owned_count(emu)
+    stance = _silph_dfs(emu, s7, SILPH_W7B,
+                        {(1, 4), (1, 6), (2, 5)})
+    if stance is None:
+        return False
+    _face_and_talk(emu, (1, 5))
+    _silph_ride_scene(
+        emu, lambda: _dex_owned_count(emu) > dex0
+        and SPECIES_LAPRAS in _box_species(emu),
+        rounds=200)
+    for _ in range(12):
+        if mem[ADDR_STATUS_FLAGS4] & 0x01:
+            break
+        emu.press("start")
+        _explore_settle(emu)
+        emu.close_dialog(max_presses=4)
+        _explore_settle(emu)
+    emu.wait_free(max_rounds=10, stable_needed=2)
+    return bool(mem[ADDR_STATUS_FLAGS4] & 0x01) and \
+        SPECIES_LAPRAS in _box_species(emu) and \
+        _dex_owned_count(emu) == dex0 + 1
+
+
+def silph_giovanni(emu: PyBoyEmulator, ex: Executor) \
+        -> bool:
+    """Giovanni on 11F (event 1935) via the pad chain
+    (probe151t): the middle room (Giovanni (6, 9), the
+    President (7, 5)) is entered ONLY through the
+    (6, 12) card-key door from the SW room - the east
+    column / south corridor route dead-ends. From the
+    7F west room: pad (5, 7) -> 11F (3, 2) -> west
+    column south (Rocket1 (3, 16), ev1924, guards the
+    room and is fought on sight) -> door -> Giovanni.
+    Blastoise should be nurse-healed first (it may have
+    fainted closing out the rival): route via the
+    (5, 3) pad to 3F and cab_to(9F) as the probe did."""
+    world = ex.world
+    s11 = world.map_id("SilphCo11F")
+    s7 = world.map_id("SilphCo7F")
+    if _event_flag(emu, EV_SILPH_GIOVANNI):
+        return True
+    if emu.read_state().map_id != s7:
+        return False
+    try:
+        stance = _silph_dfs(emu, s7, SILPH_W7B,
+                            {(5, 6), (5, 8), (4, 7), (6, 7)})
+        if stance is None:
+            return False
+        _silph_step_onto(emu, 5, 7, stance)
+        st = emu.read_state()
+        if st.map_id != s11 or (st.x, st.y) != (3, 2):
+            return False
+        if not _silph_step_off(emu, s11):
+            return False
+        _silph_dfs(emu, s11, SILPH_W11,
+                   {(6, 10), (6, 11), (5, 9), (7, 9)},
+                   stop_pred=lambda: _event_flag(
+                       emu, EV_SILPH_GIOVANNI),
+                   doors=SILPH_DOOR11)
+        if not _event_flag(emu, EV_SILPH_GIOVANNI):
+            _silph_ride_scene(
+                emu, lambda: _event_flag(
+                    emu, EV_SILPH_GIOVANNI),
+                rounds=300)
+    except _SilphWhiteout:
+        return False
+    return _event_flag(emu, EV_SILPH_GIOVANNI)
+
+
+def silph_master_ball(emu: PyBoyEmulator, ex: Executor) \
+        -> bool:
+    """The President -> the MASTER BALL (probe151t2/t3).
+    His row-5 nook is sealed by the desk row, the Beauty
+    (10, 5) and his own cell; the only stance is (6, 5),
+    entered from (5, 5) - a dummy 'inaccessible' warp
+    tile that can be stood on (the executor's planner
+    treats it as a terminal, so the approach is walked
+    by hand). The ball is the bag's 20th stack - nothing
+    else may be picked up first. Exit: the manual step
+    chain back through the door and the west column,
+    pad chain to 3F, cab to 1F, out the front doors,
+    heal at Saffron PC."""
+    world = ex.world
+    s1 = world.map_id("SilphCo1F")
+    s3 = world.map_id("SilphCo3F")
+    s7 = world.map_id("SilphCo7F")
+    s11 = world.map_id("SilphCo11F")
+    saf = world.map_id("SaffronCity")
+    safpc = world.map_id("SaffronPokecenter")
+    if _bag_count(emu, ITEM_MASTER_BALL) < 1:
+        if emu.read_state().map_id != s11:
+            return False
+        ok, _ = _walk_fighting(emu, ex, s11, (5, 10),
+                               attempts=20)
+        st = emu.read_state()
+        if (st.x, st.y) != (5, 10):
+            return False
+        for btn, want in (("up", (5, 9)), ("up", (5, 8)),
+                          ("up", (5, 7)), ("up", (5, 6)),
+                          ("up", (5, 5)),
+                          ("right", (6, 5))):
+            _silph_step(emu, btn)
+            st = emu.read_state()
+            if (st.x, st.y) != want:
+                return False
+        _face_and_talk(emu, (7, 5))
+        _silph_ride_scene(
+            emu, lambda: _event_flag(emu,
+                                     EV_GOT_MASTER_BALL),
+            rounds=200)
+        if _bag_count(emu, ITEM_MASTER_BALL) < 1 or \
+                not _event_flag(emu, EV_GOT_MASTER_BALL):
+            return False
+        # walk out of the office by hand
+        steps = ([("left", (5, 5))]
+                 + [("down", (5, y)) for y in range(6, 13)]
+                 + [("right", (6, 12)), ("right", (7, 12)),
+                    ("down", (7, 13)), ("down", (7, 14)),
+                    ("left", (6, 14)), ("left", (5, 14)),
+                    ("left", (4, 14)), ("left", (3, 14))]
+                 + [("up", (3, y)) for y in range(13, 2, -1)])
+        for btn, want in steps:
+            _silph_step(emu, btn)
+            st = emu.read_state()
+            if (st.x, st.y) != want:
+                return False
+        _silph_step_onto(emu, 3, 2, (3, 3))
+        st = emu.read_state()
+        if st.map_id != s7 or (st.x, st.y) != (5, 7):
+            return False
+        if not _silph_step_off(emu, s7):
+            return False
+    if emu.read_state().map_id == s7:
+        stance = _silph_dfs(emu, s7, SILPH_W7B,
+                            {(5, 2), (5, 4), (4, 3), (6, 3)})
+        if stance is None:
+            return False
+        _silph_step_onto(emu, 5, 3, stance)
+        st = emu.read_state()
+        if st.map_id != s3 or (st.x, st.y) != (11, 11):
+            return False
+        if not _silph_step_off(emu, s3):
+            return False
+    if emu.read_state().map_id == s3:
+        if not _silph_cab_to(emu, ex, s1):
+            return False
+    if emu.read_state().map_id == s1:
+        _walk_fighting(emu, ex, s1, (10, 16))
+        for _ in range(6):
+            if emu.read_state().map_id == saf:
+                break
+            emu.press("down")
+            _explore_settle(emu)
+    if emu.read_state().map_id != saf:
+        return False
+    if not _ride_battling(emu, ex, safpc):
+        return False
+    if not heal_at_pokecenter(emu, ex, safpc):
+        return False
+    st = emu.read_state()
+    return _bag_count(emu, ITEM_MASTER_BALL) >= 1 and \
+        all(m.hp == m.max_hp for m in st.party)
+
+
+def silph_co(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """The whole Silph Co. leg (probes 150/151): Card
+    Key, the two-lead grind, the rival, Lapras, Giovanni
+    and the Master Ball, ending healed in Saffron with
+    the building liberated. Assumes saffron_gates has
+    run (Fresh Water spent, TM29 held). Each beat is
+    gated on its RAM witness, so the leg resumes from
+    any intermediate state. Faithful port of the probe
+    flows; NOT cold-replayed end-to-end - the grind
+    alone ran ~2h of wall time across the probe scripts
+    with hand-built crossings, and the probes' saved
+    intermediates (probe151/*.state) are the proof
+    chain."""
+    world = ex.world
+    s1 = world.map_id("SilphCo1F")
+    if _bag_count(emu, ITEM_MASTER_BALL) >= 1:
+        return True
+    if not silph_card_key(emu, ex):
+        return False
+    if not silph_grind(emu, ex):
+        return False
+    # re-enter and heal at the 9F nurse before the rival
+    if emu.read_state().map_id != s1:
+        if not _ride_battling(emu, ex, s1):
+            return False
+    if not silph_rival(emu, ex):
+        return False
+    if not silph_lapras(emu, ex):
+        return False
+    # nurse run for Giovanni (Blastoise may be down):
+    # west room -> (5, 3) pad -> 3F -> cab -> 9F nurse,
+    # then back through the closet circuit to 7F west
+    s3 = world.map_id("SilphCo3F")
+    s7 = world.map_id("SilphCo7F")
+    s9 = world.map_id("SilphCo9F")
+    stance = _silph_dfs(emu, s7, SILPH_W7B,
+                        {(5, 2), (5, 4), (4, 3), (6, 3)})
+    if stance is None:
+        return False
+    _silph_step_onto(emu, 5, 3, stance)
+    st = emu.read_state()
+    if st.map_id != s3 or (st.x, st.y) != (11, 11):
+        return False
+    if not _silph_step_off(emu, s3):
+        return False
+    if not _silph_cab_to(emu, ex, s9):
+        return False
+    if not _silph_nurse_heal(emu, ex):
+        return False
+    # 9F -> closet circuit back to the 7F west room
+    stance = _silph_dfs(emu, s9, SILPH_W9,
+                        {(9, 2), (9, 4), (8, 3), (10, 3)},
+                        doors=SILPH_D9)
+    if stance is None:
+        return False
+    _silph_step_onto(emu, 9, 3, stance)
+    st = emu.read_state()
+    if st.map_id != s3 or (st.x, st.y) != (3, 11):
+        return False
+    if not _silph_step_off(emu, s3):
+        return False
+    stance = _silph_dfs(emu, s3, SILPH_W3,
+                        {(11, 10), (11, 12), (10, 11),
+                         (12, 11)},
+                        doors={(8, 8), (16, 8)})
+    if stance is None:
+        return False
+    _silph_step_onto(emu, 11, 11, stance)
+    st = emu.read_state()
+    if st.map_id != s7 or (st.x, st.y) != (5, 3):
+        return False
+    if not _silph_step_off(emu, s7):
+        return False
+    if not silph_giovanni(emu, ex):
+        return False
+    return silph_master_ball(emu, ex)
+
 MAP_MT_MOON_B2F = 61
 
 

@@ -319,6 +319,42 @@ class TestTowerConstants(unittest.TestCase):
         self.assertEqual(rr.TOWER_RIVAL_TRIGGER, (14, 6))
 
 
+class TestSilphConstants(unittest.TestCase):
+    """probes 150/151: Silph event ids from the same
+    anchored const parse (1856 rival / 1935 Giovanni /
+    1933 Master Ball flipped empirically in the probe
+    saves); item ids from pokered's item_constants;
+    door blocks from each floor's .GateCoordinates."""
+
+    def test_event_ids(self):
+        self.assertEqual(rr.EV_TM29, 944)
+        self.assertEqual(rr.EV_SILPH_RIVAL, 1856)
+        self.assertEqual(rr.EV_GOT_MASTER_BALL, 1933)
+        self.assertEqual(rr.EV_SILPH_GIOVANNI, 1935)
+        self.assertEqual(rr.EV_SILPH_11F_ROCKET_WEST, 1924)
+        self.assertEqual(rr.SILPH_EV[5],
+                         (1826, 1827, 1828, 1829))
+        self.assertEqual(rr.SILPH_EV[11], (1924, 1925))
+
+    def test_item_ids(self):
+        self.assertEqual(rr.ITEM_CARD_KEY, 0x30)
+        self.assertEqual(rr.ITEM_MASTER_BALL, 0x01)
+        self.assertEqual(rr.ITEM_TM29, 0xE5)
+        self.assertEqual(rr.SPECIES_LAPRAS, 0x13)
+
+    def test_scripted_coords(self):
+        self.assertEqual(rr.SILPH_GATES[11], ((6, 12),))
+        self.assertEqual(rr.SILPH_ELEV_DOOR[11], (13, 0))
+        self.assertEqual(rr.SILPH_ELEV_DOOR[1], (20, 0))
+        self.assertIn((6, 12), rr.SILPH_DOOR11)
+        # Fisher5 (ev1160) is skipped by design: his
+        # pocket is tile-sealed (see GRIND_R12S note)
+        evs = [ev for ev, _ in rr.GRIND_R12S]
+        self.assertEqual(evs, [1157, 1156])
+        self.assertEqual(rr.PIER_WAYPOINTS_S[-1], (11, 106))
+        self.assertEqual(rr.PIER_WAYPOINTS_N[0], (13, 95))
+
+
 class TestFleeWildDefault(unittest.TestCase):
     """probe149: fleeing wilds is opt-in per call - every
     pre-Tower battle path keeps the fight-through default,

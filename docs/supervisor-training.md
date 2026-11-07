@@ -920,3 +920,111 @@ than 27 on battle RNG). Tests 101/101.
 sha256 629b3a4f26cfacef8a9cc4bc5ca4126b9408a5ead2d99e150a2c3b57c97f58bd.
 Save states stay out of git as ever; the chain head moves
 to the Orin by hand with its sha256.
+
+## 16. Saffron + Silph Co. (2026-11-07, probes 150/151): the bag cap, a two-lead grind, and the office that wasn't where the map said
+
+Gates (probe150): the Route 8 guard takes the Fresh Water
+(wStatusFlags1 bit 6). Mr. Psychic hands over TM29 (event
+944). The journey rides strand ON gatehouse warp cells
+without firing them - the crossing has to be walked by
+hand, and the Route 8 gate's warp tile is the door's
+BOTTOM cell (8,10); (8,9) is a dead floor tile at the
+building front that eats a whole debugging cycle if you
+trust the warp table over the game.
+
+The Card Key (5F) taught the leg's first lesson: Gen 1's
+bag holds 20 item STACKS, and the pickup silently fails
+at the cap. The probe's bag was 20/20. Fix, as played:
+Saffron Mart, sell the Nugget (+¥5,000) and the Antidote
+stack (+¥200) - shop menus are stage-gated on menuY
+signatures (1 = BUY/SELL/QUIT, 4 = the list) and the
+money delta is the only trustworthy receipt. Then the
+key room via the (9,15) pad bounce to 9F and back.
+
+The rival (7F west room, trigger (3,2)/(3,3), event
+1856; Pidgeot 37 / Growlithe 38 / Exeggcute 35 /
+Alakazam 35 / Blastoise 40) stopped the first pass
+cold: two losses from Blastoise ~103/155 starts - the
+typed driver plays correctly, it just loses - and an
+in-battle potion-support wrapper wedged silently once
+(the field menu or nothing, ever since). Vlad chose
+the grind over the item-policy build and over skipping
+ahead.
+
+The grind (probe151): lead-and-solo, because Gen 1
+switch-training pays nothing to a fainted participant
+and splits XP - the grinder leads every fight it takes
+XP from. Blastoise 48 -> 52 on Silph's own trainers
+(finite, best XP + money density, and the 9F nurse is a
+free in-building heal); Arcanine 27 -> 38 was the real
+deficit and outgrew the building: 4F + 11F east, then
+the Lavender-side route pools - Route 8, Route 10,
+Route 12 (gate corridor crossed on foot; the Snorlax
+at (10,62) woken with the Poke Flute from the bag menu
+and beaten with no ball thrown), Route 13, and two
+Route 14 fights to close the last 2,639 XP. Lessons
+that cost real time: a whiteout is invisible to an
+all-zero-HP check (Gen 1 auto-heals at the respawn -
+detect it by the money/map signature after every
+battle); the executor's planner stalls on ~85-cell
+walks and on NPC bodies in chokepoints (the Route 12
+pier is a waypoint chain; Fisher4's beaten body seals
+his 1-wide dock cell; the (5,49) shelf is the detour);
+Route 12 <-> 13 is a SOUTH map connection (offset
+-20), Route 13 <-> 14 a WEST one at row 10, and the
+block grid lies about half-block dock tiles. Route 12's
+Fisher5 (ev1160) sits in a tile-sealed west-shore
+pocket - one-way ledge in, no walk-out, Dig is
+cave-only in Gen 1 - and is skipped by design; Route 6
+and Route 11 were never needed. Grind totals: no
+whiteouts after the detector was added (one before it,
+in a discarded lineage), money ¥37,484 -> ¥81,570.
+
+Third rival attempt: from the nurse at 100%, far-side
+circuit, nobody chipped, no top-off spent. Blastoise
+Lv52 soloed the team and fainted on the ace (+5,181
+XP); Arcanine Lv38 closed it at 81/130. Event 1856.
+
+Lapras: the 7F worker's gift routes to the box (party
+full; nobody deposited or released). GivePokemon stops
+at the NICKNAME screen, which is not a dialog state -
+dialog closers wedge on it and the player reads as
+glued to (2,5). START confirms an empty name; then
+BIT_GOT_LAPRAS sets. Verified three ways: the status
+bit, dex 14 -> 15, Lapras in the box.
+
+Giovanni (event 1935): the compiled office geography
+was wrong and the block grid nearly kept it wrong -
+the 11F middle room (Giovanni (6,9), President (7,5))
+is entered ONLY through the (6,12) card-key door from
+the SW room, via the (5,7) pad chain and the west
+column; the east column / south corridor route
+dead-ends against it. Rocket1 (3,16, ev1924) guards
+the SW room and is fought on sight. Blastoise took
+8 HP across both fights and levelled to 53. The
+President's only stance is (6,5), reached from (5,5) -
+a dummy "inaccessible" warp tile that can be stood on,
+which the executor's planner treats as a terminal, so
+the office is walked by hand in both directions. The
+Master Ball (event 1933, bag count 1) lands as the
+bag's 20th stack - the cap the leg started with.
+
+Chain: probe151/silph.state - Saffron City, healed
+(Blastoise Lv53, Arcanine Lv38, Diglett Lv22, NidoranM
+Lv3, Voltorb Lv16 Flash, Oddish Lv23 Cut), money
+¥89,189, bag 20 stacks incl. CARD KEY and MASTER BALL,
+Lapras Lv15 in the box, dex 15.
+sha256 6b33101c55c8ee2251b34ca09ab1cb4ad04a2d35e2bde280e504bba71067ca28.
+Ports: `saffron_gates` + `silph_co` with separable
+beats (`silph_card_key`, `silph_grind`, `silph_rival`,
+`silph_lapras`, `silph_giovanni`, `silph_master_ball`)
+and the general machinery - `_silph_dfs` (the
+model-free navigator that generalises the explore_nav
+story for FACILITY interiors), `_silph_cab_to` /
+`_silph_elevator`, the Mart sale, the gate/pier/border
+crossings. NOT cold-replayed end-to-end, unlike the
+Tower port: the grind alone ran ~2h of wall time
+across a dozen probe scripts with hand-built
+crossings, so the port is a faithful transcription
+and the probes' saved intermediates are the proof
+chain. Tests 104/104.
