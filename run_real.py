@@ -6781,6 +6781,371 @@ def beat_sabrina(emu: PyBoyEmulator, ex: Executor) -> bool:
 
 
 
+# ------------------------------------------------------------------
+# Fighting Dojo (probe153): the Saffron mini-leg. No badge
+# here - the prize is a one-of-two gift, and the choice is
+# a permanent save-line decision, so it is a PARAMETER
+# (this line's value: "hitmonlee", Vlad's pick 2026-11-08;
+# Hitmonchan's ball is never touched).
+#
+# The dojo (map 177, 10x12) is one open mat: four Black
+# Belts stand in two columns and the Karate King at the
+# top. Three script facts shape the port:
+#
+# * The King's post-battle script runs
+#   SetEventRange(EVENT_BEAT_KARATE_MASTER ..
+#   EVENT_BEAT_FIGHTING_DOJO_TRAINER_3) - beating him
+#   first would set all four belt flags unread. The
+#   belts are therefore fought FIRST and each flag
+#   verified individually (events 850-853), the King
+#   last (849).
+#
+# * The King is not a trainer-header entry: the map's
+#   default script engages him when the player stands on
+#   (4, 3), the cell left of his (5, 3). The port steps
+#   onto the trigger cell and rides the scene, with a
+#   talk from the same cell as fallback.
+#
+# * A gift ball's text runs DisplayPokedex BEFORE its
+#   Yes/No choice, and DisplayPokedex leaves the species
+#   in wCurPartySpecies ($CF91, pokered.sym). The port
+#   reads that byte after the talk and proceeds ONLY if
+#   it is the chosen species - the ball is identified
+#   from RAM before any commitment, not from its cell.
+#   The dex page itself waits on
+#   WaitForTextScrollButtonPress (A/B edges): the first
+#   probe's ride (START presses + close_dialog, which
+#   only fires while in_dialog) never dismissed it; raw
+#   A presses do. After YES, GivePokemon's nickname
+#   screen is cleared with START (default name), the
+#   Lapras pattern (probe151s).
+#
+# Walking in is a single column: entering from the city
+# lands on the (4, 11) door mat, and the straight walk
+# north up x=4 crosses every belt's sight line in turn
+# (BB4's row 7, BB2's row 6, BB3's row 5, BB1's row 4) -
+# the probe's "BB1" approach fought all four belts en
+# route, each flag flipping on its own row. The port
+# keeps the per-trainer loop anyway: it verifies flags
+# one by one and can resume mid-room after a blackout.
+# Blastoise took ZERO damage across all five fights
+# (OHKO sweep; it levelled 55 -> 56 on the belt XP).
+# ------------------------------------------------------------------
+
+MAP_FIGHTING_DOJO = 177
+EV_DEFEATED_FIGHTING_DOJO = 848
+EV_BEAT_KARATE_MASTER = 849
+EV_DOJO_TRAINERS = (850, 851, 852, 853)
+EV_GOT_HITMONLEE = 854
+EV_GOT_HITMONCHAN = 855
+SPECIES_HITMONLEE = 0x2B
+SPECIES_HITMONCHAN = 0x2C
+ADDR_CUR_PARTY_SPECIES = 0xCF91     # wCurPartySpecies
+DOJO_MASTER_CELL = (5, 3)
+DOJO_MASTER_TRIGGER = (4, 3)
+DOJO_MATS = frozenset({(4, 11), (5, 11)})
+# (cell, event, sight-line cells, talk stances) in
+# object order: BB1 (3,4) RIGHT sight 4 - Mankey /
+# Mankey / Primeape 31; BB2 (3,6) RIGHT sight 4 -
+# Machop / Machoke 32; BB3 (5,5) LEFT sight 3 -
+# Primeape 36; BB4 (5,7) LEFT sight 3 - Machop /
+# Mankey / Primeape 31.
+DOJO_BELTS = (
+    ((3, 4), 850, ((4, 4), (5, 4), (6, 4), (7, 4)),
+     ((2, 4), (4, 4), (3, 5))),
+    ((3, 6), 851, ((4, 6), (5, 6), (6, 6), (7, 6)),
+     ((2, 6), (4, 6), (3, 5), (3, 7))),
+    ((5, 5), 852, ((4, 5), (3, 5), (2, 5)),
+     ((4, 5), (6, 5), (5, 4), (5, 6))),
+    ((5, 7), 853, ((4, 7), (3, 7), (2, 7)),
+     ((4, 7), (6, 7), (5, 6), (5, 8))),
+)
+# choice -> (ball cell, talk stance, species, gift event)
+DOJO_GIFTS = {
+    "hitmonlee": ((4, 1), (4, 2), SPECIES_HITMONLEE,
+                  EV_GOT_HITMONLEE),
+    "hitmonchan": ((5, 1), (5, 2), SPECIES_HITMONCHAN,
+                   EV_GOT_HITMONCHAN),
+}
+DOJO_OBJECT_CELLS = frozenset(
+    [DOJO_MASTER_CELL] + [c for c, _, _, _ in DOJO_BELTS]
+    + [ball for ball, _, _, _ in DOJO_GIFTS.values()])
+
+
+def _dojo_ride_scene(emu: PyBoyEmulator,
+                     rounds: int = 400) -> bool:
+    """Resolve any pending dojo scene (trainer walk-up,
+    dialog, battle) until the overworld is quiet.
+    Returns True if a battle was fought."""
+    fought = False
+    for _ in range(rounds):
+        st = emu.read_state()
+        if st.in_battle:
+            _drive_battle_typed(emu)
+            _maintain_party(emu, ())
+            fought = True
+            continue
+        if st.in_dialog:
+            _press10(emu, "a")
+            emu.tick(20)
+            continue
+        if emu.pb.memory[ADDR_JOY_IGNORE] != 0:
+            emu.tick(20)
+            continue
+        emu.tick(30)
+        st = emu.read_state()
+        if not st.in_battle and not st.in_dialog and \
+                emu.pb.memory[ADDR_JOY_IGNORE] == 0:
+            return fought
+    return fought
+
+
+def _dojo_walk(emu: PyBoyEmulator, ex: Executor, target,
+               blocked_extra=frozenset()) -> bool:
+    """Tile-path walk inside the dojo with per-press RAM
+    verification; sight-triggered battles on the way are
+    driven as they come (the x=4 column crosses every
+    belt's sight line). Object cells and the exit mats
+    are permanent obstacles."""
+    world = ex.world
+    blocked = set(DOJO_OBJECT_CELLS) | set(DOJO_MATS) \
+        | set(blocked_extra)
+    blocked.discard(target)
+    dirs = {(0, -1): "up", (0, 1): "down",
+            (-1, 0): "left", (1, 0): "right"}
+    for _ in range(60):
+        st = emu.read_state()
+        if st.map_id != MAP_FIGHTING_DOJO:
+            return False
+        cur = (st.x, st.y)
+        if cur == target:
+            return True
+        path = world.tile_path(MAP_FIGHTING_DOJO, cur,
+                               target,
+                               blocked=frozenset(blocked))
+        if not path:
+            return False
+        for cell in path[1:]:
+            dx, dy = cell[0] - cur[0], cell[1] - cur[1]
+            if (dx, dy) not in dirs:
+                break
+            ok = False
+            for _try in range(6):
+                emu.press(dirs[(dx, dy)])
+                _explore_settle(emu)
+                st = emu.read_state()
+                if st.in_battle or st.in_dialog:
+                    _dojo_ride_scene(emu)
+                if (emu.read_state().x,
+                        emu.read_state().y) == cell:
+                    ok = True
+                    break
+                emu.tick(60)
+            if not ok:
+                break
+            cur = cell
+            _dojo_ride_scene(emu, rounds=6)
+    st = emu.read_state()
+    return st.map_id == MAP_FIGHTING_DOJO and \
+        (st.x, st.y) == target
+
+
+def _enter_fighting_dojo(emu: PyBoyEmulator,
+                         ex: Executor) -> bool:
+    """City -> dojo door (26, 3), entered from the
+    (26, 4) stance by stepping north (the gym door's
+    pattern, probe153b)."""
+    world = ex.world
+    city = world.map_id("SaffronCity")
+    if emu.read_state().map_id == MAP_FIGHTING_DOJO:
+        return True
+    if emu.read_state().map_id != city:
+        return False
+    if not _saffron_grid_walk(emu, ex, city, (26, 4)):
+        return False
+    for _ in range(8):
+        if emu.read_state().map_id == MAP_FIGHTING_DOJO:
+            return True
+        emu.press("up")
+        _explore_settle(emu)
+    return emu.read_state().map_id == MAP_FIGHTING_DOJO
+
+
+def _exit_fighting_dojo(emu: PyBoyEmulator,
+                        ex: Executor) -> bool:
+    """Dojo -> city: walk to (4, 10) and step south
+    over the door mat."""
+    world = ex.world
+    city = world.map_id("SaffronCity")
+    if emu.read_state().map_id == city:
+        return True
+    if not _dojo_walk(emu, ex, (4, 10)):
+        return False
+    for _ in range(10):
+        if emu.read_state().map_id != MAP_FIGHTING_DOJO:
+            break
+        emu.press("down")
+        _explore_settle(emu)
+    return emu.read_state().map_id == city
+
+
+def _dojo_fight(emu: PyBoyEmulator, ex: Executor, cell,
+                event_id: int, sight_cells,
+                stances) -> bool:
+    """One dojo trainer: step into the sight line (they
+    engage and walk up), else take a talk stance and
+    talk; verified by the trainer's own event flag."""
+    if _event_flag(emu, event_id):
+        return True
+    for t in sight_cells:
+        if _dojo_walk(emu, ex, t):
+            _dojo_ride_scene(emu)
+            if _event_flag(emu, event_id):
+                return True
+    for s in stances:
+        if not _dojo_walk(emu, ex, s):
+            continue
+        _dojo_ride_scene(emu)
+        if _event_flag(emu, event_id):
+            return True
+        _face_and_talk(emu, cell)
+        _dojo_ride_scene(emu)
+        if _event_flag(emu, event_id):
+            return True
+    return _event_flag(emu, event_id)
+
+
+def take_hitmon(emu: PyBoyEmulator, ex: Executor,
+                choice: str = "hitmonlee") -> bool:
+    """Take ONE gift ball in the dojo - this save line's
+    the HITMONLEE ball at (4, 1) (probe153e). The
+    species gate is the point: the talk's DisplayPokedex
+    leaves the ball's species in wCurPartySpecies, and
+    the function returns False WITHOUT confirming the
+    Yes/No if the byte is not the chosen species. After
+    YES, GivePokemon routes to the box (party full) and
+    the nickname screen is cleared with START (default
+    name). Verified three ways from RAM: the gift event
+    flag, the owned-dex count +1, and the species
+    physically in the box - with the party list and the
+    OTHER gift's flag checked unchanged/clear."""
+    ball, stance, species, event_id = DOJO_GIFTS[choice]
+    other = "hitmonchan" if choice == "hitmonlee" \
+        else "hitmonlee"
+    other_event = DOJO_GIFTS[other][3]
+    if _event_flag(emu, event_id):
+        return True
+    if _event_flag(emu, other_event):
+        return False     # the other gift was taken: over
+    if emu.read_state().map_id != MAP_FIGHTING_DOJO:
+        return False
+    dex0 = _dex_owned_count(emu)
+    party0 = [(m.species_id, m.level)
+              for m in emu.read_state().party]
+    if not _dojo_walk(emu, ex, stance):
+        return False
+    _face_and_talk(emu, ball)
+    emu.tick(90)
+    if emu.pb.memory[ADDR_CUR_PARTY_SPECIES] != species:
+        return False     # NOT the chosen ball: back away
+    # raw A: dismisses the dex page
+    # (WaitForTextScrollButtonPress), advances the text
+    # and confirms YES (cursor default 0); interleaved
+    # START clears the nickname screen.
+    for i in range(160):
+        if _event_flag(emu, event_id):
+            break
+        _raw(emu, "a", hold=5, settle=40)
+        if i % 4 == 3:
+            _raw(emu, "start", hold=5, settle=40)
+    emu.wait_free(max_rounds=10, stable_needed=3)
+    party1 = [(m.species_id, m.level)
+              for m in emu.read_state().party]
+    return _event_flag(emu, event_id) and \
+        not _event_flag(emu, other_event) and \
+        _dex_owned_count(emu) == dex0 + 1 and \
+        species in _box_species(emu) and \
+        party0 == party1
+
+
+def take_hitmonlee(emu: PyBoyEmulator,
+                   ex: Executor) -> bool:
+    """This save line's pick (Vlad, 2026-11-08)."""
+    return take_hitmon(emu, ex, "hitmonlee")
+
+
+def fighting_dojo(emu: PyBoyEmulator, ex: Executor,
+                  choice: str = "hitmonlee") -> bool:
+    """Clear the Fighting Dojo and take one gift
+    (probe153; this line: Hitmonlee).
+
+    Assumes the player is in Saffron City with Sabrina
+    beaten. Order: enter, the four Black Belts (flags
+    850-853 verified individually - the King's
+    post-battle SetEventRange would mask them), the
+    Karate King via his (4, 3) script trigger, then the
+    chosen ball only. Ends back in Saffron City with the
+    gift verified in the box. Blackout contingency (the
+    brief's, never needed by the probe): exit or respawn,
+    heal at the Saffron Pokecenter, re-enter and resume
+    ONCE - flags persist; a second failure returns
+    False.
+
+    FIDELITY: faithful port of the probe152-style probe
+    flow (probes 153b/153c/153e/153f), COLD-REPLAYED
+    from probe152/sabrina.state - see docs
+    supervisor-training.md section 18 for the replay's
+    end-state comparison."""
+    gift_event = DOJO_GIFTS[choice][3]
+    if _event_flag(emu, gift_event):
+        return DOJO_GIFTS[choice][2] in _box_species(emu)
+    for _attempt in range(2):
+        if not _enter_fighting_dojo(emu, ex):
+            return False
+        ok = True
+        for cell, ev, sights, stances in DOJO_BELTS:
+            if not _dojo_fight(emu, ex, cell, ev,
+                               sights, stances):
+                ok = False
+                break
+        if ok and not _event_flag(emu,
+                                  EV_BEAT_KARATE_MASTER):
+            # the King: step onto his trigger cell (4, 3)
+            if not _dojo_walk(emu, ex, (4, 4)):
+                ok = False
+            else:
+                emu.press("up")
+                _explore_settle(emu)
+                _dojo_ride_scene(emu)
+                if not _event_flag(emu,
+                                   EV_BEAT_KARATE_MASTER):
+                    _face_and_talk(emu, DOJO_MASTER_CELL)
+                    _dojo_ride_scene(emu)
+                ok = _event_flag(emu,
+                                 EV_BEAT_KARATE_MASTER)
+        if ok:
+            ok = take_hitmon(emu, ex, choice)
+        if ok:
+            break
+        # blackout contingency: leave (or note the
+        # respawn), heal, re-enter once
+        if emu.read_state().map_id == MAP_FIGHTING_DOJO:
+            if not _exit_fighting_dojo(emu, ex):
+                return False
+        if not _saffron_heal(emu, ex):
+            return False
+    else:
+        return False
+    if not _exit_fighting_dojo(emu, ex):
+        return False
+    st = emu.read_state()
+    return _event_flag(emu, gift_event) and \
+        _event_flag(emu, EV_BEAT_KARATE_MASTER) and \
+        all(_event_flag(emu, e) for e in EV_DOJO_TRAINERS) \
+        and DOJO_GIFTS[choice][2] in _box_species(emu) \
+        and len(st.party) == 6
+
+
 def take_fossil_scene(emu: PyBoyEmulator, ex: Executor) -> bool:
     """Mt. Moon B2F's ladder pocket is reachable only through the
     Super Nerd's fossil chamber, and the two fossil objects block

@@ -1100,3 +1100,119 @@ halved by blackouts; Oddish took XP and an
 Acid-for-Sleep-Powder swap from a level-up prompt);
 the chain head remains the probe's state. Tests
 108/108.
+
+## 18. Fighting Dojo (2026-11-08, probe153): the King's flag range, a frozen Pokédex page, and a species gate
+
+The mini-leg Vlad unlocked by making the dojo's one
+permanent decision himself: Hitmonlee over Hitmonchan.
+The case, as presented to him with Gen 1 numbers: Lee
+runs everything off Attack 120 / Speed 87 (Double Kick
+now, Hi Jump Kick later, and Gen 1's crash-on-miss
+penalty is a token 1 HP); Chan's famous elemental
+punches are Special-based in this generation and run
+off its 65 Special, not its 105 Attack - the coverage
+is a trap, and what remains is a slower, sturdier
+fighter. He picked the kicker.
+
+The dojo (map 177, 10x12; Saffron door warp (26, 3),
+entered from (26, 4) on the Sabrina leg's grid walk)
+is one open mat. Its script holds a trap for the
+unwary verifier: the Karate King's post-battle script
+runs SetEventRange(EVENT_BEAT_KARATE_MASTER ..
+EVENT_BEAT_FIGHTING_DOJO_TRAINER_3), so beating him
+first would light all four Black Belt flags unread.
+The belts were fought first and flagged individually
+(850-853, parser re-validated on every anchor -
+37/239/441/864/865/1231/1663/1703 - before 848-855
+were trusted). In the event, the room did the ordering
+itself: entering from the (4, 11) mat, the straight
+walk north up column x=4 toward BB1's sight cell
+crossed BB4's row 7, BB2's row 6 and BB3's row 5
+sight lines first, and each belt engaged and fell on
+its own row - Mankey/Mankey/Primeape 31, Machop/
+Machoke 32, Primeape 36, Machop/Mankey/Primeape 31,
+payouts totalling JPY 3,250, Blastoise levelling
+55 -> 56 mid-column. The King is not a trainer-header
+entry: the map's default script engages him when the
+player stands on (4, 3), left of his (5, 3), and the
+trigger fired first try (his Hitmonlee 37 +
+Hitmonchan 37 - the player previews both gifts in
+his party - paid JPY 925 and set 849). Across all
+five fights Blastoise took zero damage: a clean OHKO
+sweep, no items used (the bag's Super Potion count
+was already 0 after the Sabrina sweep, so
+_maintain_party never even fired).
+
+The pick. Lee's ball is the west ball at (4, 1),
+Chan's the east at (5, 1) - but the port does not
+trust the cell. The ball's text runs DisplayPokedex
+before its Yes/No, and DisplayPokedex leaves the
+species in wCurPartySpecies ($CF91, from the ROM's
+own sym file): the probe read 0x2B (Hitmonlee) from
+RAM, with the dex page itself on screenshot -
+"HITMONLEE, No. 106, KICKING" - before any
+confirmation was pressed. The first ride then failed
+instructively: the dex page waits on
+WaitForTextScrollButtonPress, and the Lapras ride
+(START presses + close_dialog) never dismissed it,
+because close_dialog only presses while in_dialog
+and the dex screen is not a dialog state - the
+before/after screenshots were byte-identical, a
+frozen page. Raw A presses dismiss it (probe153e);
+from there the established pattern held (A confirms
+YES at the take prompt, interleaved START clears
+GivePokemon's nickname screen with the default
+name). Verified three ways from RAM, as with
+Lapras: EVENT_GOT_HITMONLEE (854) and
+EVENT_DEFEATED_FIGHTING_DOJO (848) set,
+EVENT_GOT_HITMONCHAN (855) clear, owned dex
+15 -> 16, species 0x2B physically in the box (Lee,
+Lapras, and the five catching-detour species),
+party list unchanged - and a fourth, visual check:
+the room screenshot shows (4, 1) empty and Chan's
+ball still sitting at (5, 1), untouched. The other
+ball's text would now only say "better not get
+greedy"; it was never talked to.
+
+Chain head probe153/dojo.state - Saffron City at
+(26, 4), outside the dojo door: money JPY 102,131
+(97,956 + 3,250 + 925, arithmetic exact), party at
+full HP (Blastoise Lv56; no heal stop was needed),
+bag unchanged at 19 stacks, Lift Key still filed in
+PC item storage next to its Potion.
+
+Port (fighting_dojo(choice="hitmonlee") +
+take_hitmon / take_hitmonlee + _dojo_walk /
+_dojo_ride_scene / _dojo_fight / dojo entry-exit):
+the choice is a parameter with this line's value,
+and take_hitmon carries the species gate as code -
+it returns False without touching the Yes/No if
+wCurPartySpecies is not the chosen species, and
+refuses outright if the other gift's flag is set.
+The brief's blackout contingency (heal, re-enter,
+resume once) is in the umbrella, unused. COLD
+REPLAY from probe152/sabrina.state passed on the
+first attempt: fighting_dojo returned True and the
+end state matches the probe chain on every invariant
+- same money to the yen, dex 16, same flags, same
+box, same party, same (26, 4) doorstep. The single
+difference is Blastoise's HP, 151/181 against the
+probe's untouched 181/181: battle RNG, not path
+divergence. Tests 112/112 (four new dojo-constant
+tests: event ids, species/gate addresses, the gift
+table's west/east geometry, the belt table).
+
+Gap notes: the dojo is a rare interior where the
+stock world grid plus a column walk suffices - no
+learned graph, no DFS (contrast Silph's components
+and the gym's pads). The reusable artefact is the
+gate, not the geography: any scripted object that
+previews its gift through DisplayPokedex - the
+fossils, the other Hitmon, any future one-of-two -
+can be identified from wCurPartySpecies before the
+player commits, and that check now exists as a
+pattern. What the world model still lacks is any
+representation of a one-of-two choice as a state
+edge; the dojo's two balls are, to the planner, two
+identical item pickups, and only the port's
+parameter knows one of them ends the other.

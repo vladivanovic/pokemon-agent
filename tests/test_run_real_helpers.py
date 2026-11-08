@@ -422,3 +422,53 @@ class TestSabrinaConstants(unittest.TestCase):
         self.assertEqual(len(rr.SAFFRON_GYM_TRAINERS), 7)
         self.assertEqual(rr.SABRINA_STANCE, (9, 9))
         self.assertIn(rr.SABRINA_CELL, rr.SAFFRON_GYM_NPCS)
+
+
+class TestDojoConstants(unittest.TestCase):
+    """probe153: Fighting Dojo event ids from the
+    anchored const parse (848-855, contiguous with the
+    script's SetEventRange 849..853 after the King).
+    Species ids are the internal RAM ids (pokered.sym /
+    pokemon_constants comments: Lee $2B, Chan $2C).
+    The gift table is the objects file: Lee's ball is
+    the WEST ball at (4, 1), Chan's the east at (5, 1);
+    each stance is the cell below its ball."""
+
+    def test_event_ids(self):
+        self.assertEqual(rr.EV_DEFEATED_FIGHTING_DOJO, 848)
+        self.assertEqual(rr.EV_BEAT_KARATE_MASTER, 849)
+        self.assertEqual(rr.EV_DOJO_TRAINERS,
+                         (850, 851, 852, 853))
+        self.assertEqual(rr.EV_GOT_HITMONLEE, 854)
+        self.assertEqual(rr.EV_GOT_HITMONCHAN, 855)
+
+    def test_species_and_gate(self):
+        self.assertEqual(rr.SPECIES_HITMONLEE, 0x2B)
+        self.assertEqual(rr.SPECIES_HITMONCHAN, 0x2C)
+        self.assertEqual(rr.ADDR_CUR_PARTY_SPECIES, 0xCF91)
+
+    def test_gift_table(self):
+        lee = rr.DOJO_GIFTS["hitmonlee"]
+        chan = rr.DOJO_GIFTS["hitmonchan"]
+        self.assertEqual(lee[0], (4, 1))       # west ball
+        self.assertEqual(chan[0], (5, 1))      # east ball
+        self.assertLess(lee[0][0], chan[0][0])
+        self.assertEqual(lee[1], (4, 2))       # stance below
+        self.assertEqual(chan[1], (5, 2))
+        self.assertEqual(lee[2], rr.SPECIES_HITMONLEE)
+        self.assertEqual(chan[2], rr.SPECIES_HITMONCHAN)
+        self.assertEqual(lee[3], rr.EV_GOT_HITMONLEE)
+        self.assertEqual(chan[3], rr.EV_GOT_HITMONCHAN)
+
+    def test_belts_and_master(self):
+        self.assertEqual(len(rr.DOJO_BELTS), 4)
+        self.assertEqual([b[1] for b in rr.DOJO_BELTS],
+                         list(rr.EV_DOJO_TRAINERS))
+        self.assertEqual(rr.DOJO_MASTER_CELL, (5, 3))
+        # the script trigger is the cell left of the King
+        self.assertEqual(rr.DOJO_MASTER_TRIGGER, (4, 3))
+        for cell, _, sights, _ in rr.DOJO_BELTS:
+            self.assertIn(cell, rr.DOJO_OBJECT_CELLS)
+            self.assertTrue(sights)
+        for ball, _, _, _ in rr.DOJO_GIFTS.values():
+            self.assertIn(ball, rr.DOJO_OBJECT_CELLS)
