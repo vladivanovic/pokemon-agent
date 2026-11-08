@@ -6188,6 +6188,599 @@ def silph_co(emu: PyBoyEmulator, ex: Executor) -> bool:
 MAP_MT_MOON_B2F = 61
 
 
+# ------------------------------------------------------------------
+# Saffron Gym / Sabrina (probe152): the PC item-storage
+# deposit, the wandering-NPC door shuffle, and the warp-
+# pad gym. Three things the earlier legs never needed:
+#
+# * deposit_item: Gen 1's bag holds 20 item STACKS and a
+#   full bag refuses Sabrina's TM46 (her post-battle
+#   script branches to a "no room" text and withholds
+#   it). The probe freed exactly one stack beforehand -
+#   the LIFT KEY into the PC item storage (wNumBoxItems
+#   $D53A / wBoxItems $D53B), verified in RAM both ways.
+#   The storage menu shares its signature with the PC
+#   main menu; it is told apart by the cursor resetting
+#   to 0 after the "Accessed Item Storage System." text.
+#
+# * Saffron City defeats the stock rides: the world
+#   model's journey() returns None for the Pokecenter
+#   <-> Gym pair and _ride_battling spins. The probe
+#   crossed the city on the tile grid with RAM-verified
+#   steps (_city_grid_walk), and the Pokecenter door
+#   stance (9, 30) has a wandering NPC who parks on it -
+#   entry is a shuffle: approach via (10, 31) and walk a
+#   small loop until she moves (_enter_saffron_pc).
+#
+# * The gym is one map, nine rooms, 30 warp pads forming
+#   15 reciprocal pairs (SAFFRON_GYM_PADS, compiled from
+#   pokered's SaffronGym warp events and cross-checked
+#   against the probe's empirical graph: 243 cells, 946
+#   edges learned by stepping). Navigation plans over
+#   the tile grid with pads as teleport edges
+#   (_gym_navigate) and verifies every landing; the
+#   settle is deliberately paranoid (_gym_settle) -
+#   a sight trainer's walk-up runs under wJoyIgnore
+#   with no battle and no dialog yet, and a naive
+#   settle records the step as a wall and the battle
+#   as never happening (probe152's Channeler1 lesson:
+#   her sight cell (10, 3) read as a wall for a whole
+#   exploration pass while the screen sat mid-fade).
+# ------------------------------------------------------------------
+
+MAP_SAFFRON_GYM = 178
+EV_GOT_TM46 = 864
+EV_BEAT_SABRINA = 865
+EV_SAFFRON_GYM_TRAINERS = (866, 867, 868, 869, 870, 871,
+                           872)
+ITEM_TM46 = 0xF6     # TM ids are 0xC9 + (n - 1); TM46 Psywave
+ADDR_NUM_PC_ITEMS = 0xD53A          # wNumBoxItems
+ADDR_PC_ITEMS = 0xD53B              # wBoxItems
+ADDR_JOY_IGNORE = 0xD3B0            # wJoyIgnore
+
+# (trainer cell, talk stance, event) in header order:
+# Channeler1 (Gastly 34 / Haunter 34), Psychic1 (Kadabra
+# / Slowpoke / Mr. Mime / Kadabra 31), Channeler2
+# (Haunter 38), Psychic2 (Mr. Mime / Kadabra 34),
+# Channeler3 (Gastly x2 / Haunter 33), Psychic3
+# (Slowpoke x2 / Slowbro 33), Psychic4 (Slowbro 38).
+SAFFRON_GYM_TRAINERS = (
+    ((10, 1), (10, 2), 866),
+    ((17, 1), (17, 2), 867),
+    ((3, 7), (3, 8), 868),
+    ((17, 7), (17, 8), 869),
+    ((3, 13), (3, 14), 870),
+    ((17, 13), (17, 14), 871),
+    ((3, 1), (3, 2), 872),
+)
+SAFFRON_GYM_NPCS = frozenset(
+    [cell for cell, _, _ in SAFFRON_GYM_TRAINERS]
+    + [(9, 8), (10, 15)])     # Sabrina, the gym guide
+SABRINA_CELL = (9, 8)
+SABRINA_STANCE = (9, 9)
+
+# Warp pads: stepping ONTO the key cell lands the player
+# ON the value cell (pokered SaffronGym_Object warp
+# events 3-32; the two door warps 1-2 are the exit).
+SAFFRON_GYM_PADS = {
+    (1, 3): (15, 5), (5, 3): (11, 3), (1, 5): (11, 11),
+    (5, 5): (1, 11), (1, 9): (19, 11), (5, 9): (9, 5),
+    (1, 11): (5, 5), (5, 11): (5, 17), (1, 15): (19, 5),
+    (5, 15): (15, 17), (1, 17): (11, 5), (5, 17): (5, 11),
+    (9, 3): (15, 11), (11, 3): (5, 3), (9, 5): (5, 9),
+    (11, 5): (1, 17), (11, 11): (1, 5), (11, 15): (19, 17),
+    (15, 3): (15, 9), (19, 3): (15, 15), (15, 5): (1, 3),
+    (19, 5): (1, 15), (15, 9): (15, 3), (19, 9): (19, 15),
+    (15, 11): (9, 3), (19, 11): (1, 9), (15, 15): (19, 3),
+    (19, 15): (19, 9), (15, 17): (5, 15), (19, 17): (11, 15),
+}
+
+
+def _pc_items(emu: PyBoyEmulator) -> list:
+    """The PC item storage as (item_id, count) pairs."""
+    mem = emu.pb.memory
+    n = mem[ADDR_NUM_PC_ITEMS]
+    return [(mem[ADDR_PC_ITEMS + 2 * i],
+             mem[ADDR_PC_ITEMS + 2 * i + 1]) for i in range(n)]
+
+
+def _pc_count(emu: PyBoyEmulator, item_id: int) -> int:
+    for item, count in _pc_items(emu):
+        if item == item_id:
+            return count
+    return 0
+
+
+def deposit_item(emu: PyBoyEmulator, ex: Executor,
+                 pc_map: int, item_id: int) -> bool:
+    """Deposit one stack of `item_id` into the PC item
+    storage (probe152b). Caller must be INSIDE the
+    Pokecenter. The PC main menu and the item-storage
+    menu share a signature (topY 2, max item 3); the
+    storage menu is recognised by its cursor resetting
+    to 0 once the access text clears - and A presses
+    stop the moment it does, or the next one selects
+    WITHDRAW. Every effect is verified in RAM: the item
+    leaves the bag and appears in storage."""
+    if _bag_count(emu, item_id) < 1:
+        return False
+    if _pc_count(emu, item_id) >= 1:
+        return True
+    if not _open_pc(emu, ex, pc_map):
+        return False
+    mem = emu.pb.memory
+
+    def ride_until(pred, rounds=160):
+        for _ in range(rounds):
+            if pred():
+                return True
+            if emu.read_state().in_dialog:
+                _press10(emu, "a")
+            emu.tick(25)
+        return pred()
+
+    if not ride_until(lambda: mem[ADDR_MAX_MENU_ITEM] == 3
+                      and mem[ADDR_MENU_TOP_Y] != 0):
+        return False
+    if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 1):
+        return False
+    _press10(emu, "a")                         # player's PC
+    for _ in range(160):
+        if mem[ADDR_MAX_MENU_ITEM] == 3 and \
+                mem[ADDR_MENU_ITEM] == 0:
+            break
+        _press10(emu, "a")
+        emu.tick(25)
+    else:
+        return False
+    emu.tick(30)
+    if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 1):
+        return False
+    _press10(emu, "a")                         # DEPOSIT ITEM
+    emu.tick(60)
+    idx = _bag_index(emu, item_id)
+    if idx is None:
+        return False
+    if not _steer_menu(
+            emu, lambda: mem[ADDR_MENU_SCROLL]
+            + mem[ADDR_MENU_ITEM], idx):
+        return False
+    _press10(emu, "a")
+    emu.tick(90)
+    ok = _pc_press_a_ride(
+        emu, lambda: _bag_count(emu, item_id) == 0,
+        rounds=200)
+    for _ in range(12):
+        if mem[ADDR_MENU_TOP_Y] == 0 and \
+                not emu.read_state().in_dialog:
+            break
+        _press10(emu, "b")
+        emu.tick(30)
+    return ok and _pc_count(emu, item_id) >= 1
+
+
+def _gym_settle(emu: PyBoyEmulator) -> None:
+    """Ride out whatever a gym step started. A sight
+    trainer's walk-up runs under wJoyIgnore with no
+    battle and no dialog yet, so 'quiet' requires three
+    consecutive checks with no battle, no dialog and
+    joy-ignore clear. Battles go to the typed driver;
+    dialog is A-ridden (trainer text, not menus)."""
+    mem = emu.pb.memory
+    quiet = 0
+    for _ in range(300):
+        st = emu.read_state()
+        if st.in_battle:
+            _drive_battle_typed(emu)
+            _maintain_party(emu, ())
+            quiet = 0
+            continue
+        if st.in_dialog:
+            _press10(emu, "a")
+            emu.tick(20)
+            quiet = 0
+            continue
+        if mem[ADDR_JOY_IGNORE] != 0:
+            emu.tick(20)
+            quiet = 0
+            continue
+        quiet += 1
+        if quiet >= 3:
+            return
+        emu.tick(15)
+
+
+def _gym_step(emu: PyBoyEmulator, btn: str):
+    """One press in the gym + the paranoid settle;
+    returns the landing cell (or the new map id's
+    position if a door warp fired)."""
+    emu.press(btn)
+    _explore_settle(emu)
+    _gym_settle(emu)
+    st = emu.read_state()
+    return (st.x, st.y)
+
+
+def _gym_navigate(emu: PyBoyEmulator, ex: Executor,
+                  target) -> bool:
+    """BFS over the gym's tile grid with pads as
+    teleport edges; every press is verified against
+    the planned landing and divergence replans from
+    the actual cell (probe152's empirical graph agreed
+    with this model everywhere except NPC cells and
+    the door mats, which are handled by the caller)."""
+    gym = ex.world.maps[MAP_SAFFRON_GYM]
+    dirs = {"up": (0, -1), "down": (0, 1), "left": (-1, 0),
+            "right": (1, 0)}
+
+    def landing(cell, btn):
+        dx, dy = dirs[btn]
+        nb = (cell[0] + dx, cell[1] + dy)
+        if nb in SAFFRON_GYM_NPCS:
+            return None
+        if not gym.walkable(nb[0], nb[1]):
+            return None
+        return SAFFRON_GYM_PADS.get(nb, nb)
+
+    for _ in range(60):
+        st = emu.read_state()
+        if st.map_id != MAP_SAFFRON_GYM:
+            return False
+        cur = (st.x, st.y)
+        if cur == target:
+            return True
+        from collections import deque
+        prev = {cur: None}
+        dq = deque([cur])
+        while dq:
+            cell = dq.popleft()
+            for btn in dirs:
+                land = landing(cell, btn)
+                if land is not None and land not in prev:
+                    prev[land] = (cell, btn)
+                    dq.append(land)
+        if target not in prev:
+            return False
+        path = []
+        cell = target
+        while prev[cell] is not None:
+            cell, btn = prev[cell]
+            path.append(btn)
+        for btn in reversed(path):
+            want_from = cur
+            want = landing(want_from, btn)
+            got = _gym_step(emu, btn)
+            if emu.read_state().map_id != MAP_SAFFRON_GYM:
+                return False
+            if got != want:
+                break          # diverged: replan
+            cur = got
+        else:
+            continue
+    st = emu.read_state()
+    return st.map_id == MAP_SAFFRON_GYM and \
+        (st.x, st.y) == target
+
+
+def _gym_talk_fight(emu: PyBoyEmulator, ex: Executor,
+                    stance, event_id: int) -> bool:
+    """Navigate to a trainer's talk stance, face them
+    (they all stand one cell north of the stance), talk,
+    and ride the scene - sight pre-emption included -
+    until the trainer's event flag reads set."""
+    if _event_flag(emu, event_id):
+        return True
+    if not _gym_navigate(emu, ex, stance):
+        return False
+    emu.press("up")
+    emu.tick(20)
+    _press10(emu, "a")
+    mem = emu.pb.memory
+    for _ in range(600):
+        if _event_flag(emu, event_id):
+            return True
+        st = emu.read_state()
+        if st.map_id != MAP_SAFFRON_GYM and not st.in_battle \
+                and not st.in_dialog:
+            return False     # blackout respawn: caller heals
+        if st.in_battle:
+            _drive_battle_typed(emu)
+            _maintain_party(emu, ())
+            if all(m.hp == 0
+                   for m in emu.read_state().party):
+                return False
+            continue
+        if st.in_dialog:
+            _press10(emu, "a")
+            emu.tick(20)
+            continue
+        if mem[ADDR_JOY_IGNORE] != 0:
+            emu.tick(20)
+            continue
+        emu.tick(15)
+    return _event_flag(emu, event_id)
+
+
+def _enter_saffron_pc(emu: PyBoyEmulator,
+                      ex: Executor) -> bool:
+    """Cross Saffron City to the Pokecenter and get
+    inside (probe152d2). The door stance (9, 30) has a
+    wandering NPC who parks on it; the approach comes
+    via (10, 31) and shuffle-walks a small loop until
+    she moves off it."""
+    world = ex.world
+    city = world.map_id("SaffronCity")
+    pc = world.map_id("SaffronPokecenter")
+    if emu.read_state().map_id == pc:
+        return True
+    if emu.read_state().map_id != city:
+        return False
+    if not _saffron_grid_walk(emu, ex, city, (10, 31)):
+        return False
+
+    def step(btn):
+        emu.press(btn)
+        _explore_settle(emu)
+        _gym_settle(emu)
+        st = emu.read_state()
+        return (st.x, st.y)
+
+    for _ in range(14):
+        if emu.read_state().map_id == pc:
+            return True
+        st = emu.read_state()
+        if (st.x, st.y) == (10, 31):
+            step("left")
+        if _pos(emu) == (9, 31):
+            step("up")
+        if _pos(emu) == (9, 30):
+            step("up")
+        if emu.read_state().map_id == pc:
+            return True
+        for btn in ("right", "down", "left", "up"):
+            step(btn)
+        if _pos(emu) != (10, 31):
+            _saffron_grid_walk(emu, ex, city, (10, 31))
+    return emu.read_state().map_id == pc
+
+
+def _pos(emu: PyBoyEmulator):
+    st = emu.read_state()
+    return (st.x, st.y)
+
+
+def _saffron_grid_walk(emu: PyBoyEmulator, ex: Executor,
+                       map_id: int, target) -> bool:
+    """_city_grid_walk's real body: tile-path following
+    with per-press RAM verification (see the section
+    header for why Saffron needs it)."""
+    world = ex.world
+    blocked = set()
+    fails = {}
+    for _ in range(80):
+        st = emu.read_state()
+        if st.map_id != map_id:
+            return False
+        cur = (st.x, st.y)
+        if cur == target:
+            return True
+        path = world.tile_path(map_id, cur, target,
+                               blocked=frozenset(blocked))
+        if not path:
+            return False
+        dirs = {(0, -1): "up", (0, 1): "down",
+                (-1, 0): "left", (1, 0): "right"}
+        for cell in path[1:]:
+            dx, dy = cell[0] - cur[0], cell[1] - cur[1]
+            if (dx, dy) not in dirs:
+                break      # warp corridor step: replan
+            btn = dirs[(dx, dy)]
+            ok = False
+            for _try in range(6):
+                emu.press(btn)
+                _explore_settle(emu)
+                _gym_settle(emu)
+                st = emu.read_state()
+                if st.map_id != map_id:
+                    return False
+                if (st.x, st.y) == cell:
+                    ok = True
+                    break
+                emu.tick(90)
+            if not ok:
+                fails[cell] = fails.get(cell, 0) + 1
+                if fails[cell] >= 2:
+                    blocked.add(cell)
+                break
+            cur = cell
+    st = emu.read_state()
+    return st.map_id == map_id and (st.x, st.y) == target
+
+
+def _enter_saffron_gym(emu: PyBoyEmulator,
+                       ex: Executor) -> bool:
+    """City -> gym door (34, 3), entered from the
+    (34, 4) stance by stepping north."""
+    world = ex.world
+    city = world.map_id("SaffronCity")
+    if emu.read_state().map_id == MAP_SAFFRON_GYM:
+        return True
+    if emu.read_state().map_id != city:
+        return False
+    if not _saffron_grid_walk(emu, ex, city, (34, 4)):
+        return False
+    for _ in range(8):
+        if emu.read_state().map_id == MAP_SAFFRON_GYM:
+            return True
+        emu.press("up")
+        _explore_settle(emu)
+    return emu.read_state().map_id == MAP_SAFFRON_GYM
+
+
+def _exit_saffron_gym(emu: PyBoyEmulator,
+                      ex: Executor) -> bool:
+    """Gym -> city: the door mats (8, 17)/(9, 17) exit
+    by stepping SOUTH off them; the learned-graph
+    route runs to (11, 17) and walks the last cells by
+    hand (probe152d)."""
+    world = ex.world
+    city = world.map_id("SaffronCity")
+    if emu.read_state().map_id == city:
+        return True
+    if not _gym_navigate(emu, ex, (11, 17)):
+        return False
+    for btn in ("left", "left", "down", "down"):
+        if emu.read_state().map_id != MAP_SAFFRON_GYM:
+            break
+        emu.press(btn)
+        _explore_settle(emu)
+        _gym_settle(emu)
+    return emu.read_state().map_id == city
+
+
+def _saffron_heal(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Enter the Saffron Pokecenter and heal; the heal
+    helper leaves by the exit mat, back in the city."""
+    world = ex.world
+    pc = world.map_id("SaffronPokecenter")
+    if not _enter_saffron_pc(emu, ex):
+        return False
+    return heal_at_pokecenter(emu, ex, pc)
+
+
+def beat_sabrina(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Saffron Gym and the Marsh Badge (probe152).
+
+    Assumes the player is in Saffron City with the
+    Silph leg done. Order of operations, as probed:
+    free a bag stack first if the bag is full (deposit
+    the Lift Key in the PC item storage - Sabrina's
+    TM46 is refused by a full bag), sweep the seven
+    gym trainers over the warp pads, heal, then
+    Sabrina herself (Kadabra 38 / Mr. Mime 37 /
+    Venomoth 38 / Alakazam 43, custom moves). Verified
+    by the Marsh badge bit, EVENT_BEAT_SABRINA and
+    TM46 in the bag; ends healed in Saffron City.
+
+    FIDELITY: COLD-REPLAYED end-to-end from
+    probe151/silph.state (third attempt; replay end
+    state probe152/replay-sabrina.state). The first
+    two replay attempts failed informatively - a
+    mid-sweep blackout the recovery-less sweep could
+    not absorb, then a Sabrina blackout stalling the
+    scene ride in the wrong map - and the recovery
+    paths above are those failures, fixed. The
+    replay's path differs from the probe's (money
+    halved by blackouts, Oddish took XP and a move
+    swap); the chain head stays the probe's state."""
+    world = ex.world
+    city = world.map_id("SaffronCity")
+    pc = world.map_id("SaffronPokecenter")
+    if "Marsh" in emu.read_state().badges:
+        return _bag_count(emu, ITEM_TM46) >= 1
+    if emu.read_state().map_id != city:
+        return False
+    # 1. bag space for TM46
+    if emu.pb.memory[ADDR_NUM_BAG_ITEMS] >= 20 and \
+            _bag_count(emu, ITEM_LIFT_KEY) >= 1:
+        if not _enter_saffron_pc(emu, ex):
+            return False
+        if not deposit_item(emu, ex, pc, ITEM_LIFT_KEY):
+            return False
+        # leave the center by its exit mat
+        try:
+            ex._walk_to(pc, (4, 7))
+        except StuckError:
+            return False
+        for _ in range(8):
+            if emu.read_state().map_id != pc:
+                break
+            emu.press("down")
+            _explore_settle(emu)
+        if emu.read_state().map_id != city:
+            return False
+    # 2. the gym sweep - with the probe's own lesson
+    # built in: the sweep can faint the lead (it did in
+    # probe152's first pass), so a faint or a blackout
+    # mid-sweep exits, heals and re-enters; trainer
+    # flags persist, so the sweep resumes where it
+    # stopped. A trainer who still will not fall after
+    # one such recovery fails the leg.
+    if not _enter_saffron_gym(emu, ex):
+        return False
+    for _cell, stance, event_id in SAFFRON_GYM_TRAINERS:
+        if _event_flag(emu, event_id):
+            continue
+        ok = _gym_talk_fight(emu, ex, stance, event_id)
+        if not ok:
+            # blackout respawn (city) or a fainted lead
+            # inside: heal, re-enter, one more attempt
+            if emu.read_state().map_id == MAP_SAFFRON_GYM:
+                if not _exit_saffron_gym(emu, ex):
+                    return False
+            if not _saffron_heal(emu, ex):
+                return False
+            if not _enter_saffron_gym(emu, ex):
+                return False
+            ok = _gym_talk_fight(emu, ex, stance, event_id)
+        if not ok:
+            return False
+    # 3. heal before the leader if the sweep cost the
+    # lead (the probe's sweep fainted Blastoise once
+    # and left it at 31/178 the second time)
+    st = emu.read_state()
+    lead = st.party[0]
+    if lead.hp == 0 or lead.hp * 2 < lead.max_hp:
+        if not _exit_saffron_gym(emu, ex):
+            return False
+        if not _saffron_heal(emu, ex):
+            return False
+        if not _enter_saffron_gym(emu, ex):
+            return False
+    # 4. Sabrina - with the standing blackout
+    # contingency: respawn, heal, re-enter, re-attempt
+    # ONCE; a second blackout fails the leg (the probe
+    # never needed it; replay 2's sweep-recovery build
+    # cleared all seven trainers and still came back
+    # False here, money halved - a Sabrina blackout
+    # with the ride stalling in the wrong map)
+    if not _gym_talk_fight(emu, ex, SABRINA_STANCE,
+                           EV_BEAT_SABRINA):
+        if emu.read_state().map_id == MAP_SAFFRON_GYM:
+            if not _exit_saffron_gym(emu, ex):
+                return False
+        if not _saffron_heal(emu, ex):
+            return False
+        if not _enter_saffron_gym(emu, ex):
+            return False
+        if not _gym_talk_fight(emu, ex, SABRINA_STANCE,
+                               EV_BEAT_SABRINA):
+            return False
+    # the post-battle script awards the badge and TM46
+    # through dialog; ride it out
+    for _ in range(300):
+        if _event_flag(emu, EV_GOT_TM46) and \
+                _bag_count(emu, ITEM_TM46) >= 1:
+            break
+        st = emu.read_state()
+        if st.in_dialog:
+            _press10(emu, "a")
+        emu.tick(20)
+    if "Marsh" not in emu.read_state().badges or \
+            _bag_count(emu, ITEM_TM46) < 1:
+        return False
+    # 5. out and healed
+    if not _exit_saffron_gym(emu, ex):
+        return False
+    if not _saffron_heal(emu, ex):
+        return False
+    st = emu.read_state()
+    return "Marsh" in st.badges and \
+        _bag_count(emu, ITEM_TM46) >= 1 and \
+        all(m.hp == m.max_hp for m in st.party)
+
+
+
 def take_fossil_scene(emu: PyBoyEmulator, ex: Executor) -> bool:
     """Mt. Moon B2F's ladder pocket is reachable only through the
     Super Nerd's fossil chamber, and the two fossil objects block

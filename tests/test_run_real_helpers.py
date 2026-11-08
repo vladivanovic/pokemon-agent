@@ -384,3 +384,41 @@ class TestFleeWildDefault(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSabrinaConstants(unittest.TestCase):
+    """probe152: Sabrina event ids from the anchored
+    const parse (866-872 trainer range matches the
+    script's SetEventRange; 865/864 flipped empirically
+    in the probe save). The pad table is compiled from
+    pokered's SaffronGym warp events and cross-checked
+    against the probe's learned graph: all 38 empirical
+    teleports in graph-d1.json match it exactly."""
+
+    def test_event_ids(self):
+        self.assertEqual(rr.EV_GOT_TM46, 864)
+        self.assertEqual(rr.EV_BEAT_SABRINA, 865)
+        self.assertEqual(rr.EV_SAFFRON_GYM_TRAINERS,
+                         (866, 867, 868, 869, 870, 871, 872))
+
+    def test_item_ids(self):
+        self.assertEqual(rr.ITEM_TM46, 0xF6)
+        self.assertEqual(rr.ITEM_LIFT_KEY, 0x4A)
+        self.assertEqual(rr.ADDR_NUM_PC_ITEMS, 0xD53A)
+        self.assertEqual(rr.ADDR_PC_ITEMS, 0xD53B)
+
+    def test_pad_table(self):
+        pads = rr.SAFFRON_GYM_PADS
+        self.assertEqual(len(pads), 30)
+        # every pad is one of a reciprocal pair
+        for cell, land in pads.items():
+            self.assertEqual(pads[land], cell)
+        # anchors cross-checked live in probe152
+        self.assertEqual(pads[(15, 11)], (9, 3))
+        self.assertEqual(pads[(1, 15)], (19, 5))
+        self.assertEqual(pads[(11, 15)], (19, 17))
+
+    def test_trainer_table(self):
+        self.assertEqual(len(rr.SAFFRON_GYM_TRAINERS), 7)
+        self.assertEqual(rr.SABRINA_STANCE, (9, 9))
+        self.assertIn(rr.SABRINA_CELL, rr.SAFFRON_GYM_NPCS)

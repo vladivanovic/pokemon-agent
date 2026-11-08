@@ -1028,3 +1028,75 @@ across a dozen probe scripts with hand-built
 crossings, so the port is a faithful transcription
 and the probes' saved intermediates are the proof
 chain. Tests 104/104.
+
+## 17. Saffron Gym / Sabrina (2026-11-08, probe152): the bag cap again, a learned warp graph, and the settle that lied
+
+Bag first, again: Sabrina's post-battle script awards
+TM46 only if the bag has room - and the Silph leg had
+ended at exactly 20 stacks. This time the fix was PC
+item storage, not a sale: the LIFT KEY (dead weight
+since the Hideout) went into Bill's PC at Saffron
+(wNumBoxItems $D53A). The storage menu shares its
+signature with the PC main menu (topY 2, max item 3);
+it is told apart by the cursor resetting to 0 when the
+"Accessed Item Storage System." text clears - and A
+presses must stop the instant it does, or the next one
+selects WITHDRAW. Verified in RAM both directions:
+bag 20 -> 19, storage [Potion, Lift Key].
+
+Saffron City defeats the stock rides: journey() returns
+None for Pokecenter<->Gym and the executor spins. The
+probe crossed the city on the tile grid with
+RAM-verified single steps, and the Pokecenter door has
+its own gremlin - a wandering girl NPC parks on the
+door stance (9,30); entry is an NPC shuffle from
+(10,31). Inside, heal_at_pokecenter works unchanged.
+
+The gym is one map (178), a 3x3 of rooms joined by 30
+warp pads = 15 reciprocal pairs. The graph was learned
+empirically (243 cells, 946 edges) and the compiled
+table from SaffronGym.asm's warp events agrees with
+all 38 teleports the learner recorded - the table now
+lives in run_real as SAFFRON_GYM_PADS and the port
+plans over it directly.
+
+Two exploration bugs worth keeping. First, the settle:
+a sight trainer's walk-up runs under wJoyIgnore with
+no battle and no dialog yet, so a settle that breaks
+on the first quiet check races the fade and records
+the step as a WALL. Channeler1 "didn't exist" for a
+whole pass that way; her sight column (10,3) was
+reachable all along. The strong settle - three
+consecutive quiet checks, joy-ignore clear - is now
+the gym standard. Second, explore()'s frontier
+fallback: when navigation to a frontier cell fails,
+it marks ALL that cell's untried directions as walls,
+poisoning cells it never tested. Purge rule: delete
+None edges whose target was never actually visited.
+
+The sweep (all seven trainers, events 866-872, sight
+range 3 facing down; teams in the port's table): the
+first pass fainted Blastoise to Psychic1's party and
+cost the only Super Potion; Channeler1, found late,
+dropped it to 31/178 again. Two heal trips. Sabrina
+herself (Kadabra 38 / Mr. Mime 37 / Venomoth 38 /
+Alakazam 43, the $FF custom-moves entry) fell to a
+Lv55 Blastoise solo: 51/178 left, Hydro Pump dry,
+Water Gun 25->17. Marsh Badge, TM46 in the freed bag
+slot, money JPY 97,956. Chain head
+probe152/sabrina.state.
+
+Port (beat_sabrina + deposit_item + _gym_navigate +
+_saffron_grid_walk): COLD-REPLAYED end-to-end from
+silph.state on the third attempt. Attempts one and
+two failed informatively - a mid-sweep blackout the
+recovery-less sweep could not absorb, then a Sabrina
+blackout stalling the scene ride in the respawn map -
+and the port now carries the brief's own contingency
+as code: heal-and-re-enter recovery inside the sweep,
+and one Sabrina re-attempt after a blackout. The
+replay's path cost more than the probe's (money
+halved by blackouts; Oddish took XP and an
+Acid-for-Sleep-Powder swap from a level-up prompt);
+the chain head remains the probe's state. Tests
+108/108.
