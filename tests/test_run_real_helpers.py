@@ -472,3 +472,101 @@ class TestDojoConstants(unittest.TestCase):
             self.assertTrue(sights)
         for ball, _, _, _ in rr.DOJO_GIFTS.values():
             self.assertIn(ball, rr.DOJO_OBJECT_CELLS)
+
+
+# Safari Zone warp tables (pokered object files; per map,
+# (x, y, dest map, dest warp index) in warp order). The
+# plan tests run run_real's real BFS over the embedded
+# compiled grids plus this graph - the same composition
+# _sz_nav executes live (probe154).
+_SAFARI_WARPS = {
+    220: [(14, 25, 156, 3), (15, 25, 156, 4), (0, 10, 219, 5),
+          (0, 11, 219, 6), (14, 0, 218, 5), (15, 0, 218, 6),
+          (29, 10, 217, 3), (29, 11, 217, 4), (17, 19, 221, 1)],
+    219: [(20, 0, 218, 1), (21, 0, 218, 2), (26, 0, 218, 3),
+          (27, 0, 218, 4), (29, 22, 220, 3), (29, 23, 220, 4),
+          (3, 3, 222, 1), (11, 11, 223, 1)],
+    217: [(0, 4, 218, 7), (0, 5, 218, 8), (0, 22, 220, 7),
+          (0, 23, 220, 7), (25, 9, 224, 1)],
+    218: [(2, 35, 219, 1), (3, 35, 219, 2), (8, 35, 219, 3),
+          (9, 35, 219, 4), (20, 35, 220, 5), (21, 35, 220, 6),
+          (39, 30, 217, 1), (39, 31, 217, 2), (35, 3, 225, 1)],
+}
+
+
+def _safari_fake_ex():
+    maps = {}
+    for mid, warps in _SAFARI_WARPS.items():
+        maps[mid] = SimpleNamespace(warps=[
+            SimpleNamespace(x=x, y=y, dest_id=dm, idx=di)
+            for (x, y, dm, di) in warps])
+    return SimpleNamespace(world=SimpleNamespace(maps=maps))
+
+
+class TestSafari(unittest.TestCase):
+    def test_steps_counter_is_big_endian(self):
+        emu = FakeEmu()
+        emu.memory[rr.ADDR_SAFARI_STEPS] = 0x01
+        emu.memory[rr.ADDR_SAFARI_STEPS + 1] = 0xF4
+        self.assertEqual(rr._safari_steps(emu), 500)
+
+    def test_balls_counter(self):
+        emu = FakeEmu()
+        emu.memory[rr.ADDR_SAFARI_BALLS] = 30
+        self.assertEqual(rr._safari_balls(emu), 30)
+
+    def test_grid_dimensions_match_pokered(self):
+        self.assertEqual(rr.SAFARI_GRIDS[218][:2], (40, 36))
+        for mid in (217, 219, 220):
+            self.assertEqual(rr.SAFARI_GRIDS[mid][:2], (30, 26))
+
+    def test_grid_cells_the_probe_stood_on(self):
+        # entrance apron, teeth stance, Secret House stance
+        self.assertTrue(rr._safari_passable(220, (15, 24)))
+        self.assertTrue(rr._safari_passable(219, (19, 8)))
+        self.assertTrue(rr._safari_passable(219, (3, 4)))
+
+    def test_plan_rings_center_to_the_teeth(self):
+        ex = _safari_fake_ex()
+        blocked = {m: set(rr.SAFARI_BALLS_CELLS.get(m, ()))
+                   for m in rr.SAFARI_AREAS}
+        path = rr._safari_plan(ex, (220, (15, 25)),
+                               (219, (19, 8)), blocked)
+        self.assertIsNotNone(path)
+        self.assertIn("warp", path)      # crosses areas
+        self.assertGreater(len(path), 100)
+
+    def test_plan_reaches_the_secret_house_stance(self):
+        ex = _safari_fake_ex()
+        blocked = {m: set(rr.SAFARI_BALLS_CELLS.get(m, ()))
+                   for m in rr.SAFARI_AREAS}
+        path = rr._safari_plan(ex, (219, (19, 8)),
+                               (219, (3, 4)), blocked)
+        self.assertIsNotNone(path)
+
+    def test_plan_never_routes_through_a_ball(self):
+        # West's (19, 7) ball cell is the teeth itself: it
+        # is blocked at plan time, so the plan for the
+        # stance must end ADJACENT, not through it.
+        ex = _safari_fake_ex()
+        blocked = {m: set(rr.SAFARI_BALLS_CELLS.get(m, ()))
+                   for m in rr.SAFARI_AREAS}
+        self.assertIn((19, 7), blocked[219])
+        path = rr._safari_plan(ex, (220, (15, 25)),
+                               (219, (19, 8)), blocked)
+        self.assertIsNotNone(path)
+
+
+class TestFuchsiaConstants(unittest.TestCase):
+    def test_hm_and_tm_ids(self):
+        self.assertEqual(rr.ITEM_HM03_SURF, 0xC6)
+        self.assertEqual(rr.ITEM_HM04_STRENGTH, 0xC7)
+        self.assertEqual(rr.ITEM_TM06_TOXIC, 0xCE)
+        self.assertEqual(rr.ITEM_GOLD_TEETH, 0x40)
+
+    def test_gym_trainer_events_in_object_order(self):
+        self.assertEqual(rr.EV_FUCHSIA_GYM_TRAINERS,
+                         (602, 603, 604, 605, 606, 607))
+        cells = [c for c, _, _, _ in rr.FUCHSIA_GYM_TRAINERS]
+        self.assertEqual(cells, [(8, 13), (7, 8), (1, 12),
+                                 (3, 5), (8, 2), (2, 7)])

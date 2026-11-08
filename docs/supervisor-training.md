@@ -1216,3 +1216,175 @@ representation of a one-of-two choice as a state
 edge; the dojo's two balls are, to the planner, two
 identical item pickups, and only the port's
 parameter knows one of them ends the other.
+
+## 19. Fuchsia leg (2026-11-09, probe154): a one-way gate, a zoo with a step budget, and the party screen that ate a battle driver
+
+Bag prep first, and it bit. The leg adds HM03, HM04, the
+Gold Teeth and TM06 to a 19-stack bag (cap 20), so three
+spare TMs - TM02, TM21, TM34 - went into Saffron PC item
+storage beside the Potion and the Lift Key. The §17
+deposit's menu signature (MAX==3, topY!=0) turned out to
+be stale-byte fragile in lineages that had already used
+a PC: the bytes linger from the last session, the check
+passes while the screen still shows "VLAD turned on
+the PC.", and the steering misses. One intermediate
+probe routine with a neighbouring wrong predicate
+(withdraw demands the dialog flag down; the storage
+menu keeps it up) pressed A in the live storage menu
+and WITHDREW the Potion and the Lift Key into the bag.
+Both incidents were caught by RAM verification in the
+same phase and fully repaired there: the working
+predicates are main menu = MAX==3 AND topY==2 AND not
+in dialog, storage = the cursor reset 1->0 observed
+BEFORE pressing A. End state verified stack-by-stack:
+bag 19 -> 16, storage exactly {Potion, Lift Key, TM34,
+TM21, TM02}, TM24/TM29/TM46 kept in the bag.
+deposit_item in run_real.py now carries the fix.
+
+The road south was quiet except for its doors. Gate
+warp cells are DIRECTIONAL - they fire only when
+stepped onto heading INTO the building. Route 8's
+gatehouse strands every stock ride on the door's top
+cell (1, 9), sliding along the front; the crossing is
+a stance at (0, 10) and a step EAST onto the door
+(the mirror image of §16's westbound crossing, which
+worked for the same reason). Route 12's Fisher5
+(event 1160) was guarded at every checkpoint and
+never engaged; the pier followed §16's waypoints.
+Standing trainers on Routes 14/15 and a few wilds
+paid JPY 1,925 and a Blastoise level (56 -> 57) on the
+way in. One honesty note on the guard: a fresh
+const-parse of event_constants.asm puts Fisher5 at
+692, and flags 686-692 (all seven R12 trainers) read
+False in the final chain even though §16 records most
+of them beaten in the grind. The 1160 anchor is the
+numbering the codebase itself uses and has validated
+behaviourally across §16/§17; the discrepancy is
+recorded here rather than resolved - fresh parses
+have been wrong before (§15's expression trap), and
+the guard that matters (never enter his pocket) held
+under either numbering, since the route never goes
+there.
+
+The Safari Zone broke the world model twice. Its
+walkable() follows per-tile gfx data and splits
+Center into disconnected pieces; Gen 1's real rule
+(CheckTilePassable) tests ONE tile - the destination
+cell's BOTTOM-LEFT tile - against the tileset's
+passable list, plus tile-PAIR collisions on top.
+Even with correct grids, Center's west doors open
+only into its own sealed NW component: the route to
+the West area rings the whole zone, Center -> East ->
+North -> West (~430 steps of the 500 budget in
+practice). The step counter wSafariSteps (0xD70D) is
+stored BIG-ENDIAN - 0x01F4 at entry, gate-interior
+steps not counted - and the balls live at 0xDA47.
+One entry, JPY 500: paid at the counter from (4, 2)
+facing right (Gen 1 counter-talk), ring walked with
+a replanning BFS over grids compiled from pokered's
+.blk data, Gold Teeth lifted at West (19, 7), HM03
+SURF from the Secret House guru at West (3, 3) - his
+event flag (2176) sets at the END of the script, so
+the text is ridden fully before the flag is read.
+Six encounters, all RUN from through the Safari
+menu, balls 30 throughout: Doduo 26, Exeggcute 23,
+NidoranM 22, Paras 23, Nidorino 30, Venomoth 32 -
+nothing caught (the catching decision is Vlad's; the
+zone re-enters for JPY 500). Exit was a deliberate
+burn of the last 37 steps to ejection - items kept,
+auto-returned to the gate. The Warden's exchange
+verified both ways in RAM: teeth 1 -> 0, HM04
+STRENGTH in the bag, events 569/568 set. Neither HM
+was taught to anyone.
+
+Fuchsia Gym's invisible walls are honest collision
+tiles and the model grid sees them fine; the gym's
+real traps were social and mechanical. Engagement:
+stepping into a stance can start a sight trainer's
+walk-up, and a DIRECTION press during it aborts the
+engagement - ride it pressing only A; and a talk's
+first A must be pressed blind, because waiting for
+the dialog before pressing A never opens it (the
+press IS the talk). The stock battle driver then
+wedged twice on phases this gym serves constantly:
+the shift prompt's party screen with a text box open
+("... is already out!") - its stale-signature branch
+mashes A, which re-selects the active mon and loops
+forever - and move rejection (a Disable'd Hydro
+Pump), same A-mashing shape. The fix is a hardened
+loop: the party screen gets unconditional B priority
+(B backs out whether or not a text box is up; after
+a dozen B's it really switches), and the move pick
+rotates when a confirmation spends no PP. With it,
+the six trainers (events 602-607, object order
+confirmed by three flags before the rest were
+trusted) fell in seconds each. Koga (Koffing 37 /
+Muk 39 / Koffing 37 / Weezing 43): Blastoise walled
+the first three; the Weezing's Selfdestruct fainted
+Blastoise from full line duty AND itself - as Koga's
+last mon the double KO still pays: Soul Badge (6
+badge bits), event 601, TM06 Toxic into the freed
+bag slot (event 600), all verified from RAM. Two
+mid-gym heal trips; heal_at_pokecenter FAILS in
+Fuchsia (its counter logic never completes there) -
+the port heals by riding in and talking to the nurse
+directly.
+
+Chain head probe154/fuchsia.state, sha256
+6e30c19239abf2012ce88716f43251df145e75d1dceea2b2e
+ec2a297b250c669a - Fuchsia Pokecenter, party at full
+HP: Blastoise Lv58, Arcanine Lv39, Diglett Lv22,
+NidoranM Lv3, Voltorb Lv16 (Flash), Oddish Lv23
+(Cut); money JPY 115,288; dex 16; bag 19 stacks
+incl. HM03 + HM04 + TM06; box unchanged (Lapras,
+Hitmonlee + 5); PC storage: Potion, Lift Key, TM02,
+TM21, TM34. No blackouts all leg.
+
+Port (fuchsia_road + safari_zone_hms +
+give_teeth_get_strength + beat_koga): the Safari
+engine is the reusable core - SAFARI_GRIDS (grids
+compiled from pokered .blk under the bottom-left
+rule, embedded as bitsets), _safari_plan/_sz_nav
+(ring routing over the areas + world-model warp
+graph), _safari_steps (big-endian), _safari_run_
+battle (RUN-only; catching stays a policy, not a
+default), ejection as a legitimate exit when the
+budget won't cover the ring back. _drive_battle_
+hardened carries the party-screen B priority and
+the PP-stall rotation. deposit_item's PC-menu
+predicate is fixed. COLD REPLAY passed: fuchsia_
+road, safari_zone_hms and give_teeth_get_strength
+replayed uninterrupted from probe153/dojo.state with
+probe-identical money at every checkpoint (JPY
+104,056 / 103,556; the replay's five RUN-from
+encounters were Exeggcute 27, Paras 23, Nidorino 30,
+Chansey 26, Nidorina 30). beat_koga failed its first
+two replay attempts - a sight-engage dialog starving
+_step_to of A presses, then a beaten trainer's
+walked-up sprite blocking the planned cell invisibly
+to the tile grid - and the port now carries both
+fixes (dialog-aware stepping, learned sprite blocks)
+plus the probe's heal trips as umbrella recovery
+(_fuchsia_gym_heal_trip, lead under 40% or fainted);
+with them, beat_koga replayed from the same run's
+Warden state to an end state identical on every
+invariant: JPY 115,288, the same party at the same
+levels, Soul Badge, TM06. Tests 121/121
+(nine new: BE step counter, ball counter, grid
+dimensions and stood-on cells, ring-route plans over
+the real grids + pokered warp tables, ball cells
+never routed through, Fuchsia item/event constants).
+
+Gap notes: the bottom-left-tile rule is the general
+FOREST-tileset truth - the world model's walkable()
+is wrong for every forest map, not just the Safari
+Zone (Viridian Forest included), and pair collisions
+still have to be learned by stepping. The Safari
+Zone remains a one-visit place in the port: the
+engine enters, routes and leaves, but a catching
+expedition needs a throw/bait/rock policy and a
+target list, both Vlad's to set. The event-id
+numbering split (codebase evparse vs a fresh const
+parse, Fisher5 1160 vs 692) wants a diffing session
+against wEventFlags on a known state before any
+future leg trusts a fresh parse for a NEW flag.

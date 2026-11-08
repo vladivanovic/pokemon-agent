@@ -6319,8 +6319,17 @@ def deposit_item(emu: PyBoyEmulator, ex: Executor,
             emu.tick(25)
         return pred()
 
+    # probe154: the MAX==3/topY!=0 signature is stale-byte
+    # fragile in save lineages that have already used a PC -
+    # the bytes linger from the last session, the check
+    # passes while the screen still shows "turned on the
+    # PC.", and every later steer misses. The live menu is
+    # MAX==3 AND topY==2 AND the text box down (in_dialog
+    # False); the probe verified four deposits in a row
+    # with this predicate after the loose one failed.
     if not ride_until(lambda: mem[ADDR_MAX_MENU_ITEM] == 3
-                      and mem[ADDR_MENU_TOP_Y] != 0):
+                      and mem[ADDR_MENU_TOP_Y] == 2
+                      and not emu.read_state().in_dialog):
         return False
     if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 1):
         return False
@@ -7172,6 +7181,914 @@ def take_fossil_scene(emu: PyBoyEmulator, ex: Executor) -> bool:
         return True
     except StuckError:
         return False
+
+
+# ------------------------------------------------------------------
+# Fuchsia leg (probe154): the road south, the Safari Zone
+# HMs, and Koga. Four pieces of new machinery:
+#
+# * The Route 8 gatehouse, eastbound. Gate doors are
+#   DIRECTIONAL: a warp cell fires only when stepped onto
+#   heading INTO the building. The west strip of Route 8
+#   strands every stock ride on the door's top cell (1, 9);
+#   the crossing is a hand-walk to (0, 10) and a step EAST
+#   onto the door (the mirror of probe151's westbound
+#   crossing, which worked for the same reason).
+#
+# * A Safari engine. The world model's walkable() is
+#   wrong for FOREST maps (two of Center's three regions
+#   are unreachable in it): Gen 1 passability checks ONE
+#   tile - the destination cell's BOTTOM-LEFT tile -
+#   against the tileset's passable list (CheckTilePassable
+#   + GetTileAndCoordsInFrontOfPlayer in pokered). The
+#   grids below are compiled from pokered's .blk data
+#   under that rule. Center's west doors open only into
+#   its own sealed NW component, so the route to the
+#   West area RINGS the zone: Center -> East -> North ->
+#   West. wSafariSteps (0xD70D) is stored BIG-ENDIAN
+#   (0x01F4 = 500 at entry) and counts down; the exit,
+#   when the budget will not cover the ring back, is a
+#   deliberate burn to ejection (items are kept). Safari
+#   battles are RUN-only here - the typed driver would
+#   throw balls, which is a policy decision, not a
+#   default; encounters are recorded for the report.
+#
+# * _drive_battle_hardened: the stock _BattleDriver
+#   wedges on two Gen 1 battle phases the Fuchsia gym
+#   serves repeatedly - the shift prompt's party screen
+#   with a text box open ("... is already out!"), where
+#   its stale-signature branch mashes A and re-selects
+#   the active mon forever; and move-rejection states
+#   (Disable) with the same A-mashing shape. The hardened
+#   loop gives the party screen unconditional B priority
+#   (B backs out whether or not a text box is up) and
+#   rotates its move pick when a confirmation spends no
+#   PP. Gym trainers are engaged probe154's way: tile-
+#   path steps (never through object cells), a sight
+#   ride that presses ONLY A (a direction press during
+#   a trainer's walk-up aborts the engagement), then a
+#   talk whose first A is pressed blind - waiting for
+#   the dialog before pressing A never opens it.
+#
+# * heal_at_pokecenter fails in Fuchsia (its counter
+#   logic never completes there); the probe's manual
+#   ride + nurse talk is ported as _heal_fuchsia_pc.
+#
+# The leg's bag prep also fixed deposit_item (above):
+# its PC-menu signature was stale-byte fragile in
+# lineages that had already used a PC - the probe's
+# first three-TM deposit run withdrew the stored Potion
+# and Lift Key with a neighbouring predicate before the
+# corrected one deposited all four stacks cleanly
+# (fully repaired in the same phase; the end state was
+# verified stack-by-stack from RAM).
+# ------------------------------------------------------------------
+
+MAP_FUCHSIA = 7
+MAP_FUCHSIA_PC = 154
+MAP_WARDENS_HOUSE = 155
+MAP_SAFARI_GATE = 156
+MAP_FUCHSIA_GYM = 157
+MAP_SZ_EAST = 217
+MAP_SZ_NORTH = 218
+MAP_SZ_WEST = 219
+MAP_SZ_CENTER = 220
+MAP_SZ_SECRET_HOUSE = 222
+ITEM_GOLD_TEETH = 0x40
+ITEM_HM03_SURF = 0xC6
+ITEM_HM04_STRENGTH = 0xC7
+ITEM_TM02 = 0xCA
+ITEM_TM06_TOXIC = 0xCE
+ITEM_TM21 = 0xDD
+ITEM_TM34 = 0xEA
+EV_BEAT_ROUTE12_FISHER5 = 1160
+EV_IN_SAFARI_ZONE = 591
+EV_GOT_HM03 = 2176
+EV_GAVE_GOLD_TEETH = 569
+EV_GOT_HM04 = 568
+EV_GOT_TM06 = 600
+EV_BEAT_KOGA = 601
+EV_FUCHSIA_GYM_TRAINERS = (602, 603, 604, 605, 606, 607)
+ADDR_SAFARI_STEPS = 0xD70D        # wSafariSteps, BIG-ENDIAN
+ADDR_SAFARI_BALLS = 0xDA47        # wNumSafariBalls
+
+# Passability grids compiled from pokered (FOREST .blk
+# data, bottom-left-tile rule), one bit per cell,
+# row-major. Ball cells are blocked at plan time from
+# SAFARI_BALLS below (they are objects, not tiles).
+SAFARI_GRIDS = {
+    MAP_SZ_EAST: (30, 26, bytes.fromhex(
+        "00000080ffffffe7ffffff01ffff7fbffbf7dffffefd07807f"
+        "fff94fc87ffe3fff90ffcfbfe47f00bff91fc07ffefff887ff"
+        "3ffee17f807ff81f8005fe07601ff001d807b8fff701eeff7d"
+        "80fb7fdfef04c4f7fbefff7d00f87fffffff1f00000000")),
+    MAP_SZ_NORTH: (40, 36, bytes.fromhex(
+        "0000000000fcffffff3ffeffffff43feffffff4bfe0700f06f"
+        "fef7ccff7ffef7ffff7ffef7ffff7ffcf0ffff7ffcf0ffff7f"
+        "fef0fcff7ffef000007ffef0feff7efef0feff7e0efffeff7e"
+        "0efffeff640efffeff6f0efffeff6f0efffeff6f0efffeff6f"
+        "debffffd6fdebffffd6fdebffffd6fdebf47fc6fdeb0f7fb7f"
+        "ceb0f7fb7fdeb0f7fb7fde30f11300def0fdfb3fdef0fdff3f"
+        "defffdffffdedffdffffdefffdff3fdefff5ff3f0c03300000"
+        "6dfbb7ffff")),
+    MAP_SZ_WEST: (30, 26, bytes.fromhex(
+        "3cff330c0f000c13f8ffef25fef77bbdffff5aefffbfd7bfdf"
+        "eff5eff77bfdfbfd5eff60bf1700d8ef0520f67b01acfd5e00"
+        "6fbfc7fffbf7f1fffe7deeff7f9ffb7fc8e7fedfff3901f07f"
+        "fefffb9ffffffee7ffbfeffbffefff00fc3c00ffc0f00f")),
+    MAP_SZ_CENTER: (30, 26, bytes.fromhex(
+        "01c00060fffcffeb7ffffff9dfff7ffef7ff9ffffdffe77fff"
+        "fff9dfff7ffe00c08f3f0000f00f3ffcffc30ffffe00c09f3f"
+        "00f0e7bf6dfff900c07fc0ffff1fffffffe7ff0ffff9ffcb7f"
+        "fefffb9fffffffe7fffbfff9ffff7f79dfbe6700300008")),
+}
+SAFARI_BALLS_CELLS = {
+    MAP_SZ_EAST: frozenset({(21, 10), (3, 7), (20, 13),
+                            (15, 12)}),
+    MAP_SZ_NORTH: frozenset({(25, 1), (19, 7)}),
+    MAP_SZ_WEST: frozenset({(8, 20), (9, 7), (18, 18),
+                            (19, 7)}),
+    MAP_SZ_CENTER: frozenset({(14, 10)}),
+}
+SAFARI_AREAS = frozenset(SAFARI_GRIDS)
+_SZ_DIRS = {"up": (0, -1), "down": (0, 1), "left": (-1, 0),
+            "right": (1, 0)}
+
+
+def _safari_passable(map_id: int, cell) -> bool:
+    w, h, bits = SAFARI_GRIDS[map_id]
+    x, y = cell
+    if not (0 <= x < w and 0 <= y < h):
+        return False
+    i = y * w + x
+    return bool(bits[i // 8] & (1 << (i % 8)))
+
+
+def _safari_steps(emu: PyBoyEmulator) -> int:
+    """Steps left in the Safari game. The counter is
+    stored big-endian (verified: 0x01F4 = 500 at entry,
+    gate-interior steps not counted)."""
+    mem = emu.pb.memory
+    return (mem[ADDR_SAFARI_STEPS] << 8) | \
+        mem[ADDR_SAFARI_STEPS + 1]
+
+
+def _safari_balls(emu: PyBoyEmulator) -> int:
+    return emu.pb.memory[ADDR_SAFARI_BALLS]
+
+
+def _safari_run_battle(emu: PyBoyEmulator, seen: list) -> bool:
+    """Leave a Safari battle with RUN - the ONLY action
+    this leg takes in the zone (catching is a separate
+    decision; the typed driver would throw balls).
+    Records (species_id, level) in `seen`. Asserts the
+    ball count never moves."""
+    st = emu.read_state()
+    if not st.in_battle:
+        return True
+    mem = emu.pb.memory
+    seen.append((mem[ADDR_ENEMY_SPECIES],
+                 mem[ADDR_ENEMY_LEVEL]))
+    for _ in range(8):
+        if not emu.read_state().in_battle:
+            return _safari_balls(emu) == 30
+        _run_away(emu)
+    return not emu.read_state().in_battle and \
+        _safari_balls(emu) == 30
+
+
+def _safari_settle(emu: PyBoyEmulator, seen: list) -> None:
+    """Settle one in-zone step: RUN from any encounter,
+    close any sign dialog, wait for the walk to rest."""
+    for _ in range(40):
+        st = emu.read_state()
+        if st.in_battle:
+            if not _safari_run_battle(emu, seen):
+                raise RuntimeError("safari RUN failed")
+            continue
+        if st.in_dialog:
+            emu.close_dialog(max_presses=2)
+            continue
+        emu.tick(6)
+        st2 = emu.read_state()
+        if (st2.x, st2.y) == (st.x, st.y) \
+                and not st2.in_dialog and not st2.in_battle:
+            return
+
+
+def _safari_warp_edges(ex: Executor, map_id: int) -> dict:
+    """cell -> (dest_map, landing cell) for inter-area
+    warps, from the world model (Warp.dest_id is the
+    destination MAP; Warp.idx its landing warp index)."""
+    out = {}
+    for w in ex.world.maps[map_id].warps:
+        if w.dest_id in SAFARI_AREAS:
+            land = ex.world.maps[w.dest_id].warps[w.idx - 1]
+            out[(w.x, w.y)] = (w.dest_id, (land.x, land.y))
+    return out
+
+
+def _safari_plan(ex: Executor, start, goal, blocked):
+    """BFS over (map, cell) across the Safari areas.
+    Returns the action list: direction strings, with
+    "warp" for the edge taken while standing on a warp
+    cell - or None. Pure planning; execution replans
+    after every step."""
+    from collections import deque
+    edges = {m: _safari_warp_edges(ex, m) for m in SAFARI_AREAS}
+    prev = {start: None}
+    dq = deque([start])
+    while dq:
+        node = dq.popleft()
+        if node == goal:
+            break
+        m, c = node
+        for btn, (dx, dy) in _SZ_DIRS.items():
+            nb = (c[0] + dx, c[1] + dy)
+            st = (m, nb)
+            if st in prev or nb in blocked[m]:
+                continue
+            if not _safari_passable(m, nb) \
+                    and nb not in edges[m]:
+                continue
+            prev[st] = (node, btn)
+            dq.append(st)
+        if c in edges[m]:
+            st = edges[m][c]
+            if st not in prev:
+                prev[st] = (node, "warp")
+                dq.append(st)
+    if goal not in prev:
+        return None
+    path = []
+    n = goal
+    while prev[n] is not None:
+        pn, pb = prev[n]
+        path.append(pb)
+        n = pn
+    return list(reversed(path))
+
+
+def _sz_nav(emu: PyBoyEmulator, ex: Executor, goal_map: int,
+            goal_cell, seen: list,
+            budget_guard: int = 45) -> bool:
+    """Walk the Safari areas to (goal_map, goal_cell),
+    replanning after every step and learning blocked
+    cells (tile-pair collisions add blocks the tile
+    grid cannot see). Aborts under the step guard."""
+    blocked = {m: set(SAFARI_BALLS_CELLS.get(m, ()))
+               for m in SAFARI_AREAS}
+    edges = {m: _safari_warp_edges(ex, m) for m in SAFARI_AREAS}
+    for _ in range(1200):
+        st = emu.read_state()
+        cur = (st.map_id, (st.x, st.y))
+        if cur == (goal_map, goal_cell):
+            return True
+        if st.map_id not in SAFARI_AREAS:
+            return False
+        if _safari_steps(emu) < budget_guard:
+            return False
+        path = _safari_plan(ex, cur, (goal_map, goal_cell),
+                            blocked)
+        if not path:
+            return False
+        btn = path[0]
+        if btn == "warp":
+            # standing on the warp cell without it having
+            # fired (a landing): step off and back on
+            dest = edges[cur[0]][cur[1]]
+            stepped = False
+            for b2, (dx, dy) in _SZ_DIRS.items():
+                nb = (cur[1][0] + dx, cur[1][1] + dy)
+                if _safari_passable(cur[0], nb) \
+                        and nb not in blocked[cur[0]]:
+                    emu.press(b2)
+                    _safari_settle(emu, seen)
+                    emu.press({"up": "down", "down": "up",
+                               "left": "right",
+                               "right": "left"}[b2])
+                    _safari_settle(emu, seen)
+                    stepped = \
+                        emu.read_state().map_id == dest[0]
+                    break
+            if not stepped \
+                    and emu.read_state().map_id == cur[0]:
+                return False
+            continue
+        dx, dy = _SZ_DIRS[btn]
+        want = (cur[1][0] + dx, cur[1][1] + dy)
+        emu.press(btn)
+        _safari_settle(emu, seen)
+        st = emu.read_state()
+        if st.map_id == cur[0] and (st.x, st.y) == cur[1]:
+            blocked[cur[0]].add(want)
+    return False
+
+
+def _safari_warp_step(emu: PyBoyEmulator, seen: list,
+                      btn: str, expect_map: int) -> bool:
+    """Step onto a door/edge warp cell until the map
+    changes (doors fire only when stepped onto heading
+    in, so this is always a single deliberate step)."""
+    for _ in range(6):
+        emu.press(btn)
+        _explore_settle(emu)
+        _safari_settle(emu, seen)
+        if emu.read_state().map_id == expect_map:
+            return True
+    return emu.read_state().map_id == expect_map
+
+
+def safari_zone_hms(emu: PyBoyEmulator, ex: Executor,
+                    seen: list = None) -> bool:
+    """One Safari entry for the two HMs (probe154):
+    pay at the gate, ring Center -> East -> North ->
+    West, take the GOLD TEETH, take HM03 SURF from the
+    Secret House guru, and leave - by deliberate
+    ejection when the step budget will not cover the
+    ring back. NOTHING is caught: every encounter is
+    RUN from (species are appended to `seen` if given).
+    Ends back in Fuchsia City with both items in the
+    bag, verified from RAM."""
+    if seen is None:
+        seen = []
+    world = ex.world
+    if emu.read_state().map_id != MAP_SAFARI_GATE:
+        if not _ride_battling(emu, ex, MAP_SAFARI_GATE):
+            return False
+    # pay the clerk: he stands at (6, 2) behind the
+    # counter; talk across it from (4, 2) facing right
+    money0 = emu.read_state().money
+    _walk_fighting(emu, ex, MAP_SAFARI_GATE, (4, 2),
+                   attempts=20)
+    if (emu.read_state().x, emu.read_state().y) != (4, 2):
+        return False
+    emu.press("right")
+    emu.tick(20)
+    _press10(emu, "a")
+    paid = False
+    for _ in range(200):
+        if _safari_balls(emu) == 30 and \
+                _event_flag(emu, EV_IN_SAFARI_ZONE):
+            paid = True
+            break
+        if emu.read_state().in_dialog:
+            _press10(emu, "a")
+        emu.tick(25)
+    if not paid or emu.read_state().money != money0 - 500:
+        return False
+    # north into Center
+    for _ in range(10):
+        emu.press("up")
+        _explore_settle(emu)
+        _safari_settle(emu, seen)
+        if emu.read_state().map_id == MAP_SZ_CENTER:
+            break
+    if emu.read_state().map_id != MAP_SZ_CENTER:
+        return False
+    # ring to the West area: the teeth at (19, 7),
+    # stance (19, 8) facing up
+    if not _sz_nav(emu, ex, MAP_SZ_WEST, (19, 8), seen):
+        return False
+    emu.press("up")
+    emu.tick(20)
+    _press10(emu, "a")
+    for _ in range(120):
+        if _bag_count(emu, ITEM_GOLD_TEETH) > 0:
+            break
+        if emu.read_state().in_dialog:
+            _press10(emu, "a")
+        emu.tick(25)
+    if _bag_count(emu, ITEM_GOLD_TEETH) != 1:
+        return False
+    # the Secret House at West (3, 3), stance (3, 4)
+    if not _sz_nav(emu, ex, MAP_SZ_WEST, (3, 4), seen,
+                   budget_guard=5):
+        return False
+    if not _safari_warp_step(emu, seen, "up",
+                             MAP_SZ_SECRET_HOUSE):
+        return False
+    # the guru at (3, 3): HM03's event flag is set at
+    # the END of his script, so ride the text fully
+    got = False
+    for stance, face in (((3, 4), "up"), ((2, 3), "right"),
+                         ((4, 3), "left"), ((3, 2), "down")):
+        _walk_fighting(emu, ex, MAP_SZ_SECRET_HOUSE, stance,
+                       attempts=20)
+        st = emu.read_state()
+        if (st.x, st.y) != stance:
+            continue
+        emu.press(face)
+        emu.tick(20)
+        _press10(emu, "a")
+        quiet = 0
+        for _ in range(300):
+            if emu.read_state().in_dialog:
+                quiet = 0
+                _press10(emu, "a")
+            else:
+                quiet += 1
+                if quiet >= 6 and \
+                        _bag_count(emu, ITEM_HM03_SURF) > 0:
+                    break
+            emu.tick(25)
+        if _bag_count(emu, ITEM_HM03_SURF) > 0:
+            got = True
+            break
+    if not got or not _event_flag(emu, EV_GOT_HM03):
+        return False
+    # out of the house
+    for _ in range(8):
+        emu.press("down")
+        _explore_settle(emu)
+        _safari_settle(emu, seen)
+        if emu.read_state().map_id == MAP_SZ_WEST:
+            break
+    if emu.read_state().map_id != MAP_SZ_WEST:
+        return False
+    # leave: ring back if the budget clearly covers it,
+    # else burn the counter to ejection (items kept)
+    if _safari_steps(emu) >= 260 and _sz_nav(
+            emu, ex, MAP_SZ_CENTER, (14, 24), seen,
+            budget_guard=30):
+        _safari_warp_step(emu, seen, "down", MAP_SAFARI_GATE)
+    else:
+        for i in range(240):
+            if emu.read_state().map_id == MAP_SAFARI_GATE:
+                break
+            emu.press("left" if i % 2 == 0 else "right")
+            _safari_settle(emu, seen)
+    if emu.read_state().map_id != MAP_SAFARI_GATE:
+        return False
+    for _ in range(80):
+        st = emu.read_state()
+        if st.in_dialog:
+            _press10(emu, "a")
+            emu.tick(25)
+            continue
+        emu.tick(20)
+    if _safari_balls(emu) != 0 or \
+            _event_flag(emu, EV_IN_SAFARI_ZONE):
+        return False
+    for _ in range(10):
+        emu.press("down")
+        _explore_settle(emu)
+        st = emu.read_state()
+        if st.in_dialog:
+            emu.close_dialog(max_presses=3)
+        if st.map_id == MAP_FUCHSIA:
+            break
+    return emu.read_state().map_id == MAP_FUCHSIA and \
+        _bag_count(emu, ITEM_GOLD_TEETH) == 1 and \
+        _bag_count(emu, ITEM_HM03_SURF) == 1
+
+
+def give_teeth_get_strength(emu: PyBoyEmulator,
+                            ex: Executor) -> bool:
+    """The Warden exchange (probe154): his house is the
+    SE Fuchsia warp (27, 27); he stands at (2, 3). With
+    the GOLD TEETH in the bag his talk hands over HM04
+    STRENGTH and takes the teeth - both directions
+    verified from RAM, events at the script's end."""
+    if not _ride_battling(emu, ex, MAP_WARDENS_HOUSE):
+        return False
+    for stance, face in (((2, 4), "up"), ((1, 3), "right"),
+                         ((3, 3), "left"), ((2, 2), "down")):
+        _walk_fighting(emu, ex, MAP_WARDENS_HOUSE, stance,
+                       attempts=20)
+        st = emu.read_state()
+        if (st.x, st.y) != stance:
+            continue
+        emu.press(face)
+        emu.tick(20)
+        _press10(emu, "a")
+        quiet = 0
+        for _ in range(300):
+            if emu.read_state().in_dialog:
+                quiet = 0
+                _press10(emu, "a")
+            else:
+                quiet += 1
+                if quiet >= 6 and \
+                        _bag_count(emu, ITEM_HM04_STRENGTH) > 0:
+                    break
+            emu.tick(25)
+        if _bag_count(emu, ITEM_HM04_STRENGTH) > 0:
+            break
+    return _bag_count(emu, ITEM_GOLD_TEETH) == 0 and \
+        _bag_count(emu, ITEM_HM04_STRENGTH) == 1 and \
+        _event_flag(emu, EV_GAVE_GOLD_TEETH) and \
+        _event_flag(emu, EV_GOT_HM04)
+
+
+def _cross_r8_gate_east(emu: PyBoyEmulator,
+                        ex: Executor) -> bool:
+    """Route 8's gatehouse, eastbound (probe154): from
+    the west strip, stand at (0, 10) and step EAST onto
+    the door; walk the corridor east and out. Verifies
+    both map changes and the east-segment landing."""
+    gate = ex.world.map_id("Route8Gate")
+    r8 = ex.world.map_id("Route8")
+    _walk_fighting(emu, ex, r8, (0, 10), attempts=30)
+    st = emu.read_state()
+    if (st.x, st.y) != (0, 10):
+        return False
+    if not _step_until_map(emu, "right", gate):
+        return False
+    if not _step_until_map(emu, "right", r8):
+        return False
+    st = emu.read_state()
+    return st.map_id == r8 and st.x >= 8
+
+
+def _heal_fuchsia_pc(emu: PyBoyEmulator,
+                     ex: Executor) -> bool:
+    """Fuchsia heal (probe154): heal_at_pokecenter's
+    counter logic never completes in this Pokecenter,
+    so ride in and talk to the nurse directly; verify
+    the whole party at full HP."""
+    fpc = ex.world.map_id("FuchsiaPokecenter")
+    if emu.read_state().map_id != fpc:
+        if not _ride_battling(emu, ex, fpc):
+            return False
+    for stance in ((3, 3), (4, 3)):
+        _walk_fighting(emu, ex, fpc, stance, attempts=20)
+        st = emu.read_state()
+        if (st.x, st.y) != stance:
+            continue
+        emu.press("up")
+        emu.tick(20)
+        _press10(emu, "a")
+        quiet = 0
+        for _ in range(300):
+            st = emu.read_state()
+            if st.in_dialog:
+                quiet = 0
+                _press10(emu, "a")
+            else:
+                quiet += 1
+                if quiet >= 6 and all(
+                        m.hp == m.max_hp for m in st.party):
+                    break
+            emu.tick(25)
+        if all(m.hp == m.max_hp
+               for m in emu.read_state().party):
+            return True
+    return all(m.hp == m.max_hp
+               for m in emu.read_state().party)
+
+
+def fuchsia_road(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Saffron -> Fuchsia (probe154). Bag prep first:
+    deposit TM02/TM21/TM34 at the Saffron PC (the leg
+    adds HM03, HM04, the teeth and TM06 to a 19-stack
+    bag; Gen 1's cap is 20). Then the road south as
+    per-map hops with the gate crossings by hand.
+    Route 12's Fisher5 (event 1160) is NEVER engaged -
+    his west-shore pocket is tile-sealed - and the
+    guard is asserted at every checkpoint. Ends healed
+    at the Fuchsia Pokecenter."""
+    world = ex.world
+    pc = world.map_id("SaffronPokecenter")
+    city = world.map_id("SaffronCity")
+    if _event_flag(emu, EV_BEAT_ROUTE12_FISHER5):
+        return False
+    if emu.read_state().map_id != pc:
+        if not _enter_saffron_pc(emu, ex):
+            return False
+    for tm in (ITEM_TM02, ITEM_TM21, ITEM_TM34):
+        if _bag_count(emu, tm) > 0:
+            if not deposit_item(emu, ex, pc, tm):
+                return False
+    from agent.executor import StuckError
+    bag = emu.read_state()
+    if len(_bag_items(emu)) != 16:
+        return False
+    # exit the Pokecenter
+    for door in ((3, 7), (4, 7)):
+        try:
+            ex._walk_to(pc, door)
+        except StuckError:
+            continue
+        for _ in range(6):
+            emu.press("down")
+            _explore_settle(emu)
+            if emu.read_state().map_id != pc:
+                break
+        if emu.read_state().map_id != pc:
+            break
+    if emu.read_state().map_id != city:
+        return False
+    if not _hop_ride(emu, ex, ["Route8"]):
+        return False
+    if not _cross_r8_gate_east(emu, ex):
+        return False
+    if not _hop_ride(emu, ex, ["LavenderTown"]):
+        return False
+    if not _hop_ride(emu, ex, ["Route12"]):
+        return False
+    if _event_flag(emu, EV_BEAT_ROUTE12_FISHER5):
+        return False
+    if not _cross_gate12_south(emu, ex):
+        return False
+    if not _pier_walk(emu, ex, PIER_WAYPOINTS_S):
+        return False
+    if _event_flag(emu, EV_BEAT_ROUTE12_FISHER5):
+        return False
+    if not _step_until_map(emu, "down",
+                           world.map_id("Route13")):
+        return False
+    _walk_fighting(emu, ex, world.map_id("Route13"),
+                   (1, 10), attempts=30)
+    if not _step_until_map(emu, "left",
+                           world.map_id("Route14")):
+        return False
+    if not _ride_battling(emu, ex, world.map_id("Route15")):
+        return False
+    if not _ride_battling(emu, ex, MAP_FUCHSIA):
+        return False
+    if _event_flag(emu, EV_BEAT_ROUTE12_FISHER5):
+        return False
+    return _heal_fuchsia_pc(emu, ex)
+
+
+def _drive_battle_hardened(emu: PyBoyEmulator) -> bool:
+    """Battle driver for the Fuchsia gym (probe154),
+    written after the stock driver wedged twice:
+    (1) the shift prompt's party screen with a text box
+    open - B is pressed BEFORE any dialog A, because A
+    there re-selects the active mon and the "already
+    out!" text loops forever; after a dozen B's it
+    genuinely switches to the next healthy mon instead.
+    (2) move rejection (Disable and friends) - the pick
+    rotates when a confirmation spends no PP. Move
+    preference is slot order [0, 2, 3, 1] filtered by
+    the ACTIVE mon's PP (for Blastoise: Hydro Pump,
+    Bubble, Water Gun, Tail Whip)."""
+    mem = emu.pb.memory
+    drv = _BattleDriver(emu)
+    want_cycle = [0, 2, 3, 1]
+    wi = 0
+    stall = 0
+    party_bs = 0
+    for _ in range(8000):
+        st = emu.read_state()
+        if not st.in_battle:
+            return True
+        top_y = mem[ADDR_MENU_TOP_Y]
+        item = mem[ADDR_MENU_ITEM]
+        col = mem[ADDR_MENU_COL]
+        if top_y == 1:                # party screen
+            party_bs += 1
+            if party_bs > 12:
+                _press10(emu, "down")
+                emu.tick(15)
+                _press10(emu, "a")
+                emu.tick(40)
+                party_bs = 0
+            else:
+                _press10(emu, "b")
+                emu.tick(30)
+            continue
+        if st.in_dialog:
+            _press10(emu, "a")
+            emu.tick(15)
+            continue
+        if top_y == 12:               # move menu
+            active = drv._active_party_idx()
+            mon = st.party[active]
+            usable = [s for s in want_cycle
+                      if s < len(mon.moves) and mon.moves[s]
+                      and s < len(mon.pp) and mon.pp[s] > 0]
+            if not usable:
+                usable = [0]
+            want = usable[wi % len(usable)] + 1
+            if item == want:
+                pp = tuple(mon.pp)
+                _press10(emu, "a")
+                emu.tick(40)
+                pp2 = tuple(emu.read_state()
+                            .party[active].pp)
+                if pp2 == pp:
+                    stall += 1
+                    if stall >= 2:
+                        wi += 1
+                        stall = 0
+                else:
+                    stall = 0
+            elif item < want:
+                _press10(emu, "down")
+                emu.tick(15)
+            else:
+                _press10(emu, "up")
+                emu.tick(15)
+            continue
+        if top_y == 14:               # main menu
+            if col == 15:
+                _press10(emu, "left")
+            elif item == 1:
+                _press10(emu, "up")
+            else:
+                _press10(emu, "a")
+            emu.tick(20)
+            continue
+        emu.tick(30)
+    return not emu.read_state().in_battle
+
+
+# (cell, stance, face, event) in object order. Facings:
+# R1 Juggler7 (8, 13) DOWN - Hypno 38; R2 Juggler3
+# (7, 8) RIGHT - Drowzee/Drowzee/Kadabra/Drowzee 31;
+# R3 Juggler8 (1, 12) DOWN - Drowzee 34/Kadabra 34;
+# R4 Tamer1 (3, 5) UP (his sight line is wall-blocked;
+# talk only) - Sandslash 34/Arbok 34; R5 Tamer2 (8, 2)
+# DOWN - Arbok/Sandslash/Arbok 33; R6 Juggler4 (2, 7)
+# LEFT - Drowzee 34/Hypno 34.
+FUCHSIA_GYM_TRAINERS = (
+    ((8, 13), (8, 12), "down", 602),
+    ((7, 8), (7, 9), "up", 603),
+    ((1, 12), (1, 13), "up", 604),
+    ((3, 5), (2, 5), "right", 605),
+    ((8, 2), (8, 3), "up", 606),
+    ((2, 7), (1, 7), "right", 607),
+)
+FUCHSIA_GYM_CELLS = frozenset(
+    [c for c, _, _, _ in FUCHSIA_GYM_TRAINERS]
+    + [(4, 10), (7, 15)])     # Koga, the gym guide
+KOGA_CELL = (4, 10)
+KOGA_STANCE = (4, 11)
+
+
+def _fuchsia_gym_step_to(emu: PyBoyEmulator,
+                         ex: Executor, target) -> bool:
+    """Tile-path stepping inside Fuchsia Gym (the
+    invisible walls are real collision tiles and the
+    world model's grid sees them - probe154 verified
+    the model against RAM for the whole room). Object
+    cells are never routed through."""
+    world = ex.world
+    learned = set()     # cells a press proved blocked
+    for _ in range(120):
+        st = emu.read_state()
+        if st.in_battle or st.in_dialog:
+            # a sight engagement is pending (its dialog
+            # is up); the caller rides it - direction
+            # presses here would be eaten anyway
+            return True
+        if (st.x, st.y) == target:
+            return True
+        path = world.tile_path(MAP_FUCHSIA_GYM,
+                               (st.x, st.y), target,
+                               blocked=frozenset(
+                                   (FUCHSIA_GYM_CELLS
+                                    | learned) - {target}))
+        if not path or len(path) < 2:
+            return False
+        nxt = path[1]
+        d = (nxt[0] - st.x, nxt[1] - st.y)
+        btn = {v: k for k, v in _SZ_DIRS.items()}[d]
+        emu.press(btn)
+        _explore_settle(emu)
+        st2 = emu.read_state()
+        if (st2.x, st2.y) == (st.x, st.y) \
+                and not st2.in_battle and not st2.in_dialog:
+            # the press moved nothing and no engagement
+            # is pending: the cell is sprite-blocked (a
+            # beaten trainer who walked up stands there)
+            learned.add(nxt)
+    st = emu.read_state()
+    return (st.x, st.y) == target or st.in_battle
+
+
+def _fuchsia_gym_fight(emu: PyBoyEmulator, ex: Executor,
+                       stance, face: str, event: int) -> bool:
+    """Engage one Fuchsia gym trainer (or Koga) and
+    fight him with the hardened driver. Two phases:
+    ride a possibly-running sight engagement pressing
+    ONLY A (a direction press during the walk-up
+    aborts it), then talk - turn toward the trainer
+    (his cell is occupied, so the press only turns)
+    and press A blind."""
+    if _event_flag(emu, event):
+        return True
+    # best effort: the walk may be interrupted by the
+    # sight engagement itself, which the ride below
+    # resolves - step_to's result is not a verdict
+    _fuchsia_gym_step_to(emu, ex, stance)
+    for _ in range(60):
+        st = emu.read_state()
+        if st.in_battle:
+            break
+        if st.in_dialog:
+            _press10(emu, "a")
+        emu.tick(30)
+    if not emu.read_state().in_battle:
+        emu.press(face)
+        emu.tick(20)
+        _press10(emu, "a")
+        for _ in range(500):
+            st = emu.read_state()
+            if st.in_battle:
+                break
+            if st.in_dialog:
+                _press10(emu, "a")
+            emu.tick(30)
+    if emu.read_state().in_battle:
+        _drive_battle_hardened(emu)
+    # ride the post-battle text fully: leader scripts
+    # set their events at the END (HM03's lesson)
+    quiet = 0
+    for _ in range(400):
+        st = emu.read_state()
+        if st.in_dialog:
+            quiet = 0
+            _press10(emu, "a")
+        else:
+            quiet += 1
+            if quiet >= 8 and _event_flag(emu, event):
+                break
+        emu.tick(25)
+    return _event_flag(emu, event)
+
+
+def _fuchsia_gym_heal_trip(emu: PyBoyEmulator,
+                            ex: Executor) -> bool:
+    """Out of the gym, healed at the Fuchsia PC, and
+    back in - the probe needed two of these (a poison
+    spiral in the R2 fight, Hydro Pump running dry
+    before R4). Trainer flags persist, so the sweep
+    simply resumes."""
+    from agent.executor import StuckError
+    for door in ((4, 17), (5, 17)):
+        try:
+            ex._walk_to(MAP_FUCHSIA_GYM, door)
+        except StuckError:
+            continue
+        for _ in range(6):
+            emu.press("down")
+            _explore_settle(emu)
+            if emu.read_state().map_id != MAP_FUCHSIA_GYM:
+                break
+        if emu.read_state().map_id != MAP_FUCHSIA_GYM:
+            break
+    if emu.read_state().map_id == MAP_FUCHSIA_GYM:
+        return False
+    if not _heal_fuchsia_pc(emu, ex):
+        return False
+    return _ride_battling(emu, ex, MAP_FUCHSIA_GYM)
+
+
+def beat_koga(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Fuchsia Gym (probe154): six trainers, then Koga
+    (Koffing 37 / Muk 39 / Koffing 37 / Weezing 43 -
+    the Weezing's Selfdestruct fainted Blastoise in the
+    probe and KO'd itself with him as Koga's last mon,
+    so the badge still landed). Verifies every trainer
+    flag, the Soul Badge (6 badge bits), event 601 and
+    TM06 in the bag; ends healed at the Fuchsia PC."""
+    if not _ride_battling(emu, ex, MAP_FUCHSIA_GYM):
+        return False
+
+    def healthy_enough() -> bool:
+        st = emu.read_state()
+        lead = st.party[0]
+        if lead.hp == 0 or lead.hp * 5 < lead.max_hp * 2:
+            return _fuchsia_gym_heal_trip(emu, ex)
+        return True
+
+    for cell, stance, face, ev in FUCHSIA_GYM_TRAINERS:
+        if not _event_flag(emu, ev) and not healthy_enough():
+            return False
+        if not _fuchsia_gym_fight(emu, ex, stance, face, ev):
+            return False
+    if not healthy_enough():
+        return False
+    if not _fuchsia_gym_fight(emu, ex, KOGA_STANCE, "up",
+                              EV_BEAT_KOGA):
+        return False
+    st = emu.read_state()
+    if len(st.badges) != 6 or "Soul" not in st.badges:
+        return False
+    if _bag_count(emu, ITEM_TM06_TOXIC) != 1 or \
+            not _event_flag(emu, EV_GOT_TM06):
+        return False
+    # exit south and heal
+    from agent.executor import StuckError
+    for door in ((4, 17), (5, 17)):
+        try:
+            ex._walk_to(MAP_FUCHSIA_GYM, door)
+        except StuckError:
+            continue
+        for _ in range(6):
+            emu.press("down")
+            _explore_settle(emu)
+            if emu.read_state().map_id != MAP_FUCHSIA_GYM:
+                break
+        if emu.read_state().map_id != MAP_FUCHSIA_GYM:
+            break
+    return _heal_fuchsia_pc(emu, ex)
+
+
 
 
 def main() -> int:
