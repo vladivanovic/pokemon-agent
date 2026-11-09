@@ -1388,3 +1388,152 @@ numbering split (codebase evparse vs a fresh const
 parse, Fisher5 1160 vs 692) wants a diffing session
 against wEventFlags on a known state before any
 future leg trusts a fresh parse for a NEW flag.
+
+## 20. Lapras Surf + Safari rare hunt (2026-11-09, probe155): the HM a star cannot learn, one-way geography, and the zoo again
+
+Job A was Vlad's call over the lean presented to him:
+Surf goes to the boxed Lapras, not over Blastoise's
+Bubble. At the Fuchsia PC, TM24/TM29/TM46 were deposited
+first (the bag sat at 19 stacks and the hunt prep needed
+room for two rods), then NidoranM (Lv3) was deposited
+and Lapras Lv15 withdrawn. Lapras knew Water Gun and
+Growl - two moves - so per pokered's LearnMove the HM03
+teach could only fill the first empty slot: the
+forget-flow runs solely at four full slots, and the port
+asserts exactly that (the ONLY legal change is the move
+appended in the first free slot). Verified from RAM:
+Lapras [Water Gun, Growl, SURF], in the party at slot 5,
+Blastoise's four move bytes byte-identical (Hydro Pump /
+Tail Whip / Bubble / Water Gun). The port is
+teach_hm_to_boxed over _pc_swap_with_heal - stock
+pc_swap ends in heal_at_pokecenter, which §19 proved
+fails in Fuchsia - and its cold replay from
+probe154/fuchsia.state reproduced the probe's end state
+exactly (party, money, bag, box all compared
+field-by-field).
+
+Job C died on a ROM fact. Vlad's follow-up decision -
+teach HM04 Strength to Arcanine replacing Roar - is
+engine-impossible: Arcanine's tmhm bitfield in
+data/pokemon/base_stats/arcanine.asm (the very data
+CanLearnTM reads) contains no HMs at all, and neither
+does Growlithe's. Verified three ways: the bitfield
+itself, a behavioural teach attempt with the identical
+flow that had just taught Lapras (Arcanine's moves came
+back unchanged), and the HM04 teach-flow frames. The
+coordinator declined the fallback of writing Strength
+into Arcanine's struct: Vlad had authorised a struct
+edit only to REMOVE Roar after a legitimate teach, and
+adding a move the engine would never produce is a
+brighter legitimacy line - it would taint a save line
+whose ports and cold replays are all engine-verified.
+Arcanine stays Bite/Roar/Ember. The verified
+alternatives are Vlad's to pick: Lapras can learn
+Strength into its free fourth slot right now (making
+it the two-HM carrier: Water Gun/Growl/Surf/Strength);
+the boxed Hitmonlee can learn it; Blastoise can, at
+the price of a replacement decision he already
+declined once. Until he chooses, Strength is on
+nobody: Surf alone reaches Cinnabar, but the Seafoam
+crossing wants both.
+
+Job B's rods ran into geography. The Good Rod is a free
+gift in Fuchsia (Guru's brother, map 164) and was
+collected and bag-verified - and it cannot produce
+Dratini anywhere (its only group is Goldeen/Poliwag
+Lv10). Dratini needs the Super Rod (the four Safari
+areas share its group: Dratini/Krabby/Psyduck/Slowpoke
+Lv15, 12.5% per cast). The brief's detour - hop rides
+Fuchsia -> R15 -> R14 -> R13 -> R12 house - is one-way-
+locked in reverse, engine-verified: that road is a
+one-way descent from Lavender. Route 13's plateau and
+its pier strip are separate components joined only by
+ledge jumps downward; Route 14's north strip is the
+same trap; the world model's and even the compiled
+engine-rule grids agree there is no eastbound path, the
+executor's own tile_path concurs, and the one live
+_executor ride spun replanning against the ledges. There
+is no Bicycle in the bag for Cycling Road, and the only
+feasible route (Surf R19/R21 to Pallet, Diglett's Cave,
+R11, the R12 gate, the pier) needs Surf-step machinery
+the executor does not have - water maps are capability-
+gated in the world model but no surf step exists in the
+executor. Making that trip is a scope decision for
+Vlad, so Dratini was left unfished and the four entries
+went to grass. Fisher5 was never engaged; nothing went
+near Route 16's Snorlax.
+
+The hunt itself (four entries, Y500 each, money
+115,288 -> 113,288; dex 16 -> 22). Encounter data was
+compiled from pokered (grass slot 8 = 4.3%, slot 9 =
+1.2%): East holds Kangaskhan (s8) and Scyther (s9),
+North Chansey (s8) and Tauros (s9), West Tauros (s8)
+and Kangaskhan (s9), Center Scyther (s8) and Chansey
+(s9). Species were read by INTERNAL id; a naive parse
+of pokemon_constants.asm that ignores const_skip shifts
+every later id (it produced Chansey 0x26, Dratini 0x48,
+a "Tauros" that is Diglett) - the const_skip-aware
+parse validates against all 16 species constants this
+codebase already carried and against §19's raw Chansey
+sighting byte 0x28. The Safari battle menu's cursor
+bytes were measured live: left column 1, right column
+13, no wrap (BALL=(0,1), BAIT=(0,13), ROCK=(1,1),
+RUN=(1,13)) - _run_away's stale 15 is never reached,
+which is harmless for RUN but wrong for aimed picks.
+
+Entries: E1 East - PARAS 22, DODUO 26, EXEGGCUTE 25,
+NIDORINO 33 caught; Kangaskhan twice fled. E2 North -
+RHYHORN 26 caught; Tauros 28 seen and fled. E3 East
+again (West proved unreachable: Center's fence-maze gap
+is mis-modelled in SAFARI_GRIDS and the world model
+alike, and _sz_nav's warp-cell dance dies at North
+(38,12) on the ring) - KANGASKHAN 25 caught on its
+fifth encounter of the entry. E4 North - no catches;
+Tauros twice more, a Chansey in an earlier transit,
+Scyther once in a discarded crash run. All catches
+filed in the BOX (party full; SendNewMonToBox files
+with no nickname prompt) and verified from RAM: dex
+count, box contents, species. Final box additions:
+Paras, Doduo, Exeggcute, Nidorino, Rhyhorn, Kangaskhan.
+
+Two hunt mechanics notes. First, the exit: when the
+step counter hits zero the PA announcement is a dialog,
+and an unridden dialog freezes the player solid -
+entry 1's first burn loop pressed directions for 600
+iterations against an open text box. The hunt settle
+rides dialogs (close_dialog) as well as battles; the
+rescue from the mid-entry checkpoint (saved after
+every catch - the other lesson: a dead process loses
+its log, so battle records now print as they complete)
+ejected cleanly. Second, bait: the compiled formula
+(engine/battle/core.asm - after each action, flee iff
+a random byte < speed*2, /4 while the bait factor at
+0xCCE9 is up, *2 while the escape factor at 0xCCE8 is
+up; bait halves the catch rate, rock doubles it) says
+bait-first is right for the rares. The live hunt
+disagreed in pattern if not in law: every baited
+target fled after exactly one ball (10 of 11
+encounters) and all six catches were unbaited
+first-ball throws. The formula is engine-true and the
+factor byte was read live, so the pattern is recorded
+as an open question - bait-duration rolls and the
+deterministic input cadence correlating the RNG are
+the candidate causes - not as a mechanics claim. A
+future hunt should A/B it deliberately.
+
+Port: teach_hm_to_boxed, _pc_swap_with_heal,
+_teach_hm_free_slot (strict free-slot assertion),
+get_good_rod, safari_rare_hunt with _safari_hunt_entry
+(stock-settle transits - the hunt settle breaks
+_sz_nav's warp dance; pacing hunts), _safari_hunt_battle
+(bait/ball policy above), _safari_menu_pick,
+_safari_grass_pair over the compiled SAFARI_GRASS
+bitsets, and the target/catch/speed tables. Fidelity:
+Job A cold-replayed exactly; the hunt port is a
+faithful procedure (Safari RNG does not reproduce
+catches). No Job C code exists, deliberately. Tests
+128/128 (7 new). Chain head probe155/safari-hunt.state:
+Fuchsia PC, party healed, Lapras aboard with Surf,
+dex 22, money Y113,288. Open for Vlad: the Strength
+carrier, the Super Rod trip (and with it Dratini), and
+Route 16's Snorlax.

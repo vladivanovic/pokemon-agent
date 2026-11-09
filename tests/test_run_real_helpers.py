@@ -570,3 +570,68 @@ class TestFuchsiaConstants(unittest.TestCase):
         cells = [c for c, _, _, _ in rr.FUCHSIA_GYM_TRAINERS]
         self.assertEqual(cells, [(8, 13), (7, 8), (1, 12),
                                  (3, 5), (8, 2), (2, 7)])
+
+
+class TestSafariHunt(unittest.TestCase):
+    def test_target_species_internal_ids(self):
+        # const_skip-aware parse of pokered
+        # constants/pokemon_constants.asm, validated against
+        # every species constant run_real already carried
+        self.assertEqual(rr.SAFARI_SPECIES[0x28], "CHANSEY")
+        self.assertEqual(rr.SAFARI_SPECIES[0x02], "KANGASKHAN")
+        self.assertEqual(rr.SAFARI_SPECIES[0x3C], "TAUROS")
+        self.assertEqual(rr.SAFARI_SPECIES[0x1A], "SCYTHER")
+        self.assertEqual(rr.SAFARI_SPECIES[0x58], "DRATINI")
+        self.assertEqual(rr.SAFARI_TARGETS,
+                         frozenset({0x28, 0x02, 0x3C, 0x1A, 0x58}))
+
+    def test_rod_hm_move_ids(self):
+        self.assertEqual(rr.ITEM_GOOD_ROD, 0x4D)
+        self.assertEqual(rr.ITEM_SUPER_ROD, 0x4E)
+        self.assertEqual(rr.ITEM_TM24, 0xE0)
+        self.assertEqual(rr.MOVE_SURF, 57)
+        self.assertEqual(rr.MOVE_STRENGTH, 70)
+        self.assertEqual(rr.SPECIES_LAPRAS, 0x13)
+        self.assertEqual(rr.MAP_FUCHSIA_GOOD_ROD_HOUSE, 164)
+
+    def test_tables_cover_every_species(self):
+        for sp in rr.SAFARI_SPECIES:
+            self.assertIn(sp, rr.SAFARI_CATCH_RATE)
+            self.assertIn(sp, rr.SAFARI_SPEED)
+
+    def test_target_catch_rates_and_speeds(self):
+        # pokered base stats: Chansey is the hardest catch
+        # in the zone; Tauros the fastest target
+        self.assertEqual(rr.SAFARI_CATCH_RATE[0x28], 30)
+        self.assertEqual(rr.SAFARI_CATCH_RATE[0x02], 45)
+        self.assertEqual(rr.SAFARI_CATCH_RATE[0x3C], 45)
+        self.assertEqual(rr.SAFARI_SPEED[0x3C], 110)
+        self.assertEqual(rr.SAFARI_SPEED[0x28], 50)
+        for sp in rr.SAFARI_TARGETS:
+            self.assertLessEqual(rr.SAFARI_SPEED[sp], 110)
+
+    def test_grass_dimensions_match_grids(self):
+        for mid in (217, 218, 219, 220):
+            self.assertEqual(rr.SAFARI_GRASS[mid][:2],
+                             rr.SAFARI_GRIDS[mid][:2])
+
+    def test_grass_pair_is_adjacent_passable_grass(self):
+        for mid in (217, 218, 219, 220):
+            pair = rr._safari_grass_pair(mid)
+            self.assertIsNotNone(pair, mid)
+            (ax, ay), (bx, by) = pair
+            self.assertEqual(abs(ax - bx) + abs(ay - by), 1)
+            w, h, bits = rr.SAFARI_GRASS[mid]
+            for (x, y) in pair:
+                i = y * w + x
+                self.assertTrue(bits[i // 8] >> (i % 8) & 1,
+                                (mid, x, y))
+                self.assertTrue(rr._safari_passable(mid, (x, y)),
+                                (mid, x, y))
+                self.assertNotIn(
+                    (x, y),
+                    rr.SAFARI_BALLS_CELLS.get(mid, frozenset()))
+
+    def test_area_names_cover_all_areas(self):
+        self.assertEqual(set(rr.SAFARI_AREAS_BY_NAME.values()),
+                         {217, 218, 219, 220})

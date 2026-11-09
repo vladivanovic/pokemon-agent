@@ -8089,6 +8089,605 @@ def beat_koga(emu: PyBoyEmulator, ex: Executor) -> bool:
     return _heal_fuchsia_pc(emu, ex)
 
 
+# -----------------------------------------------------------------
+# Surf for Lapras + the Safari rare hunt (probe155). Job C -
+# teach HM04 Strength to Arcanine over Roar - is NOT here: it
+# is engine-impossible (see safari_rare_hunt's docstring and
+# docs S20); no code in this section teaches Strength.
+
+MAP_FUCHSIA_GOOD_ROD_HOUSE = 164
+ITEM_GOOD_ROD = 0x4D
+ITEM_SUPER_ROD = 0x4E
+ITEM_TM24 = 0xE0
+SPECIES_LAPRAS = 0x13
+MOVE_SURF = 57
+MOVE_STRENGTH = 70
+
+# Safari species by Gen 1 INTERNAL id (pokered
+# constants/pokemon_constants.asm; the parse must honour
+# const_skip/const_next - a naive sequential parse shifts
+# every later id, the same trap family as the event ids in
+# S14/S15. Validated against all 16 species constants this
+# file already carried plus the S19 raw Chansey byte 0x28.)
+SAFARI_SPECIES = {
+    0x28: "CHANSEY", 0x02: "KANGASKHAN", 0x3C: "TAUROS",
+    0x1A: "SCYTHER", 0x58: "DRATINI", 0x12: "RHYHORN",
+    0x41: "VENONAT", 0x77: "VENOMOTH", 0x0C: "EXEGGCUTE",
+    0xA7: "NIDORINO", 0xA8: "NIDORINA", 0x6D: "PARAS",
+    0x2E: "PARASECT", 0x46: "DODUO", 0x03: "NIDORAN_M",
+    0x4E: "KRABBY", 0x2F: "PSYDUCK", 0x25: "SLOWPOKE",
+    0x9D: "GOLDEEN", 0x47: "POLIWAG",
+}
+# Base catch rates / speeds (pokered data/pokemon/base_stats
+# + the Safari flee formula in engine/battle/core.asm:
+# after each player action the enemy flees iff a random
+# byte < (speed % 256) * 2, divided by 4 while the bait
+# factor (0xCCE9) is up, doubled while the rock/escape
+# factor (0xCCE8) is up; speed >= 128 always flees - the
+# doubling carries. Bait halves the actual catch rate,
+# rock doubles it (item_effects.asm).)
+SAFARI_CATCH_RATE = {
+    0x28: 30, 0x02: 45, 0x3C: 45, 0x1A: 45, 0x58: 45,
+    0x12: 120, 0x41: 190, 0x77: 75, 0x0C: 90, 0xA7: 120,
+    0xA8: 120, 0x6D: 190, 0x2E: 75, 0x46: 190, 0x03: 190,
+    0x4E: 225, 0x2F: 190, 0x25: 190, 0x9D: 225, 0x47: 190,
+}
+SAFARI_SPEED = {
+    0x28: 50, 0x02: 90, 0x3C: 110, 0x1A: 105, 0x58: 50,
+    0x12: 25, 0x41: 45, 0x77: 90, 0x0C: 40, 0xA7: 65,
+    0xA8: 56, 0x6D: 25, 0x2E: 30, 0x46: 75, 0x03: 45,
+    0x4E: 50, 0x2F: 55, 0x25: 15, 0x9D: 63, 0x47: 90,
+}
+# The five rares Vlad named. Encounter slots (pokered
+# data/wild/grass_water + probabilities.asm: slot8 = 4.3%,
+# slot9 = 1.2%): East KANGASKHAN s8 / SCYTHER s9; North
+# CHANSEY s8 / TAUROS s9; West TAUROS s8 / KANGASKHAN s9;
+# Center SCYTHER s8 / CHANSEY s9. DRATINI is fishing-only:
+# the Super Rod group shared by all four areas is
+# Dratini/Krabby/Psyduck/Slowpoke Lv15 (12.5% per cast);
+# the Good Rod yields only Goldeen/Poliwag Lv10 anywhere,
+# so Dratini needs the Super Rod (Route 12 guru's house).
+SAFARI_TARGETS = frozenset({0x28, 0x02, 0x3C, 0x1A, 0x58})
+# Grass cells per area, compiled from pokered .blk +
+# forest.bst under the same bottom-left-tile rule as
+# SAFARI_GRIDS (FOREST grass tile $20). Same bit order.
+SAFARI_GRASS = {
+    MAP_SZ_EAST: (30, 26, bytes.fromhex("00000000c0fff303f03ffe01f8c77f0000f01f0000f8070000ff0000801608010000c30000200f0000c8030000f2fc00803c3f00c030000020040000000000000000000000000000000000000000070000c00300c0ff0000e01f00c0ff0300000000")),
+    MAP_SZ_NORTH: (40, 36, bytes.fromhex("0000000000000000c03f980100e003fc0300f001fc0300f000f80100f000f80100f001fc0300e003fc0000c007980000800f007000000f00f000000e007000000000f000000000fc000000007c000000003f00000000260000000000000000000000000000000000000000000000801e000000c03f000000c030f00100c030f00300c030f00300c010f00300c000fc03008000f803000000f007000000f00f000000c00f00000040060000000000000000000000")),
+    MAP_SZ_WEST: (30, 26, bytes.fromhex("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008000000030000000fcff0300ffff0000ff0f00809f01000000000000000000")),
+    MAP_SZ_CENTER: (30, 26, bytes.fromhex("0000000000000000066006c003fc03f881ff01fff0ffc00ffc3fe0019e07b0000000340000000c000000030000c000c0012000f00000007c0000003e0000c0070000f0037e00f8c03f001ff00f8003f8017000fc030e007ec0010000000000000000")),
+}
+# Entry landing per area (where a transit arrives); grass
+# pairs are chosen nearest the anchor.
+SAFARI_ANCHORS = {MAP_SZ_CENTER: (15, 25), MAP_SZ_EAST: (0, 22),
+                  MAP_SZ_NORTH: (20, 35), MAP_SZ_WEST: (29, 22)}
+SAFARI_AREAS_BY_NAME = {"center": MAP_SZ_CENTER,
+                        "east": MAP_SZ_EAST,
+                        "north": MAP_SZ_NORTH,
+                        "west": MAP_SZ_WEST}
+ADDR_SAFARI_BAIT_FACTOR = 0xCCE9
+ADDR_SAFARI_ESCAPE_FACTOR = 0xCCE8
+
+
+def _pc_swap_with_heal(emu: PyBoyEmulator, ex: Executor,
+                       pc_map: int, deposit_species: int,
+                       withdraw_species: int, heal) -> bool:
+    """pc_swap's menu flow with a caller-chosen final heal:
+    stock pc_swap ends in heal_at_pokecenter, which S19
+    proved fails in Fuchsia (its exit step misses the
+    center's door mat), so probe155's swap replica ends in
+    _heal_fuchsia_pc instead. Effects verified in RAM."""
+    mem = emu.pb.memory
+    if _party_index_of(emu, withdraw_species) is not None and \
+            _party_index_of(emu, deposit_species) is None:
+        return True
+    dep_idx = _party_index_of(emu, deposit_species)
+    if dep_idx is None or withdraw_species not in _box_species(emu):
+        return False
+    if not _open_pc(emu, ex, pc_map):
+        return False
+
+    def sig():
+        return (mem[ADDR_MENU_TOP_Y], mem[ADDR_MENU_ITEM],
+                mem[ADDR_MAX_MENU_ITEM])
+
+    def wait_sig(pred, rounds=120, ride_a=False):
+        for _ in range(rounds):
+            if pred(sig()):
+                return True
+            if ride_a and emu.read_state().in_dialog:
+                _press10(emu, "a")
+            emu.tick(25)
+        return pred(sig())
+
+    def bills_menu():
+        return wait_sig(lambda s: s[2] == 4, ride_a=True)
+
+    if not bills_menu():
+        if not wait_sig(lambda s: s[2] == 3):
+            return False
+        if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 0):
+            return False
+        _press10(emu, "a")                    # BILL'S PC
+        if not bills_menu():
+            return False
+
+    def pick_from_list(index, done):
+        emu.tick(60)
+        if not _steer_menu(
+                emu, lambda: mem[ADDR_MENU_SCROLL]
+                + mem[ADDR_MENU_ITEM], index):
+            return False
+        _press10(emu, "a")
+        emu.tick(90)
+        if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 0):
+            return False
+        _press10(emu, "a")
+        return _pc_press_a_ride(emu, done, rounds=160)
+
+    n_party = len(emu.read_state().party)
+    if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 1):
+        return False
+    _press10(emu, "a")                        # DEPOSIT
+    if not pick_from_list(
+            dep_idx,
+            lambda: len(emu.read_state().party) == n_party - 1):
+        return False
+    if deposit_species not in _box_species(emu):
+        return False
+    if not bills_menu():
+        return False
+    v_idx = _box_species(emu).index(withdraw_species)
+    if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 0):
+        return False
+    _press10(emu, "a")                        # WITHDRAW
+    if not pick_from_list(
+            v_idx, lambda: len(emu.read_state().party) == n_party):
+        return False
+    if _party_index_of(emu, withdraw_species) is None:
+        return False
+    if not bills_menu():
+        return False
+    if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 4):
+        return False
+    _press10(emu, "a")                        # SEE YA!
+    if not wait_sig(lambda s: s[2] == 3, ride_a=True):
+        return False
+    if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 3):
+        return False
+    _press10(emu, "a")                        # LOG OFF
+    emu.tick(90)
+    _close_menus(emu)
+    emu.wait_free(max_rounds=10, stable_needed=3)
+    return bool(heal(emu, ex))
+
+
+def _teach_hm_free_slot(emu: PyBoyEmulator, mon_idx: int,
+                        item_id: int, move_id: int) -> bool:
+    """Teach an HM into a FREE slot via the bag, with the
+    strict probe155 assertion as a check: the ONLY legal
+    change is the move appended in the first empty slot
+    (pokered LearnMove fills an empty slot first; the
+    forget-flow runs only at four full slots, so with a
+    free slot a replacement prompt is structurally
+    impossible). A four-move pupil returns False untouched
+    - choosing a move to forget is the player's call, and
+    engine CANNOT-learn cases (the HM04/Arcanine finding)
+    also land here: the teach simply never happens."""
+    from agent.state import ADDR_PARTY_MONS
+    mem = emu.pb.memory
+
+    def raw_moves():
+        base = ADDR_PARTY_MONS + 44 * mon_idx
+        return [mem[base + 8 + j] for j in range(4)]
+
+    before = raw_moves()
+    if move_id in before:
+        return True
+    if sum(1 for m in before if m) >= 4:
+        return False
+    if not _use_bag_item_on_mon(emu, item_id, mon_idx):
+        return False
+    for _ in range(60):
+        if move_id in raw_moves():
+            break
+        if emu.read_state().in_dialog:
+            _press10(emu, "a")
+            continue
+        emu.tick(30)
+    _close_menus(emu)
+    after = raw_moves()
+    slot = next((i for i, m in enumerate(before) if m == 0),
+                None)
+    if slot is None:
+        return False
+    want = list(before)
+    want[slot] = move_id
+    return after == want
+
+
+def teach_hm_to_boxed(emu: PyBoyEmulator, ex: Executor,
+                      pc_map: int, deposit_species: int,
+                      withdraw_species: int, hm_item: int,
+                      hm_move: int, heal) -> bool:
+    """Job A (probe155, Vlad's call): swap a boxed mon into
+    the party at a PokeCenter and teach it an HM, leaving
+    every other party member's moves untouched. Fuchsia:
+    NidoranM out, Lapras in, HM03 -> SURF (Lapras had two
+    moves, so the teach filled a free slot; Blastoise's
+    four move bytes are byte-identical afterwards - the
+    replay harness asserts exactly that). `heal` is the
+    per-center heal (Fuchsia: _heal_fuchsia_pc)."""
+    if not _pc_swap_with_heal(emu, ex, pc_map, deposit_species,
+                              withdraw_species, heal):
+        return False
+    idx = _party_index_of(emu, withdraw_species)
+    if idx is None:
+        return False
+    if deposit_species is not None and \
+            _party_index_of(emu, deposit_species) is not None:
+        return False
+    if not _teach_hm_free_slot(emu, idx, hm_item, hm_move):
+        return False
+    if _bag_count(emu, hm_item) != 1:      # HMs not consumed
+        return False
+    return heal(emu, ex)
+
+
+def get_good_rod(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """The Good Rod: a free gift from the Fishing Guru's
+    brother in Fuchsia (house map 164; the guru stands at
+    (5, 3) facing right, talked to from (4, 3)). Verified
+    in the bag from RAM. NOTE the Good Rod yields only
+    Goldeen/Poliwag Lv10 anywhere - it cannot produce
+    Dratini; see SAFARI_TARGETS."""
+    if _bag_count(emu, ITEM_GOOD_ROD) >= 1:
+        return True
+    if not _ride_battling(emu, ex, MAP_FUCHSIA_GOOD_ROD_HOUSE):
+        return False
+    _walk_fighting(emu, ex, MAP_FUCHSIA_GOOD_ROD_HOUSE, (4, 3),
+                   attempts=30)
+    st = emu.read_state()
+    if (st.x, st.y) != (4, 3):
+        return False
+    emu.press("right")
+    emu.tick(20)
+    _press10(emu, "a")
+    for _ in range(300):
+        if _bag_count(emu, ITEM_GOOD_ROD) >= 1:
+            break
+        if emu.read_state().in_dialog:
+            _press10(emu, "a")
+        emu.tick(25)
+    _close_menus(emu)
+    return _bag_count(emu, ITEM_GOOD_ROD) == 1
+
+
+def _safari_grass_pair(map_id: int):
+    """An adjacent pair of grass cells in a Safari area:
+    both SAFARI_GRASS cells, both _safari_passable, neither
+    an item-ball cell; the pair nearest the area anchor.
+    Pacing between the two is the encounter engine."""
+    w, h, bits = SAFARI_GRASS[map_id]
+
+    def is_grass(x, y):
+        if not (0 <= x < w and 0 <= y < h):
+            return False
+        i = y * w + x
+        return bool(bits[i // 8] >> (i % 8) & 1)
+
+    balls = SAFARI_BALLS_CELLS.get(map_id, frozenset())
+    anchor = SAFARI_ANCHORS[map_id]
+    pairs = []
+    for y in range(h):
+        for x in range(w):
+            if not is_grass(x, y) or (x, y) in balls:
+                continue
+            if not _safari_passable(map_id, (x, y)):
+                continue
+            for dx, dy in ((1, 0), (0, 1)):
+                nb = (x + dx, y + dy)
+                if is_grass(*nb) and nb not in balls and \
+                        _safari_passable(map_id, nb):
+                    pairs.append(((x, y), nb))
+    if not pairs:
+        return None
+    pairs.sort(key=lambda p: abs(p[0][0] - anchor[0])
+               + abs(p[0][1] - anchor[1]))
+    return pairs[0]
+
+
+def _safari_menu_pick(emu: PyBoyEmulator, row: int,
+                      col: int) -> bool:
+    """Steer the Safari battle menu cursor to (row, col)
+    and press A. Cursor bytes measured live (probe155):
+    left column = 1, right column = 13, no wrap - the
+    values _run_away's stale 15 never reaches, which is
+    fine for RUN (its A lands after the presses anyway)
+    but wrong for aimed picks. BALL=(0,1), BAIT=(0,13),
+    ROCK=(1,1), RUN=(1,13)."""
+    mem = emu.pb.memory
+    for _ in range(12):
+        if _advance_battle(emu) != "menu":
+            return not emu.read_state().in_battle
+        _steer_byte(emu, lambda: mem[ADDR_MENU_ITEM], row)
+        for _ in range(14):
+            if mem[ADDR_MENU_COL] == col:
+                break
+            _raw(emu, "right" if mem[ADDR_MENU_COL] < col
+                 else "left", hold=4, settle=22)
+            emu.tick(30)
+        if mem[ADDR_MENU_COL] != col:
+            continue
+        _raw(emu, "a", hold=4, settle=22)
+        emu.tick(90)
+        return True
+    return False
+
+
+def _safari_hunt_battle(emu: PyBoyEmulator, owned: set,
+                        log: list) -> dict:
+    """One Safari battle under the hunt policy (probe155):
+    RUN from owned species; with under 10 balls left, RUN
+    from anything that is not a target (reserve); BAIT
+    first - and re-bait whenever the factor lapses - for
+    low-catch or fast species (the flee cut is worth more
+    than the halved catch rate on paper), then BALL.
+    Caps: 12 balls per target encounter, 6 per bycatch,
+    3 baits. Catches are verified by the stored count and
+    ridden through _catch_epilogue (a box catch files
+    with no nickname prompt). OBSERVED (docs S20): in the
+    live hunt every baited target fled after exactly one
+    ball (10 of 11) while all six catches were unbaited
+    first-ball throws - the formula above is engine-true,
+    so the pattern is recorded as an open RNG-cadence /
+    factor-duration question, not a mechanics claim."""
+    mem = emu.pb.memory
+    sp = mem[ADDR_ENEMY_SPECIES]
+    lv = mem[ADDR_ENEMY_LEVEL]
+    name = SAFARI_SPECIES.get(sp, f"0x{sp:02x}")
+    rec = {"species": name, "level": lv, "bait": 0, "rock": 0,
+           "balls": 0, "outcome": "?"}
+    log.append(rec)
+    target = sp in SAFARI_TARGETS
+    if sp in owned:
+        rec["outcome"] = "fled(owned)"
+        _run_away(emu)
+        return rec
+    if not target and _safari_balls(emu) < 10:
+        rec["outcome"] = "fled(reserve)"
+        _run_away(emu)
+        return rec
+    cap = 12 if target else 6
+    stored0 = _stored_count(emu)
+    want_bait = SAFARI_CATCH_RATE.get(sp, 255) <= 45 or \
+        SAFARI_SPEED.get(sp, 0) * 2 >= 150
+    guard = 0
+    while emu.read_state().in_battle and guard < 40:
+        guard += 1
+        if _safari_balls(emu) == 0:
+            rec["outcome"] = "balls-out"
+            break
+        bait_up = mem[ADDR_SAFARI_BAIT_FACTOR] > 0
+        if want_bait and not bait_up and rec["bait"] < 3:
+            if not _safari_menu_pick(emu, 0, 13):   # BAIT
+                break
+            rec["bait"] += 1
+            continue
+        if rec["balls"] >= cap:
+            rec["outcome"] = "fled(cap)"
+            _run_away(emu)
+            break
+        if not _safari_menu_pick(emu, 0, 1):        # BALL
+            break
+        rec["balls"] += 1
+        caught = False
+        for _ in range(160):
+            _press10(emu, "a")
+            emu.tick(10)
+            if _stored_count(emu) > stored0:
+                caught = True
+                break
+            if not emu.read_state().in_battle:
+                break
+        if caught:
+            ok = _catch_epilogue(emu, stored0 + 1)
+            rec["outcome"] = "CAUGHT" if ok else "caught?"
+            if ok:
+                owned.add(sp)
+            return rec
+    if rec["outcome"] == "?":
+        rec["outcome"] = "fled(enemy)" \
+            if not emu.read_state().in_battle else "stuck"
+    return rec
+
+
+def _safari_hunt_settle(emu: PyBoyEmulator, owned: set,
+                        log: list) -> None:
+    """Settle after a hunt step: hunt any battle, ride any
+    dialog (the PA time-up announcement included - an
+    unridden dialog freezes the player solid, the probe155
+    entry-1 exit bug), wait for rest."""
+    for _ in range(300):
+        st = emu.read_state()
+        if st.in_battle:
+            _safari_hunt_battle(emu, owned, log)
+            continue
+        if st.in_dialog:
+            emu.close_dialog(max_presses=2)
+            continue
+        emu.tick(6)
+        st2 = emu.read_state()
+        if (st2.x, st2.y) == (st.x, st.y) \
+                and not st2.in_dialog and not st2.in_battle:
+            return
+
+
+def _safari_burn_out(emu: PyBoyEmulator, owned: set,
+                     log: list) -> bool:
+    """Leave the zone by burning the step counter to
+    ejection on the spot (catches and items are kept;
+    S19's exit). Battles met while burning are hunted."""
+    for i in range(900):
+        if emu.read_state().map_id == MAP_SAFARI_GATE:
+            return True
+        emu.press("left" if i % 2 == 0 else "right")
+        _safari_hunt_settle(emu, owned, log)
+    return emu.read_state().map_id == MAP_SAFARI_GATE
+
+
+def _safari_hunt_entry(emu: PyBoyEmulator, ex: Executor,
+                       area_id: int, owned: set,
+                       log: list) -> bool:
+    """One paid entry hunted in one area. Transit rides
+    the STOCK _safari_settle inside _sz_nav (RUN-only;
+    its balls==30 assertion holds because no hunting has
+    happened yet this entry) - probe155 found the hunt
+    settle breaks _sz_nav's warp-cell dance, and the West
+    area is effectively unreachable with current grids
+    (Center's fence-maze gap is mis-modelled both in
+    SAFARI_GRIDS and the world model; S20). Ends back at
+    the Fuchsia PokeCenter, healed."""
+    if not _ride_battling(emu, ex, MAP_SAFARI_GATE):
+        return False
+    money0 = emu.read_state().money
+    _walk_fighting(emu, ex, MAP_SAFARI_GATE, (4, 2),
+                   attempts=20)
+    if (emu.read_state().x, emu.read_state().y) != (4, 2):
+        return False
+    emu.press("right")
+    emu.tick(20)
+    _press10(emu, "a")
+    paid = False
+    for _ in range(200):
+        if _safari_balls(emu) == 30 and \
+                _event_flag(emu, EV_IN_SAFARI_ZONE):
+            paid = True
+            break
+        if emu.read_state().in_dialog:
+            _press10(emu, "a")
+        emu.tick(25)
+    if not paid or emu.read_state().money != money0 - 500:
+        return False
+    # ride the clerk's trailing text fully clear BEFORE
+    # any direction press (direction presses mid-script
+    # wedge it - probe155)
+    for _ in range(80):
+        if not emu.read_state().in_dialog:
+            break
+        _press10(emu, "a")
+        emu.tick(30)
+    for _ in range(10):
+        if emu.read_state().map_id == MAP_SZ_CENTER:
+            break
+        emu.press("up")
+        _explore_settle(emu)
+        _safari_settle(emu, [])
+    if emu.read_state().map_id != MAP_SZ_CENTER:
+        return False
+    pair = _safari_grass_pair(area_id)
+    if pair is None:
+        return False
+    if not _sz_nav(emu, ex, area_id, pair[0], [],
+                   budget_guard=10):
+        return False
+    toggle = False
+    while True:
+        st = emu.read_state()
+        if st.map_id == MAP_SAFARI_GATE:
+            break
+        if st.map_id != area_id:
+            _safari_burn_out(emu, owned, log)
+            break
+        if SAFARI_TARGETS <= owned or _safari_balls(emu) == 0:
+            _safari_burn_out(emu, owned, log)
+            break
+        if _safari_steps(emu) <= 12:
+            _safari_burn_out(emu, owned, log)
+            break
+        tgt = pair[1] if toggle else pair[0]
+        toggle = not toggle
+        for d, (dx, dy) in _SZ_DIRS.items():
+            cur = (emu.read_state().x, emu.read_state().y)
+            if (cur[0] + dx, cur[1] + dy) == tgt:
+                emu.press(d)
+                break
+        _safari_hunt_settle(emu, owned, log)
+    if emu.read_state().map_id != MAP_SAFARI_GATE:
+        return False
+    for _ in range(12):
+        emu.press("down")
+        _explore_settle(emu)
+        _safari_settle(emu, [])
+        if emu.read_state().map_id != MAP_SAFARI_GATE:
+            break
+    if emu.read_state().map_id == MAP_SAFARI_GATE:
+        return False
+    if not _ride_battling(emu, ex, MAP_FUCHSIA_PC):
+        return False
+    return _heal_fuchsia_pc(emu, ex)
+
+
+def safari_rare_hunt(emu: PyBoyEmulator, ex: Executor,
+                     plan: list, log: list = None) -> bool:
+    """Job B (probe155, Vlad's policy: hunt the rares).
+    Up to four paid entries (the caller's plan, area names
+    from SAFARI_AREAS_BY_NAME), throwing Safari Balls only
+    at the five SAFARI_TARGETS and at other not-yet-owned
+    species, fleeing everything already owned. Prep makes
+    bag room for the rods by depositing TM24/TM29/TM46 at
+    the Fuchsia PC (the 20-stack cap) and collects the
+    Good Rod. The Super Rod detour was NOT made: the
+    brief's hop chain Fuchsia -> R15 -> R14 -> R13 -> R12
+    is one-way-locked in reverse (that road is a one-way
+    descent from Lavender - ledges and one-way strips at
+    R13/R14, engine-verified in probe155), there is no
+    Bicycle for Cycling Road, and the only feasible route
+    (Surf via R19/R21 + Diglett's Cave + R11 + the R12
+    gate) needs Surf-step machinery the executor does not
+    have. Dratini therefore stays unfished this leg; the
+    decision is Vlad's (docs S20). Job C is likewise not
+    performed: Arcanine's pokered learnset (base_stats
+    tmhm bitfield - the very data CanLearnTM reads)
+    contains NO HMs at all, so HM04 cannot be taught to
+    it by the engine; writing the move into its struct
+    was declined as fabrication. The live hunt caught
+    PARAS, DODUO, EXEGGCUTE, NIDORINO (East), RHYHORN
+    (North) and KANGASKHAN (East); dex 16 -> 22."""
+    if log is None:
+        log = []
+    if len(plan) > 4:
+        return False
+    if emu.read_state().map_id != MAP_FUCHSIA_PC:
+        if not _ride_battling(emu, ex, MAP_FUCHSIA_PC):
+            return False
+    # bag room for the rods (20-stack cap): the leg
+    # deposited TM24/TM29/TM46 into PC item storage
+    if len(_bag_items(emu)) >= 18:
+        for tm in (ITEM_TM24, ITEM_TM29, ITEM_TM46):
+            if _bag_count(emu, tm) >= 1:
+                if not deposit_item(emu, ex, MAP_FUCHSIA_PC, tm):
+                    return False
+    if not get_good_rod(emu, ex):
+        return False
+    if not _ride_battling(emu, ex, MAP_FUCHSIA_PC):
+        return False
+    if not _heal_fuchsia_pc(emu, ex):
+        return False
+    owned = set()
+    st = emu.read_state()
+    for mon in st.party:
+        owned.add(mon.species_id)
+    owned.update(_box_species(emu))
+    for name in plan:
+        area_id = SAFARI_AREAS_BY_NAME[name]
+        if not _safari_hunt_entry(emu, ex, area_id, owned, log):
+            return False
+        if SAFARI_TARGETS <= owned:
+            break
+    return True
+
+
 
 
 def main() -> int:
