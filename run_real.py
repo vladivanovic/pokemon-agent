@@ -10496,6 +10496,648 @@ def safari_dratini(emu: PyBoyEmulator, ex: Executor,
     return 0x58 in owned
 
 
+# ------------------------------------------------------------------
+# The Fly leg (probe160, docs S24): Bicycle exchange, the Route 16
+# Snorlax CATCH (Vlad's decision: balls first, Master Ball never,
+# KO only when the balls are gone), HM02 from the Fly House, Fly
+# taught to the boxed Pidgey (verify-first), and the first flight
+# home. Every span below was proven live in probe160 before it was
+# ported; the fidelity notes are in S24.
+
+ITEM_BICYCLE = 0x06
+ITEM_HM02_FLY = 0xC5            # HM ids are 0xC4 + (n - 1)
+MOVE_FLY = 19                   # 0x13
+MOVE_SLEEP_POWDER = 79
+MOVE_BUBBLE = 145
+EV_GOT_BICYCLE = 192
+EV_FIGHT_R16_SNORLAX = 1224
+EV_BEAT_R16_SNORLAX = 1225
+EV_GOT_HM02 = 1230
+SPECIES_SNORLAX = 0x84
+ADDR_ENEMY_HP = ADDR_ENEMY_SPECIES + 1        # dw, big-endian
+ADDR_ENEMY_STATUS = ADDR_ENEMY_SPECIES + 4    # sleep = low 3 bits
+
+
+def _step_to_live(emu: PyBoyEmulator, ex: Executor, map_id: int,
+                  tx: int, ty: int, max_steps: int = 200) -> bool:
+    """Greedy live stepper for cells the compiled model cannot
+    path (probe160's R16 lesson: around the Snorlax cell and the
+    gatehouse the model's tile_path simply returns None, while
+    the live grid is perfectly walkable). Steps axis-greedy,
+    clearing dialogs and hardened-driving any battle that starts
+    (trainer engagement taunts arrive as DIALOGS, not battles -
+    a walker that only checks in_battle stalls on them)."""
+    def clear():
+        for _ in range(300):
+            st = emu.read_state()
+            if st.in_battle:
+                _drive_battle_hardened(emu)
+                continue
+            if st.in_dialog:
+                _press10(emu, "a")
+                emu.tick(30)
+                continue
+            return
+    for _ in range(max_steps):
+        st = emu.read_state()
+        if st.map_id != map_id:
+            return False
+        clear()
+        st = emu.read_state()
+        if (st.x, st.y) == (tx, ty):
+            return True
+        dx = (tx > st.x) - (tx < st.x)
+        dy = (ty > st.y) - (ty < st.y)
+        cands = (["right" if dx > 0 else "left"] if dx else []) + \
+            (["down" if dy > 0 else "up"] if dy else [])
+        for mv in cands:
+            ox, oy = st.x, st.y
+            emu.press(mv)
+            _explore_settle(emu)
+            clear()
+            st2 = emu.read_state()
+            if (st2.x, st2.y) != (ox, oy) or st2.map_id != map_id:
+                break
+    st = emu.read_state()
+    return st.map_id == map_id and (st.x, st.y) == (tx, ty)
+
+
+def bicycle_exchange(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Cerulean Bike Shop: BIKE VOUCHER -> BICYCLE (probe160b).
+
+    The script's GiveItem runs BEFORE the voucher is removed,
+    so at a full 20-stack bag the exchange aborts on the
+    bag-full branch (verified live). Make room first by
+    depositing an HM/TM at the Cerulean PC (HM05 Flash in
+    probe160 - Voltorb already knows the move; the item is
+    retrievable). The clerk stands at (6, 2) behind the counter
+    (row 3); the talk stance is (6, 4) facing UP across it.
+    Verified from RAM: BICYCLE x1 in bag, voucher consumed,
+    EV_GOT_BICYCLE set."""
+    world = ex.world
+    shop = world.map_id("BikeShop")
+    cerulean = world.map_id("CeruleanCity")
+    pc = world.map_id("CeruleanPokecenter")
+    if _bag_count(emu, ITEM_BICYCLE) >= 1:
+        return True
+    if _bag_count(emu, ITEM_BIKE_VOUCHER) < 1:
+        return False
+    if len(_bag_items(emu)) >= 20:
+        room_item = ITEM_HM05 if _bag_count(emu, ITEM_HM05) else None
+        if room_item is None:
+            for it in _bag_items(emu):
+                if it >= 0xC4:            # any HM/TM makes room
+                    room_item = it
+                    break
+        if room_item is None:
+            return False
+        # deposit_item assumes the caller is already inside
+        # the Pokecenter (probe160b called it from inside)
+        if emu.read_state().map_id != pc and \
+                not _ride_or_cross(emu, ex, pc):
+            return False
+        if not deposit_item(emu, ex, pc, room_item):
+            return False
+    if emu.read_state().map_id != cerulean:
+        if not _ride_or_cross(emu, ex, cerulean):
+            return False
+    if not _ride_or_cross(emu, ex, shop):
+        return False
+    if not ex._walk_to(shop, (6, 4)):
+        _step_to_live(emu, ex, shop, 6, 4)
+    st = emu.read_state()
+    if (st.x, st.y) != (6, 4):
+        _step_to_live(emu, ex, shop, 6, 4)
+    if (emu.read_state().x, emu.read_state().y) != (6, 4):
+        return False
+    emu.press("up")
+    emu.tick(20)
+    _press10(emu, "a")
+    for _ in range(200):
+        if _bag_count(emu, ITEM_BICYCLE) >= 1:
+            break
+        if emu.read_state().in_dialog:
+            _press10(emu, "a")
+        emu.tick(25)
+    _close_menus(emu)
+    return _bag_count(emu, ITEM_BICYCLE) == 1 and \
+        _bag_count(emu, ITEM_BIKE_VOUCHER) == 0 and \
+        _event_flag(emu, EV_GOT_BICYCLE)
+
+
+def _ride_to_battle_menu(emu: PyBoyEmulator) -> str:
+    """Ride to the next main battle menu via _advance_battle
+    (probe160d's ride_to_menu). The battle's text pages need A
+    presses to advance - a passive wait stalls forever on the
+    wake text - and _advance_battle is the proven rider. The
+    faint-replacement screen (party list with the active mon
+    at 0 HP) is handled by picking the first healthy mon.
+    Returns 'menu' / 'over'."""
+    mem = emu.pb.memory
+    for _ in range(60):
+        st = emu.read_state()
+        if not st.in_battle:
+            return "over"
+        if mem[ADDR_MENU_TOP_Y] == 1 and \
+                (mem[ADDR_BATTLE_MON_HP] << 8
+                 | mem[ADDR_BATTLE_MON_HP + 1]) == 0:
+            pick = next((i for i, m in enumerate(st.party)
+                         if m.hp > 0), 0)
+            cur = mem[ADDR_MENU_ITEM]
+            if cur == pick:
+                _press10(emu, "a")
+                emu.tick(50)
+            else:
+                _press10(emu, "down" if cur < pick else "up")
+                emu.tick(25)
+            continue
+        r = _advance_battle(emu, rounds=20)
+        if r in ("menu", "over"):
+            return r
+    return "menu" if emu.read_state().in_battle else "over"
+
+
+def _battle_menu_sig(emu: PyBoyEmulator):
+    mem = emu.pb.memory
+    return (mem[ADDR_MENU_TOP_Y], mem[ADDR_MENU_ITEM],
+            mem[ADDR_MENU_COL])
+
+
+def _battle_switch_to(emu: PyBoyEmulator, party_idx: int) -> bool:
+    """Main menu -> PKMN (cursor (14, 0, 15)) -> the mon ->
+    confirm the SWITCH/STATS/CANCEL submenu with A presses
+    until the new mon is actually out (probe160d switch_to).
+    _advance_battle leaves the main-menu cursor on FIGHT
+    (14, 0, 9); one RIGHT press lands on PKMN."""
+    mem = emu.pb.memory
+    want_sp = emu.read_state().party[party_idx].species_id
+    if _ride_to_battle_menu(emu) != "menu":
+        return False
+    if _battle_menu_sig(emu) != (14, 0, 9):
+        return False
+    _press10(emu, "right")
+    if _battle_menu_sig(emu) != (14, 0, 15):
+        return False
+    _press10(emu, "a")
+    for _ in range(80):
+        if mem[ADDR_MENU_TOP_Y] == 1:
+            break
+        emu.tick(20)
+    if mem[ADDR_MENU_TOP_Y] != 1:
+        return False
+    _steer_byte(emu, lambda: mem[ADDR_MENU_ITEM], party_idx)
+    _raw(emu, "a", hold=4, settle=22)
+    emu.tick(60)
+    for _ in range(160):
+        if not emu.read_state().in_battle:
+            return False
+        if mem[ADDR_BATTLE_MON_SPECIES] == want_sp:
+            return True
+        _press10(emu, "a")
+        emu.tick(30)
+    return False
+
+
+def _battle_use_move(emu: PyBoyEmulator, move_id: int) -> bool:
+    """Main menu (cursor left on FIGHT by _advance_battle) ->
+    the move menu (top_y 12; its cursor byte is 1-based) ->
+    the move (probe160d use_move)."""
+    from agent.state import ADDR_PARTY_MONS
+    mem = emu.pb.memory
+    if _ride_to_battle_menu(emu) != "menu":
+        return False
+    if _battle_menu_sig(emu) != (14, 0, 9):
+        return False
+    active = mem[ADDR_BATTLE_MON_SPECIES]
+    idx = None
+    for i, mon in enumerate(emu.read_state().party):
+        if mon.species_id == active:
+            moves = [mem[ADDR_PARTY_MONS + 44 * i + 8 + j]
+                     for j in range(4)]
+            if move_id in moves:
+                idx = moves.index(move_id)
+            break
+    if idx is None:
+        return False
+    _press10(emu, "a")                            # FIGHT
+    for _ in range(80):
+        if mem[ADDR_MENU_TOP_Y] == 12:
+            break
+        emu.tick(20)
+    if mem[ADDR_MENU_TOP_Y] != 12:
+        return False
+    _steer_byte(emu, lambda: mem[ADDR_MENU_ITEM], idx + 1)
+    _raw(emu, "a", hold=4, settle=22)
+    emu.tick(70)
+    return True
+
+
+def _throw_ball_ordered(emu: PyBoyEmulator, ball_id: int,
+                        stored0: int) -> str:
+    """Throw one ball of the given kind via the proven
+    _throw_ball (its ITEM_POKE_BALL global is patched to the
+    wanted ball for the call), then ride the throw out exactly
+    as probe160d did: the catch lands on the stored-count tick
+    (+ _catch_epilogue for the dex page / box transfer), the
+    broke-free case is the main menu genuinely back (top_y 14
+    and NOT in_dialog, confirmed stable), anything else is
+    text to ride with A. Returns 'caught' / 'broke' / 'over'.
+    """
+    global ITEM_POKE_BALL
+    saved = ITEM_POKE_BALL
+    ITEM_POKE_BALL = ball_id
+    try:
+        ok = _throw_ball(emu)
+    finally:
+        ITEM_POKE_BALL = saved
+    if not ok:
+        return "over"
+    mem = emu.pb.memory
+    for _ in range(240):
+        if _stored_count(emu) > stored0:
+            _catch_epilogue(emu, stored0 + 1)
+            return "caught"
+        st = emu.read_state()
+        if not st.in_battle:
+            return "over"
+        if mem[ADDR_MENU_TOP_Y] == 14 and not st.in_dialog:
+            emu.tick(30)
+            if mem[ADDR_MENU_TOP_Y] == 14:
+                return "broke"
+        if st.in_dialog or mem[ADDR_MENU_TOP_Y] not in (12, 14):
+            _press10(emu, "a")
+        emu.tick(25)
+    return "broke" if emu.read_state().in_battle else "over"
+
+
+def _enemy_hp(emu: PyBoyEmulator) -> int:
+    mem = emu.pb.memory
+    return (mem[ADDR_ENEMY_HP] << 8) | mem[ADDR_ENEMY_HP + 1]
+
+
+def _enemy_asleep(emu: PyBoyEmulator) -> bool:
+    return (emu.pb.memory[ADDR_ENEMY_STATUS] & 0x07) != 0
+
+
+def snorlax_catch(emu: PyBoyEmulator, ex: Executor) -> str:
+    """The Route 16 Snorlax, CAUGHT per Vlad's decision
+    (probe160d): wake with the Poke Flute from the stance EAST
+    of the sleeping Snorlax at (27, 10) - its body cell is
+    (26, 10). Policy, exactly as proven:
+
+    - Oddish leads the sleep phase: switch in, Sleep Powder
+      once (it outspeeds nothing - Snorlax moves first, so
+      Powder must land before its Rest; retry while awake).
+    - Blastoise chips ONLY inside a sleep window and only
+      above the danger line: Bubble (20 power) at full HP -
+      even a crit (141 -> 68 live) cannot kill.
+    - THROW FIRST: once HP <= 80, throw at every menu - GREAT
+      BALLS first, then POKE BALLS. The MASTER BALL IS NEVER
+      THROWN (it is not referenced anywhere in this function).
+    - Gen 1 sleep does not break on damage; Rest's self-sleep
+      is exactly 2 turns, and a Rest at low HP is answered by
+      re-sleeping (Oddish) rather than more damage.
+    - If every ball is gone without a catch, KO it and pass
+      (Vlad's pre-authorised fallback) via the hardened driver.
+
+    The checkpoint rule is the CALLER's: save a state before
+    calling; on a catastrophic crit-KO the caller restores it
+    and retries once. Returns 'caught' / 'ko' / 'failed'.
+    RAM-verified on success: stored count +1, dex +1, Snorlax
+    in the box (party is full), EV_BEAT_R16_SNORLAX set."""
+    mem = emu.pb.memory
+    world = ex.world
+    r16 = world.map_id("Route16")
+    st = emu.read_state()
+    if st.map_id != r16 or (st.x, st.y) != (27, 10):
+        return "failed"
+    if _bag_count(emu, ITEM_POKE_FLUTE) < 1 or \
+            _event_flag(emu, EV_BEAT_R16_SNORLAX):
+        return "failed"
+    stored0 = _stored_count(emu)
+    dex0 = _dex_owned_count(emu)
+    oddish = _party_index_of(emu, SPECIES_ODDISH)
+    blastoise = _party_index_of(emu, SPECIES_BLASTOISE)
+    if oddish is None or blastoise is None:
+        return "failed"
+    # Wake it: bag -> Poke Flute. NOT _use_bag_item: that
+    # helper verifies success by the count dropping, and the
+    # Flute is a key item - it is never consumed, so the
+    # helper reports failure while the wake succeeds behind
+    # it (probe161). Drive the bag menu directly and verify
+    # by the battle itself.
+    idx = _bag_index(emu, ITEM_POKE_FLUTE)
+    if idx is None:
+        return "failed"
+    _press10(emu, "start")
+    if not _wait_menu_y(emu, 2):
+        return "failed"
+    if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 2):
+        return "failed"
+    _press10(emu, "a")                            # ITEM
+    if not _wait_menu_y(emu, 4):
+        return "failed"
+    if not _steer_menu(
+            emu, lambda: mem[ADDR_MENU_SCROLL]
+            + mem[ADDR_MENU_ITEM], idx):
+        return "failed"
+    _press10(emu, "a")
+    if not _wait_menu_y(emu, 11):
+        return "failed"
+    _press10(emu, "a")                            # USE the flute
+    for _ in range(600):
+        if emu.read_state().in_battle and \
+                mem[ADDR_ENEMY_SPECIES] == SPECIES_SNORLAX:
+            break
+        if emu.read_state().in_dialog:
+            _press10(emu, "a")
+        emu.tick(25)
+    if not emu.read_state().in_battle or \
+            mem[ADDR_ENEMY_SPECIES] != SPECIES_SNORLAX:
+        return "failed"
+    max_hp = (mem[ADDR_ENEMY_MAX_HP] << 8) | \
+        mem[ADDR_ENEMY_MAX_HP + 1]
+    powder_tried = False
+    turns = 0
+    while emu.read_state().in_battle and turns < 90:
+        turns += 1
+        if _ride_to_battle_menu(emu) != "menu":
+            break
+        hp = _enemy_hp(emu)
+        asleep = _enemy_asleep(emu)
+        active = mem[ADDR_BATTLE_MON_SPECIES]
+        great = _bag_count(emu, ITEM_GREAT_BALL)
+        poke = _bag_count(emu, ITEM_POKE_BALL)
+        if great + poke == 0:
+            _drive_battle_hardened(emu)       # the KO fallback
+            break
+        if hp <= 80:
+            ball = ITEM_GREAT_BALL if great else ITEM_POKE_BALL
+            if _throw_ball_ordered(emu, ball, stored0) == "caught":
+                break
+            continue
+        if not asleep and not powder_tried:
+            if active != SPECIES_ODDISH:
+                if not _battle_switch_to(emu, oddish):
+                    break
+            elif not _battle_use_move(emu, MOVE_SLEEP_POWDER):
+                break
+            powder_tried = True
+            continue
+        if asleep and hp > 80:
+            if active != SPECIES_BLASTOISE:
+                if not _battle_switch_to(emu, blastoise):
+                    break
+            elif not _battle_use_move(emu, MOVE_BUBBLE):
+                break
+            continue
+        if not asleep and powder_tried and hp > max_hp * 3 // 5:
+            powder_tried = False              # re-sleep window
+            continue
+        ball = ITEM_GREAT_BALL if great else ITEM_POKE_BALL
+        if _throw_ball_ordered(emu, ball, stored0) == "caught":
+            break
+    st = emu.read_state()
+    if _stored_count(emu) == stored0 + 1 and \
+            _dex_owned_count(emu) == dex0 + 1 and \
+            SPECIES_SNORLAX in _box_species(emu) and \
+            _event_flag(emu, EV_BEAT_R16_SNORLAX):
+        return "caught"
+    if not st.in_battle and \
+            _event_flag(emu, EV_BEAT_R16_SNORLAX):
+        return "ko"
+    return "failed"
+
+
+def route16_fly_house(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Route 16 east stance -> the Fly House -> HM02 (probe160e).
+
+    The way west is NOT the gatehouse: its south corridor is
+    the Cycling Road bike-check (a counter, not a passage) and
+    row 9 is a continuous hedgerow fence. The real entrance is
+    the CUT TREE at (34, 9), whose 2x2 block straddles the
+    fence between the road (34, 10) and the east yard (34, 8).
+    Through the yard to the gate's NORTH corridor (row 2 - the
+    gambler stands on row 3), out into the house plot, and in
+    the door at (7, 5). The girl at (2, 3) faces RIGHT: talk
+    from (1, 3). Bag room first is the caller's job (deposit a
+    TM at Celadon PC); verified from RAM: HM02 x1,
+    EV_GOT_HM02 set."""
+    world = ex.world
+    r16 = world.map_id("Route16")
+    gate = world.map_id("Route16Gate1F")
+    house = world.map_id("Route16FlyHouse")
+    if _bag_count(emu, ITEM_HM02_FLY) >= 1:
+        return True
+    st = emu.read_state()
+    if st.map_id != r16:
+        return False
+    if not _step_to_live(emu, ex, r16, 34, 10):
+        return False
+    ex._cut_tree(r16, (34, 9))
+    st = emu.read_state()
+    if (st.x, st.y) != (34, 9):
+        return False
+    if not _step_to_live(emu, ex, r16, 25, 5):
+        return False
+    emu.press("left")
+    _explore_settle(emu)
+    if emu.read_state().map_id != gate:
+        return False
+    if not _step_to_live(emu, ex, gate, 1, 2):
+        return False
+    emu.press("left")
+    _explore_settle(emu)
+    st = emu.read_state()
+    if st.map_id != r16 or st.x > 17:
+        return False
+    if not _step_to_live(emu, ex, r16, 7, 6):
+        return False
+    emu.press("up")
+    _explore_settle(emu)
+    if emu.read_state().map_id != house:
+        return False
+    if not ex._walk_to(house, (1, 3)):
+        _step_to_live(emu, ex, house, 1, 3)
+    if (emu.read_state().x, emu.read_state().y) != (1, 3):
+        _step_to_live(emu, ex, house, 1, 3)
+    if (emu.read_state().x, emu.read_state().y) != (1, 3):
+        return False
+    emu.press("right")
+    emu.tick(20)
+    _press10(emu, "a")
+    for _ in range(400):
+        if _bag_count(emu, ITEM_HM02_FLY) >= 1:
+            break
+        if emu.read_state().in_dialog:
+            _press10(emu, "a")
+        emu.tick(25)
+    _close_menus(emu)
+    return _bag_count(emu, ITEM_HM02_FLY) == 1 and \
+        _event_flag(emu, EV_GOT_HM02)
+
+
+def teach_fly(emu: PyBoyEmulator, ex: Executor,
+              pc_map: int) -> bool:
+    """Teach HM02 FLY to the boxed PIDGEY, verify-first
+    (probe160f): Pidgey's pokered tmhm includes FLY (pinned by
+    TestFlyLeg), and the live pupil must have a free slot -
+    the swap is DIGLETT out / PIDGEY in via pc_swap at the
+    given Pokecenter, then _teach_hm_free_slot's strict-append
+    assertion does the teach. End arrangement (Vlad's brief):
+    Pidgey stays in the party as the fly carrier, Diglett
+    stays boxed - reversible at any PC. Returns False
+    untouched if the pupil somehow has four moves (choosing
+    one to forget is the player's call)."""
+    if _bag_count(emu, ITEM_HM02_FLY) < 1:
+        return False
+    pid = _party_index_of(emu, SPECIES_PIDGEY)
+    if pid is None:
+        if SPECIES_PIDGEY not in _box_species(emu):
+            return False
+        if not pc_swap(emu, ex, pc_map, SPECIES_DIGLETT,
+                       SPECIES_PIDGEY):
+            return False
+        pid = _party_index_of(emu, SPECIES_PIDGEY)
+        if pid is None:
+            return False
+    from agent.state import ADDR_PARTY_MONS
+    mem = emu.pb.memory
+    moves = [mem[ADDR_PARTY_MONS + 44 * pid + 8 + j]
+             for j in range(4)]
+    if MOVE_FLY in moves:
+        return True
+    if sum(1 for m in moves if m) >= 4:
+        return False
+    if not _teach_hm_free_slot(emu, pid, ITEM_HM02_FLY, MOVE_FLY):
+        return False
+    moves = [mem[ADDR_PARTY_MONS + 44 * pid + 8 + j]
+             for j in range(4)]
+    return MOVE_FLY in moves
+
+
+# The Fly map's visited-town cycle in UP order, as read live
+# off the header (probe160f8-f11): it opens on Pallet Town and
+# UP steps through the visited flyable towns - Lavender BEFORE
+# Vermilion, whatever TownMapOrder suggests. The header text
+# itself (VRAM tilemap 0x9C00, row 0) is the steering signal:
+# counted presses can double-step (one run landed Cinnabar).
+FLY_TOWN_CYCLE = ["PALLET TOWN", "VIRIDIAN CITY", "PEWTER CITY",
+                  "CERULEAN CITY", "LAVENDER TOWN",
+                  "VERMILION CITY", "CELADON CITY",
+                  "SAFFRON CITY", "FUCHSIA CITY",
+                  "CINNABAR ISLAND", "INDIGO PLATEAU"]
+FLY_TOWN_MAP_NAMES = {
+    "PALLET TOWN": "PalletTown", "VIRIDIAN CITY": "ViridianCity",
+    "PEWTER CITY": "PewterCity", "CERULEAN CITY": "CeruleanCity",
+    "LAVENDER TOWN": "LavenderTown",
+    "VERMILION CITY": "VermilionCity",
+    "CELADON CITY": "CeladonCity", "SAFFRON CITY": "SaffronCity",
+    "FUCHSIA CITY": "FuchsiaCity",
+    "CINNABAR ISLAND": "CinnabarIsland",
+    "INDIGO PLATEAU": "IndigoPlateau",
+}
+
+
+def _fly_header_town(emu: PyBoyEmulator):
+    """The town named in the Fly map's header, decoded from
+    the 0x9C00 tilemap (Gen 1 font: A=0x80, space=0x7F)."""
+    mem = emu.pb.memory
+    row = bytes(mem[0x9C00 + i] for i in range(20))
+    for name in FLY_TOWN_CYCLE:
+        enc = bytes(0x7F if c == " " else 0x80 + ord(c) - 65
+                    for c in name)
+        if enc in row:
+            return name
+    return None
+
+
+def fly_to(emu: PyBoyEmulator, ex: Executor,
+           dest_town: str) -> bool:
+    """FLY to a visited town (probe160f): party-menu field
+    move, hand-driven - the backend's _field_move backs out
+    with B presses afterwards, which CANCELS the Fly map, so
+    it cannot be used for Fly. The destination is steered by
+    reading the header town off the tilemap after every UP
+    press (counted presses are not reliable: a held press can
+    double-step). Success = the landing map read from RAM is
+    the destination's map. Caller must be outdoors with a
+    living Fly carrier in the party."""
+    from agent.state import ADDR_MENU_TOP_Y, ADDR_CURRENT_MENU_ITEM
+    world = ex.world
+    dest_map = world.map_id(FLY_TOWN_MAP_NAMES[dest_town])
+    if emu.read_state().map_id == dest_map:
+        return True
+    carrier = None
+    submenu = 0
+    from agent.state import ADDR_PARTY_MONS
+    mem = emu.pb.memory
+    field_ids = {15, MOVE_FLY, MOVE_SURF, MOVE_STRENGTH, 148}
+    for i, mon in enumerate(emu.read_state().party):
+        moves = [mem[ADDR_PARTY_MONS + 44 * i + 8 + j]
+                 for j in range(4)]
+        if MOVE_FLY in moves:
+            carrier = i
+            slot = moves.index(MOVE_FLY)
+            submenu = sum(1 for m in moves[:slot]
+                          if m in field_ids)
+            break
+    if carrier is None:
+        return False
+
+    def press10(b):
+        emu.pb.button_press(b)
+        emu.tick(10)
+        emu.pb.button_release(b)
+        emu.tick(45)
+
+    def wait_top_y(want, rounds=80):
+        for _ in range(rounds):
+            if mem[ADDR_MENU_TOP_Y] == want:
+                return True
+            if emu.read_state().in_dialog:
+                press10("a")
+                continue
+            emu.tick(30)
+        return mem[ADDR_MENU_TOP_Y] == want
+
+    def steer(want, rounds=30):
+        for _ in range(rounds):
+            cur = mem[ADDR_CURRENT_MENU_ITEM]
+            if cur == want:
+                return True
+            press10("down" if cur < want else "up")
+            emu.tick(20)
+        return mem[ADDR_CURRENT_MENU_ITEM] == want
+
+    press10("start")
+    if not wait_top_y(2) or not steer(1):
+        return False
+    press10("a")                              # POKEMON
+    if not wait_top_y(1) or not steer(carrier):
+        return False
+    press10("a")                              # the carrier
+    emu.tick(80)
+    if not steer(submenu):
+        return False
+    press10("a")                              # FLY
+    emu.tick(400)
+    for _ in range(24):
+        if _fly_header_town(emu) == dest_town:
+            break
+        press10("up")
+        emu.tick(90)
+    if _fly_header_town(emu) != dest_town:
+        press10("b")                          # back out cleanly
+        return False
+    press10("a")
+    for _ in range(240):
+        if emu.read_state().map_id == dest_map:
+            return True
+        emu.tick(25)
+    return emu.read_state().map_id == dest_map
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--rom", required=True, help="path to a Pokemon Red ROM")

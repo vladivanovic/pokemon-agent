@@ -780,3 +780,81 @@ class TestGrandTourWorldFacts(unittest.TestCase):
         dx, dy = rr._SZ_DIRS[face]
         front = (stance[0] + dx, stance[1] + dy)
         self.assertEqual(gm.tiles[front[1]][front[0]], 0x14)
+
+
+class TestFlyLeg(unittest.TestCase):
+    """probe160: the Fly leg - bicycle exchange, the Snorlax
+    catch protocol, HM02, verify-first Fly teach, and the
+    header-steered flight. Data pins from pokered + the live
+    probe160 runs (docs S24)."""
+
+    def _tmhm_tokens(self, species_file):
+        from pathlib import Path
+        asm = (Path(rr.__file__).resolve().parent.parent
+               / "pokered" / "data" / "pokemon" / "base_stats"
+               / species_file)
+        if not asm.exists():
+            self.skipTest("pokered tree not present")
+        text = asm.read_text()
+        block = text.split("tmhm", 1)[1].split("; end", 1)[0]
+        block = block.replace("\\", " ").replace("\n", " ")
+        return {tok.strip(",") for tok in block.split()
+                if tok.strip(",")}
+
+    def test_fly_leg_functions_wired(self):
+        for fn in (rr.bicycle_exchange, rr.snorlax_catch,
+                   rr.route16_fly_house, rr.teach_fly, rr.fly_to):
+            self.assertTrue(callable(fn))
+
+    def test_fly_leg_constants(self):
+        self.assertEqual(rr.ITEM_BICYCLE, 0x06)
+        self.assertEqual(rr.ITEM_HM02_FLY, 0xC5)
+        self.assertEqual(rr.MOVE_FLY, 19)
+        self.assertEqual(rr.SPECIES_SNORLAX, 0x84)
+        self.assertEqual(rr.EV_GOT_BICYCLE, 192)
+        self.assertEqual(rr.EV_FIGHT_R16_SNORLAX, 1224)
+        self.assertEqual(rr.EV_BEAT_R16_SNORLAX, 1225)
+        self.assertEqual(rr.EV_GOT_HM02, 1230)
+
+    def test_pidgey_learnset_includes_fly(self):
+        # the verify-first check that made the teach offerable
+        tokens = self._tmhm_tokens("pidgey.asm")
+        self.assertIn("FLY", tokens)
+
+    def test_snorlax_catch_never_references_master_ball(self):
+        # Vlad's rule, pinned mechanically: the catch function's
+        # source must not touch the Master Ball at all.
+        import inspect
+        src = inspect.getsource(rr.snorlax_catch)
+        self.assertNotIn("MASTER_BALL", src)
+        self.assertNotIn("ITEM_MASTER", src)
+
+    def test_fly_town_cycle_order(self):
+        # observed live off the header (probe160f11): Lavender
+        # cycles BEFORE Vermilion, Fuchsia after Saffron.
+        cyc = rr.FLY_TOWN_CYCLE
+        self.assertEqual(cyc[0], "PALLET TOWN")
+        self.assertLess(cyc.index("LAVENDER TOWN"),
+                        cyc.index("VERMILION CITY"))
+        self.assertLess(cyc.index("SAFFRON CITY"),
+                        cyc.index("FUCHSIA CITY"))
+        for name in cyc:
+            self.assertIn(name, rr.FLY_TOWN_MAP_NAMES)
+
+    def test_fly_header_decode(self):
+        # the captured open-map header row: "To PALLET TOWN"
+        row = bytes([0x93, 0xAE, 0x67, 0x8F, 0x80, 0x8B, 0x8B,
+                     0x84, 0x93, 0x7F, 0x93, 0x8E, 0x96, 0x8D,
+                     0x7F, 0x7F, 0x7F, 0x7F, 0xED, 0xEE])
+
+        class FakeMem:
+            def __getitem__(self, addr):
+                if 0x9C00 <= addr < 0x9C00 + 20:
+                    return row[addr - 0x9C00]
+                return 0
+
+        class FakeEmu:
+            class pb:
+                memory = FakeMem()
+        self.assertEqual(rr._fly_header_town(FakeEmu()),
+                         "PALLET TOWN")

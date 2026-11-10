@@ -1932,3 +1932,182 @@ PC storage now holds TM02/21/24/29/34/46 + TM06 + TM38;
 none taught, ever; Rare Candy, HP Up and the Mansion
 Carbos unspent. Ahead: Giovanni's Viridian Gym, the
 final rival fights, Victory Road, the Elite Four.
+
+## 24. The Fly leg (probe160, port-verified probe161)
+
+Vlad's orders (2026-11-10): collect Fly ("you don't want
+to have to walk everywhere"), and the Route 16 Snorlax
+gets CAUGHT - balls first, Master Ball holstered, KO
+only if the balls run out. From the grand tour's chain
+head (probe158/grand-tour.state, Fuchsia PC, Blastoise
+Lv61 - it levelled on the tour).
+
+ROUTE: the brief's "surface only" R19/R20 surf fails at
+the plateau shore transitions, so the leg rode the
+tour's plateau route into Seafoam's west door and made
+a CAVE TRANSIT (the fuller-crossing precedent Vlad
+authorised for the tour; Articuno and B4F untouched, no
+boulder pushes - the cascade flags were already set).
+A pure 1F transit does not exist; the working line is
+1F -> B1F -> B2F -> B1F (ladder reset) -> B2F south ->
+B3F -> the stilled pool -> B2F east -> B1F east -> 1F
+east pocket -> out. Two engine truths fell out:
+TilePairCollisionsLand is UNORDERED, and surf_path did
+not apply the LAND pair table to on-foot steps at all -
+Seafoam B2F's west column is sealed by the CAVERN
+$20/$05 pair row. agent/world.py surf_path now refuses
+land-pair-forbidden steps between two non-surf cells
+(the same rule _bfs_steps applies), and the offline
+floor-component analysis (SF1 2, B1F 3, B2F 4, B3F 6
+ladder-linked components) is what made the transit
+routable. Do NOT block live boulder sprite cells in
+cave pathing: fallen boulders read as phantom sprites
+and sealing (18, 10) walls off SF1's corridor.
+
+Then the long way round on proven hops: Pallet -> R1 ->
+Viridian -> R2 -> Viridian Forest -> Pewter (heal) ->
+R3 -> Mt Moon -> R4 -> Cerulean (heal). Money +210 from
+one trainer a ride fought: 136,251 -> 136,461.
+
+THE BICYCLE (Cerulean Bike Shop): the bag was at 20
+stacks and the shop script's GiveItem runs BEFORE the
+voucher is removed, so at 20 stacks the exchange aborts
+on the bag-full branch (verified live - the brief's
+stack-neutral assumption is wrong). HM05 Flash was
+deposited at the Cerulean PC first (Voltorb knows the
+move; the item is retrievable; storage now also holds
+HM05). The clerk at (6, 2) is talked to from (6, 4)
+facing UP across the counter row. Verified from RAM:
+BICYCLE x1, voucher consumed, EV_GOT_BICYCLE (192) set.
+
+EAST/SOUTH: R9 -> R10 -> Rock Tunnel (Flash) ->
+Lavender -> R8 gate -> Saffron -> R7 gate -> Celadon
+(heal). Two gate lessons: hop rides strand on gate door
+cells (the warp does not fire when a ride stops ON the
+cell; the R8 crossing walks the door's BOTTOM cell
+(8, 10) then steps through), and the R7 gate is crossed
+on foot at (19, 10) -> Route7Gate (5, 4) -> (1, 4) ->
+the west segment (11, 10), then a battling ride.
+
+THE SNORLAX (Route 16 (26, 10); the stance EAST of it
+is (27, 10) - the brief's (26, 10) is the Snorlax's own
+cell, and an early walker "stuck" at (27, 10) was being
+blocked by the Snorlax itself). Checkpoint saved before
+the wake (never overwritten): Great x4, Poke x8,
+Master x1, Flute x1 verified in the bag. Final battle:
+flute wake -> switch to Oddish -> Sleep Powder (3-turn
+sleep) -> switch to Blastoise -> Bubble CRIT 141 -> 68
+(a crit at full HP cannot kill: 68 left) -> GREAT BALL
+#1 -> CAUGHT, asleep at 68/141. Verified from RAM:
+stored 23 -> 24, dex 26 -> 27, Snorlax Lv30 in the BOX
+(party full), EV_BEAT (1225) set, balls after: Great
+x3, Poke x8, Master Ball x1 NEVER THROWN. Party took
+zero damage. Attempts disclosure: six earlier attempts
+from the same checkpoint were discarded - all driver /
+policy defects, no game failures (a policy that threw
+at full HP into Rest windows and never entered the
+Powder phase; two menu-steering wedges; a tooling abort
+seconds after launch; a cursor assert after 2 throws;
+throw-entry gates that failed on the wake turn). The
+checkpoint rule was written for a crit accident; the
+only crit was the planned full-HP Bubble. Gen 1 facts
+banked: sleep does NOT break on damage; Rest's
+self-sleep is exactly 2 turns; Snorlax's AI spams Rest
+(heal + sleep) and Amnesia; it outspeeds Oddish, so
+Powder must land before a Rest; Blastoise always acts
+first. Battle-menu mechanics for the port: the main
+menu cursor is (top_y 14, item, col) with FIGHT at
+(0, 9) and PKMN at (0, 15); _advance_battle leaves it
+on FIGHT; the move menu is top_y 12 with a 1-based
+cursor byte; the party pick needs a confirming A on
+the SWITCH/STATS/CANCEL submenu; text pages need A
+presses (a passive wait stalls on the wake text); and
+_use_bag_item cannot be used for the Poke Flute - it
+verifies success by consumption and key items are
+never consumed.
+
+THE FLY HOUSE: row 9 is a continuous hedgerow fence
+with NO gap; the gatehouse's south corridor is the
+Cycling Road bike-check (a guard behind a counter at
+trigger cells, NOT a passage) and Gate2F is a dead-end
+viewing room. The real entrance is the CUT TREE at
+(34, 9), whose 2x2 block straddles the fence between
+the road (34, 10) and the east yard (34, 8) - the
+brief's "through the Cut trees" made literal. Yard west
+-> the gate's NORTH corridor (doors (24, 4)/(24, 5);
+cross on row 2 - the gambler stands on row 3) -> out
+at (17, 4) into the house plot -> door (7, 5) -> the
+girl at (2, 3) facing RIGHT, talked to from (1, 3).
+Bag was 19 stacks after the catch, so HM02 fit with no
+Celadon deposit: HM02 x1 in bag, EV_GOT_HM02 (1230)
+set, 20 stacks. The return trip re-cuts the tree (map
+reload regrows it).
+
+TEACH FLY - VERIFY FIRST: Pidgey's pokered tmhm
+includes FLY (checked in the data AND pinned by
+TestFlyLeg); its live moveset was [Gust] - one move,
+Lv3. At the Celadon PC: pc_swap DIGLETT out / PIDGEY
+in, teach via _teach_hm_free_slot's strict-append:
+[Gust] -> [Gust, FLY]; Blastoise / Arcanine / Lapras
+move bytes verified unchanged; HM02 not consumed.
+End arrangement per the brief: PIDGEY STAYS IN THE
+PARTY as the fly carrier, DIGLETT STAYS BOXED
+(reversible at any PC). Two heal traps banked:
+_heal_at_pc EXITS the Pokecenter afterwards, and a
+full-HP party makes heal/ride calls no-op - check the
+map, not the return value, before PC work.
+
+THE FLIGHT: Celadon street -> START -> POKEMON ->
+Pidgey -> FLY. The backend's _field_move cannot fly:
+its B-press backout cancels the Fly map, so fly_to is
+hand-driven. The map always opens on PALLET TOWN and
+UP cycles the VISITED flyable towns - the live order
+(read off the header) is Pallet, Viridian, Pewter,
+Cerulean, LAVENDER, VERMILION, Celadon, Saffron,
+FUCHSIA, Cinnabar. Counted presses are NOT reliable
+(one run double-stepped and landed Cinnabar); the
+steering signal is the header text itself, decoded
+from the 0x9C00 tilemap (Gen 1 font A=0x80, space
+0x7F; wWhichTownMapLocation at 0xCD3D does NOT track
+the fly cursor in this build - it sat at 0xFF through
+every press). Landing verified from RAM: Fuchsia City
+(7) at (19, 28). Healed at the Fuchsia PC.
+
+CHAIN HEAD: probe160/fly.state, sha256
+3cf144f5079f7d463d01e5acfe0e68bef380dbc328e93d22
+11a88fd4235936b7. Party (all full HP): Blastoise 61,
+Arcanine 39, Voltorb 16, Oddish 23, Lapras 15,
+Pidgey 3 (Gust/Fly). Box 18 (incl. Snorlax, Diglett).
+Money 136,461. Dex 27. Badges 7. Bag 20 stacks incl.
+Bicycle, HM02, Great x3, Poke x8, Master x1.
+
+PORT (probe161): bicycle_exchange, snorlax_catch,
+route16_fly_house, teach_fly, fly_to + _step_to_live
+(the greedy live stepper for cells the model cannot
+path) into run_real.py; the surf_path land-pair fix
+into agent/world.py; TestFlyLeg (6 tests: wiring,
+constants, Pidgey learnset parse, the Master-Ball
+source pin, the town cycle order, the header decode)
+- suite 157/157. FIDELITY: this leg IS cold-replayed,
+through the ported code - probe161 re-ran every ported
+function from the probe160 checkpoints and reproduced
+every outcome: bicycle_exchange True (after two fixes
+the verification caught: deposit_item needs the caller
+inside the PC, and the shop stance needs a live-step
+settle + an initiating A), snorlax_catch CAUGHT again
+on ONE Great Ball (the catch is RNG; the policy and
+mechanics are identical and verified), route16_fly_
+house True, teach_fly True ([Gust, FLY], Diglett
+boxed), fly_to Fuchsia True (map 7).
+
+OPEN DECISIONS (Vlad's, untouched): Articuno - catch
+call unmade, never engaged or sighted. Safari
+leftovers: Tauros and Scyther still outstanding;
+Safari West still unreachable. TM shelf: PC storage
+holds TM02/21/24/29/34/46/06/38 + HM05 + Lift Key +
+Potion; none taught, ever; Rare Candy, HP Up and the
+Mansion Carbos unspent. Party arrangement: Pidgey in /
+Diglett boxed (the Fly-leg brief's end state; Vlad can
+re-shuffle anytime). Ahead: Giovanni's Viridian Gym
+(Earth Badge), the final rival fights, Victory Road,
+the Elite Four.

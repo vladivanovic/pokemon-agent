@@ -539,7 +539,12 @@ class World:
         rule as tile_path: warp tiles are destinations, not corridors.
         `blocked` tiles are walls for this call (a swimmer standing
         on the water is a transient obstacle). The engine's
-        TilePairCollisionsWater pairs (FOREST/CAVERN) are refused.
+        TilePairCollisionsWater pairs (FOREST/CAVERN) are refused,
+        and so are TilePairCollisionsLand pairs for a plain
+        on-foot step between two land cells (the rule _bfs_steps
+        applies to tile_path - probe160: Seafoam B2F's cave floor
+        is split by a $20/$05 pair row that surf_path used to plan
+        straight through, and the engine refused every step).
         Ledge hops are modelled like _bfs_steps (a face stepped on
         in its jump direction lands two cells away - the path then
         contains a non-adjacent step, which the surf stepper reads
@@ -562,6 +567,14 @@ class World:
                 pair = frozenset((gm.tiles[cur[1]][cur[0]],
                                   gm.tiles[n[1]][n[0]]))
                 if pair in pairs:
+                    return False
+            if gm.pair_forbidden and gm.tiles \
+                    and abs(n[0] - cur[0]) + abs(n[1] - cur[1]) == 1 \
+                    and cur not in gm.surf_cells \
+                    and n not in gm.surf_cells:
+                pair = frozenset((gm.tiles[cur[1]][cur[0]],
+                                  gm.tiles[n[1]][n[0]]))
+                if pair in gm.pair_forbidden:
                     return False
             return True
 
