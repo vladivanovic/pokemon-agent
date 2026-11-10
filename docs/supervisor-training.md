@@ -1714,3 +1714,221 @@ No cold replay past the block was possible; the
 deterministic spans that did run (the proof hop) replay
 byte-identical from lapras-strength.state. Media:
 probe157/media (beach stance, first surf, disembarked).
+
+## 23. The Grand Tour, completed (2026-11-10/11, probe158 + replay probe159): the fuller Seafoam crossing, three compiled "truths" that weren't, and the NPC the map cannot see
+
+Vlad authorised the fuller Seafoam crossing ("go fuller
+Seafoam crossing", 2026-11-10) and added the Vermilion
+BIKE VOUCHER to the route mid-tour. The tour ran end to
+end from probe156/lapras-strength.state with NO blackout
+at any point. NEW CHAIN HEAD: probe158/grand-tour.state
+(sha256 db0d713cb3c9cb84c7c7bdba15fe88d54d8688cf1bf08-
+8ddae1c9df76df64f2f) - Fuchsia PC, healed, 7 badges,
+Pokedex 26, money 136,251 yen, bag 20 stacks incl. BIKE
+VOUCHER + SUPER ROD. Ported and pushed (9b5f53d, suite
+151/151, 9 new pins) and cold-replayed in full (below).
+
+SEAFOAM, FLOOR BY FLOOR. First, a correction owed to
+S22: its "no surface passage" claim was OVERSTATED. The
+island's north plateau IS a surface route - sail R20's
+north channel, disembark at (61, 5), walk west to the
+WEST door (48, 5). S22's BFS was surf-only and missed
+the disembark-and-walk link; R20's two surf basins still
+share no cell, the EAST door's yard is sealed from the
+east (the $3A shoal column x62 rows 10-16 + row 17),
+and a Fuchsia->Cinnabar crossing still needs the full
+boulder cascade - but "Route 20's surface is sealed"
+was wrong as stated. Cave entry is the west door ->
+SF1 (4, 17); exiting a cave door lands on the cell in
+FRONT of it (west door -> (48, 6), east door -> (58, 10))
+and the exit pattern is: stand on the door cell, keep
+pressing OUT until the map flips.
+
+Boulder machinery (all RAM-verified): Strength via
+Lapras's party-menu field move; the activation bit is
+wSpriteStateData1 0xD728 bit 0, re-checked before every
+push; a push takes TWO direction contacts (the first
+only sets the tried-flag); boulder sprite k's cell =
+wSpriteStateData2 0xC200+16k, (byte[+5]-4, byte[+4]-4);
+hole cells are WALKER HAZARDS (surf_path treats them as
+walkable floor) - SF1 {(17,6),(24,6)}, B1F {(18,6),
+(23,6)}, B2F {(19,6),(22,6)}, B3F {(3,16),(6,16)} are
+blocked in every cave leg. A hole push gets AT MOST TWO
+contacts - a third could step the player onto the hole.
+The cascade, in order (event flags are the verdicts):
+1F boulder1 UP x4 from (18,11)..(18,8) to (18,6), LEFT
+from (19,6) into hole (17,6) = event 1294; 1F boulder2
+UP from (26,8), LEFT from (27,6), LEFT from (26,6) into
+hole (24,6) = 1295. B1F boulder2 RIGHT from (21,6) into
+(23,6) = 2497 (reached via SF1 (25,3)); B1F boulder1
+RIGHT from (16,6) into (18,6) = 2496. B2F boulder1
+RIGHT from (17,6) into (19,6) = 2504. B2F boulder2 is
+the long way: B2F -> B1F -> B2F -> B3F peninsula ->
+the current ride -> B4F lagoon -> up and around ->
+LEFT from (24,6) into hole (22,6) = 2505 (SEAFOAM3:
+the pool calms).
+
+The currents are a one-way conveyor, not swimmable
+water: pre-cascade there is NO free swimming in the
+B3F pool. Boarding is pair-rule-gated by the SHORE
+tile: the B3F peninsula (15, 7) is $15, the ONLY
+boardable shore into the pool - $05 raised-floor shores
+refuse ("No SURFing on LAPRAS here!", screenshot-
+verified; the CAVERN pair {$14,$05} collides). Boarding
+at the peninsula steps onto trigger (15, 8) and the
+DefaultScript rides you to B4F (20, 15), surfing. B4F's
+south door is ENTRY-ONLY pre-cascade (the DefaultScript
+drift ejects you north - the prep notes had the
+condition backwards; it fires when SEAFOAM3 is NOT
+set). Post-cascade the finish is: B2F -> B3F -> B4F
+(25,4) -> B3F (8,6) -> peninsula -> board -> CALM CHECK
+(300 frames, still at (15,8)) -> surf east -> disembark
+(23,9) -> climb out -> SF1 east pocket -> (26,17) door
+-> R20 yard (58,10) -> surf to Cinnabar. ARTICUNO:
+never engaged, never sighted (the B4F legs stay in the
+lagoon and the north/east land, out of its island's
+sight). No Seafoam catches; cave wilds fled, water
+trainers fought by the walker. Cinnabar checkpoint
+money 115,123 yen - the replay matched it to the yen.
+
+MANSION. The S22 route was impossible as modelled, and
+the reason is pure switch logic: the 1F stairs room's
+two doors need OPPOSITE switch states in sequence
+((12,6) open-when-OFF, then (10,8) open-when-ON) with
+the only 1F statue west of both. The real route fell
+out of an offline (map, cell, switch) graph search
+that included the 3F hole drop: enter OFF -> (5,10) ->
+2F -> (6,1) -> 3F -> statue ON -> hole (16,14) -> FALL
+to the 1F strip at the same coords -> stairs (21,23)
+-> B1F -> statue OFF -> statue ON -> key ball (5,13)
+-> OFF -> ON -> exit (23,22) -> 1F east doors (26,27).
+Two data corrections: B1F has TWO statues, (20,3)
+stance (20,4) AND (18,25) stance (18,26) - the port
+knew only the first; and hidden-event hole indices 1-2
+on 3F land on 1F while index 3 lands on 2F (a miss is
+recoverable by climbing back). The S22 YesNo guess is
+SETTLED, against the guesser: _yesno_pick's return
+value is UNRELIABLE (its (13,0) tilemap detector can
+miss the open window) - in the live run it returned
+False on a toggle that had in fact succeeded. The
+event FLAG is the only verdict; _mansion_press_statue
+no longer early-returns on it. SECRET KEY verified in
+bag from RAM; the run also picked up CARBOS from the
+1F (18,21) ball (unused - a permanent stat change is
+Vlad's call). The mansion switch flag reads False
+again once back on Cinnabar (per-visit behaviour).
+
+BLAINE. Two more S22 corrections, both proven live.
+(1) The quiz gate events are 681..686, NOT 680..685:
+hidden-event gate index i sets event 680+i (FlagAction
+counts from EVENT_CINNABAR_GYM_GATE0_UNLOCKED=680 with
+the index itself). Proof: machine (15,7) set event 681.
+The door pairing shifts with it: (9,3)<->681, (6,3)<->
+682, (6,6)<->683, (3,8)<->684, (2,6)<->685, (2,3)<->686.
+Quiz answers and machine coords were correct as
+compiled. (2) The ceremony races a bare drain: with
+the gates fixed, all six quizzes passed in one round
+and Blaine was beaten (payout 4,653 = 99x47 proves the
+fight), yet EV_BEAT_BLAINE sat unset because the
+script's badge/TM38 sequence starts a beat after the
+battle - beat_blaine now rides A until flag + TM38
+land. Verified from RAM: 7 badge bits, EV_BEAT_BLAINE
+(665), EV_GOT_TM38 (664), TM38 in bag, money 134,286
+yen (replay: identical). All six gym trainers were
+also beaten along the way (events 667-672).
+
+SURF DEPARTURE FIX. surf_to failed Cinnabar -> R21:
+Cinnabar's north exit cells are LAND shore cells (the
+crossing water is R21's first row), so the walker
+delivers you to the beach on foot and a bare surf step
+cannot board. surf_to now boards (party-menu SURF)
+whenever a leg starts un-surfed at a shore. Pallet
+landfall (7, 14); Mum's heal used the (5, 2) -> talk
+(5, 3) stance and cured Tentacool poison picked up on
+R21 (HP ticking 44 -> 43 indoors - poison walks with
+you). _mom_heal hardened to match (stance order +
+fighting-walker exit; its old exit stage had failed
+live after the heal landed).
+
+VERMILION (Vlad's addendum). The tour's bag math broke
+exactly as predicted: 20 stacks at Blaine, voucher +
+rod = 22. TM06 and TM38 were deposited at the
+Vermilion PC (bag 20 -> 18; both retrievable from PC
+storage) - TM deposits only, as authorised. Fan Club:
+the chairman at (3, 1) sits behind a table block; the
+working stance is (2, 1) facing RIGHT (the compiled
+(3, 2) is a table cell). BIKE VOUCHER (0x2D) verified
+in bag from RAM. The Super Rod followed on R12
+(Fishing Guru stance (1, 4); Fisher5's flag asserted
+False at every checkpoint), bag exactly 20.
+
+THE NPC THE MAP CANNOT SEE (the ride home). The R13
+fence maze wedged both riders for ~20 minutes apiece
+in the live run, and the first port replay wedged
+again for 18. The root cause is not the maze: static
+trainers are invisible to the tile model. R13's Bird
+Keeper stands at (12, 4) - already beaten in this
+lineage, so a permanent obstacle - and every shortest
+path west funnels through his cell; _walk_fighting
+burned 446 s bumping to (13, 4) and stalling. Worse,
+R14's entry has a sealed pocket: crossing R13 at row 4
+lands at (16, 6), a 4-cell pocket whose only exit cell
+(15, 6) is occupied by another STAY Bird Keeper, while
+row 10 lands in the open map (reachable region 400+).
+_ride_or_cross now: tries candidate boundary rows
+nearest-first, paths with LIVE NPC cells blocked
+(sprite-table reads, the same 0xC200 addressing as the
+boulders), walks with _surf_walk_to (it replans around
+refused cells), and MOBILITY-TESTS each landing - the
+reachable region from the landing cell, live NPCs
+excluded, must reach 40 cells, else step back and try
+the next row. Result: R13 -> R14 in 4 s, R14 -> R15 in
+3 s, R15 -> Fuchsia in 3 s (against ~40 minutes of
+wedging before the fix).
+
+DRATINI. The port's stance search picked (15, 14) - a
+shore segment fenced off by posts and unreachable in
+its own passability grid (the search never checked
+reachability); _safari_pond_stance now filters to
+anchor-reachable cells. The second attempt caught
+Dratini and then CRASHED in the bonus-grass phase
+(_safari_settle's "safari RUN failed" inside _sz_nav)
+and lost the catch with the session - the bonus block
+is now wrapped so it can never cost the mission. The
+live catch (probe158o3, stance (15, 7)): ONE entry,
+FIRST cast, one unbaited ball - DRATINI Lv15. The
+burn-out exit walk then engaged the standing hunt
+policy: CHANSEY Lv23 CAUGHT (bait 1, balls 1 - a
+long-standing target), VENONAT Lv22 and PARASECT Lv30
+caught, SCYTHER Lv23 appeared once and fled. Tauros
+never appeared. Final Pokedex 26. Media caveat: the
+encounter/throw frames caught the bite-transition
+wipe; the RAM/log evidence is conclusive.
+
+COLD REPLAY (probe159): the whole port pipeline
+re-driven from lapras-strength.state - seafoam_
+crossing True in 69 s (money 115,123, identical),
+mansion_secret_key True in 24 s (116,573, identical),
+beat_blaine True in 32 s (134,286, identical),
+super_rod_run True stage-wise + in legs (voucher,
+rod, Fisher5 untouched, 136,751 at R12, identical),
+safari_dratini True in 128 s - replay RNG differs, as
+it must: Dratini fled 5 casts in entry 1 and was
+caught in entry 2 (Slowpoke/Krabby/Psyduck joined the
+replay lineage; dex 26 by a different road). Battle
+RNG is not byte-identical and never claimed to be;
+every deterministic span matched to the yen.
+
+OPEN DECISIONS (Vlad's, untouched): Articuno - catch
+call unmade, never engaged or sighted. Route 16
+Snorlax - decision MADE 2026-11-10: CATCH (balls first,
+Master Ball holstered, KO only if balls run out); it
+gates the Fly leg, which also cashes the Bike Voucher
+at Cerulean's Bike Shop for Cycling Road. Safari
+leftovers: Chansey is now CAUGHT; Tauros and Scyther
+still outstanding; Safari West still unreachable (grid
+mis-model, _sz_nav dies at North (38,12)). TM shelf:
+PC storage now holds TM02/21/24/29/34/46 + TM06 + TM38;
+none taught, ever; Rare Candy, HP Up and the Mansion
+Carbos unspent. Ahead: Giovanni's Viridian Gym, the
+final rival fights, Victory Road, the Elite Four.
