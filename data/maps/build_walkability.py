@@ -361,10 +361,22 @@ def main() -> None:
         pair_forbidden = pair_by_ts.get(alpha_key(ts_const), [])
         out[i] = {"name": cn, "file": fname, "tileset": ts_const,
                   "w": TW, "h": TH, "walk": grid, "warps": warps,
+                  # The sampled tile ids are emitted for EVERY map
+                  # (probe157, the surf build): world.py needs them
+                  # to derive water/shore cells for surfing, and
+                  # the door-overlay logic needs them for the
+                  # switch/gate interiors. They were previously only
+                  # kept on pair-collision tilesets.
+                  "tiles": tiles,
+                  # The tileset's passable ("coll") tile-id list:
+                  # world.py's tile_walkable recomputes engine
+                  # passability from tiles+coll, which stays true
+                  # on maps whose walk grid is the open-grid
+                  # coherence fallback (Route 20 among them).
+                  "coll": sorted(passable),
                   **({"ledges": ledges} if ledges else {}),
                   **({"cut_trees": cut_trees} if cut_trees else {}),
-                  **({"tiles": tiles,
-                      "pair_forbidden": pair_forbidden}
+                  **({"pair_forbidden": pair_forbidden}
                      if pair_forbidden else {})}
 
     with open(OUT, "w") as f:

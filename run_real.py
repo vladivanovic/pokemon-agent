@@ -8732,6 +8732,1129 @@ def safari_rare_hunt(emu: PyBoyEmulator, ex: Executor,
 
 
 
+# ======================================================================
+# THE GRAND TOUR (probe157, docs section 22)
+# Surf machinery, then the tour itself: Cinnabar (the Mansion
+# Secret Key, Blaine), Pallet and the Diglett's Cave ride to the
+# Super Rod, and Dratini fishing in the Safari Zone. Engine facts
+# this rides on, compiled from pokered and verified live:
+# * Boarding is the party-menu SURF field move - Gen 1 has NO
+#   A-button water prompt. The tile in front must pass
+#   IsNextTileShoreOrWater (its sampled tile is $14/$32/$48);
+#   the engine then steps the player onto the water itself and
+#   sets wWalkBikeSurfState (0xD700) to 2.
+# * While surfing, stepping onto a land-passable cell
+#   auto-disembarks (0xD700 -> 0); onto $14/$48 (and $32 off the
+#   SHIP_PORT tileset) you keep surfing. world.py's surf layer
+#   compiles the cells; this section executes them one
+#   RAM-verified step at a time, fleeing wilds and fighting
+#   whatever trainer intercepts (R19/R20/R21's swimmers stand
+#   IN the water and sight-fight surfers).
+# * Switch/gate interiors (Pokemon Mansion, Cinnabar Gym) swap
+#   whole 2x2 blocks via ReplaceTileBlock (b = Y block, c = X
+#   block); passability is per cell from the swapped block's
+#   sampled tiles, so navigation runs on a live overlay read
+#   from the switch/gate event flags.
+# ======================================================================
+
+ADDR_SURF_STATE = 0xD700          # wWalkBikeSurfState (2 = surfing)
+ADDR_BATTLE_KIND = 0xD057         # wIsInBattle (1 wild, 2 trainer)
+ADDR_BATTLE_TYPE = 0xD05A         # wBattleType (2 = Safari)
+ADDR_MENU_ITEM = 0xCC26           # wCurrentMenuItem
+ADDR_TILE_IN_FRONT = 0xCFC6       # wTileInFrontOfPlayer
+ITEM_SECRET_KEY = 0x2B
+ITEM_SUPER_ROD = 0x4E
+ITEM_TM38 = 0xEE
+EV_MANSION_SWITCH_ON = 632
+EV_BEAT_BLAINE = 665
+EV_GOT_TM38 = 664
+EV_GYM_GATES = (680, 681, 682, 683, 684, 685)   # GATE0..5 events
+
+_DIR_FROM_DELTA = {(0, -1): "up", (0, 1): "down",
+                   (-1, 0): "left", (1, 0): "right"}
+
+
+def surfing(emu: PyBoyEmulator) -> bool:
+    return emu.pb.memory[ADDR_SURF_STATE] == 2
+
+
+def _surf_carrier(emu: PyBoyEmulator):
+    """(party index, party-submenu index) of the Surf carrier,
+    read live: the first party mon knowing SURF (move id 57);
+    the submenu index counts its field moves that precede
+    Surf in its own slot order (_field_rank)."""
+    st = emu.read_state()
+    for i, mon in enumerate(st.party):
+        if 57 in mon.moves:
+            return i, _field_rank(emu, i, 57)
+    return None
+
+
+def _surf_battle_clear(emu: PyBoyEmulator) -> bool:
+    """Resolve whatever battle the last step triggered: flee
+    wilds, fight trainers (a swimmer interception cannot be
+    fled). Returns False if the party blacked out."""
+    for _ in range(40):
+        st = emu.read_state()
+        if not st.in_battle:
+            return any(m.hp > 0 for m in st.party)
+        kind = emu.pb.memory[ADDR_BATTLE_KIND]
+        _drive_battle_typed(emu, flee_wild=(kind == 1))
+    return not emu.read_state().in_battle
+
+
+def _surf_step(emu: PyBoyEmulator, direction: str) -> None:
+    """One press in surf context + settle + battle resolution.
+    A fled battle can leave its (empty) text box standing,
+    which swallows every later direction press - drain it
+    before returning (probe157: wedged at R20 (87, 4) with all
+    four directions refused and in_dialog stuck True)."""
+    emu.press(direction)
+    _explore_settle(emu)
+    if emu.read_state().in_battle:
+        _surf_battle_clear(emu)
+        _explore_settle(emu)
+    if emu.read_state().in_dialog:
+        emu.close_dialog(max_presses=6)
+        _explore_settle(emu)
+
+
+def _refusal_recover(emu: PyBoyEmulator,
+                     flee_wild: bool = True) -> bool:
+    """Un-wedge a refused step. A step that changes nothing and
+    starts no battle can be a TRAINER SIGHT-LOCK: the trainer
+    has spotted the player and the engagement script stalls
+    while directions keep being pressed (probe157: R19's
+    Swimmer4 at (9, 13) froze the walk back to the beach in
+    all four directions until an A tap let the battle fire).
+    Idle with neutral input, tap A, resolve any battle that
+    starts. Returns True if a battle was found and cleared."""
+    emu.tick(90)
+    for _ in range(3):
+        if emu.read_state().in_battle:
+            _drive_battle_typed(emu, flee_wild=flee_wild)
+            _explore_settle(emu)
+            return True
+        _press10(emu, "a")
+        emu.tick(60)
+    if emu.read_state().in_battle:
+        _drive_battle_typed(emu, flee_wild=flee_wild)
+        _explore_settle(emu)
+        return True
+    return False
+
+
+def _surf_board(emu: PyBoyEmulator, direction: str) -> bool:
+    """Board: face `direction` (a bump press turns the player),
+    then run the party-menu Surf macro for the live carrier.
+    Success is the RAM surf byte, not the macro's say-so."""
+    carrier = _surf_carrier(emu)
+    if carrier is None:
+        return False
+    emu.press(direction)
+    emu.tick(10)
+    front = emu.pb.memory[ADDR_TILE_IN_FRONT]
+    if front not in (0x14, 0x32, 0x48):
+        return False
+    idx, sub = carrier
+    if not emu.field_surf(idx, sub):
+        return False
+    for _ in range(30):
+        if surfing(emu):
+            break
+        emu.tick(10)
+    _explore_settle(emu)
+    if emu.read_state().in_battle:
+        _surf_battle_clear(emu)
+    return surfing(emu)
+
+
+def _surf_walk_to(emu: PyBoyEmulator, ex: Executor, map_id: int,
+                  goal, blocked0=frozenset(),
+                  max_replans: int = 80) -> bool:
+    """Walk/surf within one map to `goal` over world.surf_path,
+    one RAM-verified cell at a time. Boards when the next cell
+    is water-only, rides the engine's auto-disembark onto land,
+    and replans around refused cells (learned walls - a swimmer
+    standing on the planned line is the common case). Stepping
+    onto the goal may trigger its warp: a map change on the
+    goal step is success."""
+    world = ex.world
+    gm = world.maps[map_id]
+    blocked = set(blocked0)
+    for _ in range(max_replans):
+        st = emu.read_state()
+        if st.map_id != map_id:
+            return False
+        if (st.x, st.y) == goal:
+            return True
+        path = world.surf_path(map_id, (st.x, st.y), goal,
+                               blocked=frozenset(blocked))
+        if not path or len(path) < 2:
+            return (st.x, st.y) == goal
+        refused = False
+        for nxt in path[1:]:
+            st = emu.read_state()
+            if st.map_id != map_id:
+                return False
+            dx, dy = nxt[0] - st.x, nxt[1] - st.y
+            dist = abs(dx) + abs(dy)
+            if dist == 2:      # ledge hop: jump direction
+                dx, dy = dx // 2, dy // 2
+            elif dist != 1:
+                refused = True
+                break
+            direction = _DIR_FROM_DELTA[(dx, dy)]
+            if not surfing(emu) and not gm.tile_walkable(*nxt) \
+                    and nxt in gm.surf_cells:
+                _surf_board(emu, direction)
+            else:
+                _surf_step(emu, direction)
+            st = emu.read_state()
+            if st.map_id != map_id:
+                return nxt == goal
+            if (st.x, st.y) != nxt:
+                # sight-lock? recover, then retry the step once
+                _refusal_recover(emu)
+                st = emu.read_state()
+                if st.map_id != map_id:
+                    return nxt == goal
+                if (st.x, st.y) != nxt:
+                    if not surfing(emu) and not gm.tile_walkable(*nxt) \
+                            and nxt in gm.surf_cells:
+                        _surf_board(emu, direction)
+                    else:
+                        _surf_step(emu, direction)
+                    st = emu.read_state()
+                    if st.map_id != map_id:
+                        return nxt == goal
+                if (st.x, st.y) != nxt:
+                    blocked.add(nxt)
+                    refused = True
+                    break
+            if (st.x, st.y) == goal:
+                return True
+        if not refused:
+            continue
+    st = emu.read_state()
+    return st.map_id == map_id and (st.x, st.y) == goal
+
+
+def surf_to(emu: PyBoyEmulator, ex: Executor, dst_map: int,
+            dst_xy=None) -> bool:
+    """Travel between maps on foot + water: route() legs are
+    followed via connection crossings (world.surf_crossings);
+    each leg walks (surf_path) to the best exit cell, crosses,
+    and continues. `dst_xy`, when given, is a cell in dst_map
+    to end on (e.g. a door warp - stepping on it fires the
+    warp, which is success). Warp legs are NOT handled: the
+    tour enters buildings by walking onto their doors within
+    the arrival map."""
+    world = ex.world
+    caps = emu.read_state().capabilities()
+    if "surf" not in caps:
+        return False
+    for _leg_no in range(16):
+        st = emu.read_state()
+        if st.map_id == dst_map:
+            if dst_xy is None:
+                return True
+            return _surf_walk_to(emu, ex, dst_map, dst_xy)
+        route = world.route(st.map_id, dst_map, caps)
+        if route is None or not route.legs:
+            return False
+        leg = route.legs[0]
+        if not leg.via.startswith("connection"):
+            return False
+        direction = leg.via.split()[1]
+        cands = []
+        for exit_cell, dm, _arr in world.surf_crossings(
+                st.map_id, direction):
+            if dm != leg.dst:
+                continue
+            p = world.surf_path(st.map_id, (st.x, st.y), exit_cell)
+            if p is not None:
+                cands.append((len(p), exit_cell))
+        if not cands:
+            return False
+        cands.sort()
+        if not _surf_walk_to(emu, ex, st.map_id, cands[0][1]):
+            return False
+        _surf_step(emu, {"north": "up", "south": "down",
+                         "east": "right", "west": "left"}[direction])
+        if emu.read_state().map_id != leg.dst:
+            return False
+    return emu.read_state().map_id == dst_map
+
+
+# -- switch/gate interiors -------------------------------------------
+# A door occupies a 2x2 block; the open/closed patterns below are
+# the blocks' bottom-left sampled tiles against the tileset's
+# passable list, computed from the blocksets (probe157):
+# FACILITY floor $0E opens all four cells; the gate blocks leave
+# the corridor-side lane sampled as floor even when "closed"
+# ($2D top lane, $54 bottom lane, $5F left lane) - you can walk
+# the lane, you just cannot cross. In the GYM tileset the floor
+# block $0E's TOP row samples $17 (wall), so an open gym gate is
+# only its bottom lane; GYM $54 is a diagonal (its passable
+# cells are (1,0) and (0,1)) and GYM $5F its right lane.
+_DOOR_OPEN = {
+    "FACILITY": frozenset({(0, 0), (1, 0), (0, 1), (1, 1)}),
+    "GYM": frozenset({(0, 1), (1, 1)}),
+}
+_DOOR_CLOSED = {
+    ("FACILITY", 0x2D): frozenset({(0, 0), (1, 0)}),
+    ("FACILITY", 0x54): frozenset({(0, 1), (1, 1)}),
+    ("FACILITY", 0x5F): frozenset({(0, 0), (0, 1)}),
+    ("GYM", 0x54): frozenset({(1, 0), (0, 1)}),
+    ("GYM", 0x5F): frozenset({(1, 0), (1, 1)}),
+}
+# Pokemon Mansion: ONE switch (EV_MANSION_SWITCH_ON) drives every
+# floor's doors. Entries: (block (bx, by), gate block id,
+# open_when_switch_on). Block coords are (X, Y) in block units -
+# ReplaceTileBlock takes b = Y, c = X, and the scripts' `lb bc`
+# pairs read (Y, X); the pairs below are already transposed into
+# (bx, by). Verified against each floor's script (probe157).
+MANSION_DOORS = {
+    165: [((12, 6), 0x2D, False), ((8, 3), 0x2D, True),
+          ((10, 8), 0x2D, True), ((13, 13), 0x2D, True)],
+    214: [((4, 2), 0x5F, False), ((9, 4), 0x54, True),
+          ((3, 11), 0x5F, True)],
+    215: [((7, 2), 0x5F, False), ((7, 5), 0x5F, True)],
+    216: [((13, 8), 0x2D, False), ((6, 11), 0x5F, False),
+          ((4, 3), 0x5F, True), ((8, 8), 0x54, True)],
+}
+# Statue stances: stand here, face UP, press A, answer YES.
+MANSION_STATUES = {165: (2, 6), 214: (2, 12), 215: (10, 6),
+                   216: (20, 4)}
+# Cinnabar Gym: (block (bx, by), gate block id, gate event) in
+# CinnabarGymGateCoords order; quiz gate g (1-based) opens
+# entry g-1 and sets EV_GYM_GATES[g-1].
+CINNABAR_GYM_DOORS = [
+    ((9, 3), 0x54, 680), ((6, 3), 0x54, 681), ((6, 6), 0x54, 682),
+    ((3, 8), 0x5F, 683), ((2, 6), 0x54, 684), ((2, 3), 0x54, 685),
+]
+# The quiz machines, in the order their rooms chain from the
+# door: (machine tile, stance tile south of it, gate index
+# 0-based, correct YesNo item 0=YES 1=NO). Answers compiled from
+# CinnabarGymQuizCoords + the hidden events' stored nibbles.
+CINNABAR_QUIZ = [
+    ((15, 7), (15, 8), 0, 0),    # CATERPIE->BUTTERFREE? YES
+    ((10, 1), (10, 2), 1, 1),    # 9 certified badges? NO
+    ((9, 7), (9, 8), 2, 1),      # POLIWAG evolves 3 times? NO
+    ((9, 13), (9, 14), 3, 1),    # thunder vs ground? NO
+    ((1, 13), (1, 14), 4, 0),    # same kind/level identical? YES
+    ((1, 7), (1, 8), 5, 1),      # TM28 = TOMBSTONER? NO
+]
+
+
+def _door_overlay(world, map_id: int, doors, is_open):
+    """passable(x, y) for a switch/gate interior: the base grid,
+    with each door block's cells decided by the block's CURRENT
+    state - the tileset's open pattern or the gate block's own
+    closed pattern. `doors` entries are (block_xy, gate_block_id,
+    key); is_open(key) is consulted live at every call."""
+    gm = world.maps[map_id]
+    cell_state = {}
+    for (bx, by), gid, key in doors:
+        for dx in (0, 1):
+            for dy in (0, 1):
+                cell_state[(2 * bx + dx, 2 * by + dy)] = \
+                    (gid, key, (dx, dy))
+
+    def passable(x: int, y: int) -> bool:
+        hit = cell_state.get((x, y))
+        if hit is None:
+            return gm.tile_walkable(x, y)
+        gid, key, off = hit
+        if is_open(key):
+            return off in _DOOR_OPEN[gm.tileset]
+        return off in _DOOR_CLOSED[(gm.tileset, gid)]
+
+    return passable
+
+
+def _overlay_path(world, map_id: int, start, goal, passable,
+                  blocked=frozenset()):
+    """BFS over a live passability overlay. Warp tiles are
+    destinations, not corridors (the tile_path rule)."""
+    from collections import deque
+    gm = world.maps[map_id]
+    warps = {(w.x, w.y) for w in gm.warps}
+    if start == goal:
+        return [start]
+    prev = {start: None}
+    q = deque([start])
+    while q:
+        cur = q.popleft()
+        for dx, dy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+            n = (cur[0] + dx, cur[1] + dy)
+            if n in prev or n in blocked:
+                continue
+            if not gm.in_bounds(*n):
+                continue
+            if n in warps and n != goal:
+                continue
+            if not passable(*n):
+                continue
+            prev[n] = cur
+            if n == goal:
+                path = [n]
+                while prev[path[-1]] is not None:
+                    path.append(prev[path[-1]])
+                return list(reversed(path))
+            q.append(n)
+    return None
+
+
+def _overlay_nav(emu: PyBoyEmulator, ex: Executor, map_id: int,
+                 goal, passable, flee_wild: bool = True,
+                 max_replans: int = 80) -> bool:
+    """Step to `goal` inside one map over a live passability
+    overlay, RAM-verified per cell with learned walls on
+    refusal (an NPC sprite on a grid-open cell is the usual
+    cause). Battles go through _drive_battle_typed. Stepping
+    onto the goal may fire its warp - a map change on the goal
+    step is success."""
+    world = ex.world
+    blocked = set()
+    for _ in range(max_replans):
+        st = emu.read_state()
+        if st.map_id != map_id:
+            return False
+        if (st.x, st.y) == goal:
+            return True
+        path = _overlay_path(world, map_id, (st.x, st.y), goal,
+                             passable, blocked=frozenset(blocked))
+        if not path or len(path) < 2:
+            return (st.x, st.y) == goal
+        refused = False
+        for nxt in path[1:]:
+            st = emu.read_state()
+            if st.map_id != map_id:
+                return False
+            d = _DIR_FROM_DELTA.get((nxt[0] - st.x, nxt[1] - st.y))
+            if d is None:
+                refused = True
+                break
+            emu.press(d)
+            _explore_settle(emu)
+            if emu.read_state().in_battle:
+                _drive_battle_typed(emu, flee_wild=flee_wild)
+                _explore_settle(emu)
+            if emu.read_state().in_dialog:
+                emu.close_dialog(max_presses=6)
+                _explore_settle(emu)
+            st = emu.read_state()
+            if st.map_id != map_id:
+                return nxt == goal
+            if (st.x, st.y) != nxt:
+                # sight-lock? recover, then retry the step once
+                _refusal_recover(emu, flee_wild=flee_wild)
+                st = emu.read_state()
+                if st.map_id != map_id:
+                    return nxt == goal
+                if (st.x, st.y) != nxt:
+                    emu.press(d)
+                    _explore_settle(emu)
+                    if emu.read_state().in_battle:
+                        _drive_battle_typed(emu,
+                                            flee_wild=flee_wild)
+                        _explore_settle(emu)
+                    st = emu.read_state()
+                    if st.map_id != map_id:
+                        return nxt == goal
+                if (st.x, st.y) != nxt:
+                    blocked.add(nxt)
+                    refused = True
+                    break
+            if (st.x, st.y) == goal:
+                return True
+        if not refused:
+            continue
+    st = emu.read_state()
+    return st.map_id == map_id and (st.x, st.y) == goal
+
+
+def _yesno_open(emu: PyBoyEmulator) -> bool:
+    """Is a Yes/No box on screen? The box's top-left border tile
+    (0x79 - the same tile the dialog check reads at (0, 12))
+    lands at tilemap (13, 0); measured live in probe157."""
+    return emu.pb.memory[0xC3A0 + 13] == 0x79
+
+
+def _yesno_pick(emu: PyBoyEmulator, want: int) -> bool:
+    """Answer an on-screen Yes/No prompt: advance text with A
+    until the box opens, steer wCurrentMenuItem to `want`
+    (0 = YES, 1 = NO), confirm with A. The caller verifies the
+    OUTCOME (event flag / gate / battle) itself."""
+    for _ in range(60):
+        if emu.read_state().in_battle:
+            return False
+        if _yesno_open(emu):
+            cur = emu.pb.memory[ADDR_MENU_ITEM]
+            if cur == want:
+                _press10(emu, "a")
+                emu.tick(30)
+                return True
+            _press10(emu, "down" if want > cur else "up")
+            emu.tick(15)
+            continue
+        if emu.read_state().in_dialog:
+            _press10(emu, "a")
+            emu.tick(15)
+            continue
+        emu.tick(10)
+    return False
+
+
+def _drain_dialog(emu: PyBoyEmulator, rounds: int = 80) -> None:
+    for _ in range(rounds):
+        if not emu.read_state().in_dialog:
+            return
+        _press10(emu, "a")
+        emu.tick(15)
+
+
+def _heal_at_pc(emu: PyBoyEmulator, ex: Executor,
+                pc_map: int) -> bool:
+    """Heal inside a standard-layout Pokecenter and walk back
+    out to the town. The nurse pattern proven at Fuchsia
+    (probe154): stance (3,3)/(4,3), face up, ride the dialog,
+    verify the WHOLE party at full HP from RAM."""
+    if emu.read_state().map_id != pc_map:
+        return False
+    for stance in ((3, 3), (4, 3)):
+        _walk_fighting(emu, ex, pc_map, stance, attempts=20)
+        st = emu.read_state()
+        if (st.x, st.y) != stance:
+            continue
+        emu.press("up")
+        emu.tick(20)
+        _press10(emu, "a")
+        quiet = 0
+        for _ in range(300):
+            st = emu.read_state()
+            if st.in_dialog:
+                quiet = 0
+                _press10(emu, "a")
+            else:
+                quiet += 1
+                if quiet >= 6 and all(
+                        m.hp == m.max_hp for m in st.party):
+                    break
+            emu.tick(25)
+        if all(m.hp == m.max_hp for m in emu.read_state().party):
+            break
+    if not all(m.hp == m.max_hp for m in emu.read_state().party):
+        return False
+    for door in ((3, 7), (4, 7)):
+        try:
+            ex._walk_to(pc_map, door)
+        except StuckError:
+            continue
+        for _ in range(6):
+            emu.press("down")
+            _explore_settle(emu)
+            if emu.read_state().map_id != pc_map:
+                return True
+    return emu.read_state().map_id != pc_map
+
+
+def _mansion_overlay(emu: PyBoyEmulator, world, map_id: int):
+    return _door_overlay(
+        world, map_id, MANSION_DOORS[map_id],
+        lambda key: _event_flag(emu, EV_MANSION_SWITCH_ON) == key)
+
+
+def _mansion_press_statue(emu: PyBoyEmulator, ex: Executor,
+                          map_id: int) -> bool:
+    """Walk to this floor's statue stance, face UP, press it
+    (YesNo -> YES), and verify the switch flag actually flipped."""
+    world = ex.world
+    stance = MANSION_STATUES[map_id]
+    before = _event_flag(emu, EV_MANSION_SWITCH_ON)
+    if not _overlay_nav(emu, ex, map_id, stance,
+                        _mansion_overlay(emu, world, map_id)):
+        return False
+    emu.press("up")
+    emu.tick(15)
+    _press10(emu, "a")
+    if not _yesno_pick(emu, 0):
+        return False
+    _drain_dialog(emu)
+    return _event_flag(emu, EV_MANSION_SWITCH_ON) != before
+
+
+def _mansion_go(emu: PyBoyEmulator, ex: Executor, map_id: int,
+                goal) -> bool:
+    """Overlay-nav to `goal` in the Mansion, toggling this
+    floor's statue switch once if the current state seals the
+    way (the switch is global; either state may be the open
+    one for a given door chain)."""
+    world = ex.world
+    if _overlay_nav(emu, ex, map_id, goal,
+                    _mansion_overlay(emu, world, map_id)):
+        return True
+    if not _mansion_press_statue(emu, ex, map_id):
+        return False
+    return _overlay_nav(emu, ex, map_id, goal,
+                        _mansion_overlay(emu, world, map_id))
+
+
+def _mansion_take_ball(emu: PyBoyEmulator, ex: Executor,
+                       map_id: int, ball, item_id: int) -> bool:
+    """pickup_ball's shape (stance, face, verify in the bag)
+    but driven by the Mansion overlay instead of explore_nav,
+    with one switch toggle in reserve if no stance is
+    reachable in the current state."""
+    world = ex.world
+    want = _bag_count(emu, item_id)
+
+    def attempt() -> bool:
+        for dx, dy in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+            stance = (ball[0] + dx, ball[1] + dy)
+            if not _overlay_nav(
+                    emu, ex, map_id, stance,
+                    _mansion_overlay(emu, world, map_id)):
+                continue
+            _face_and_talk(emu, ball)
+            emu.wait_free(max_rounds=30, stable_needed=3)
+            if emu.read_state().in_battle:
+                _drive_battle_typed(emu, flee_wild=True)
+            if _bag_count(emu, item_id) > want:
+                return True
+        return False
+
+    if attempt():
+        return True
+    if not _mansion_press_statue(emu, ex, map_id):
+        return False
+    return attempt()
+
+
+def mansion_secret_key(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Cinnabar -> Pokemon Mansion -> the SECRET KEY in the
+    basement (probe157). The gym is locked without it. Route:
+    the 1F down-stairs at (21, 23) to B1F, the key ball at
+    (5, 13), back up and out the front door. All navigation
+    is switch-overlay BFS with statue toggles in reserve;
+    the key is verified in the bag from RAM."""
+    world = ex.world
+    cin = world.map_id("CinnabarIsland")
+    m1 = world.map_id("PokemonMansion1F")
+    mb = world.map_id("PokemonMansionB1F")
+    if _bag_count(emu, ITEM_SECRET_KEY) > 0:
+        return True
+    if emu.read_state().map_id == cin:
+        if not _surf_walk_to(emu, ex, cin, (6, 3)):
+            return False
+    if emu.read_state().map_id != m1:
+        return False
+    if not _mansion_go(emu, ex, m1, (21, 23)):
+        return False
+    if emu.read_state().map_id != mb:
+        return False
+    if not _mansion_take_ball(emu, ex, mb, (5, 13),
+                              ITEM_SECRET_KEY):
+        return False
+    if _bag_count(emu, ITEM_SECRET_KEY) < 1:
+        return False
+    if not _mansion_go(emu, ex, mb, (23, 22)):
+        return False
+    if emu.read_state().map_id != m1:
+        return False
+    if not _mansion_go(emu, ex, m1, (5, 27)):
+        return False
+    return emu.read_state().map_id == cin
+
+
+def _answer_quiz(emu: PyBoyEmulator, gate_event: int,
+                 want: int) -> bool:
+    """At a Cinnabar quiz machine's stance, facing it: talk,
+    answer the Yes/No, and confirm the gate event - set
+    directly on a right answer, or after the walk-up battle
+    a wrong answer provokes (beating the trainer opens the
+    gate too)."""
+    emu.press("up")
+    emu.tick(15)
+    _press10(emu, "a")
+    _yesno_pick(emu, want)
+    for _ in range(300):
+        if _event_flag(emu, gate_event):
+            _drain_dialog(emu)
+            return True
+        st = emu.read_state()
+        if st.in_battle:
+            _drive_battle_typed(emu, flee_wild=False)
+            if _event_flag(emu, gate_event):
+                _drain_dialog(emu)
+                return True
+        elif st.in_dialog:
+            _press10(emu, "a")
+        emu.tick(15)
+    return _event_flag(emu, gate_event)
+
+
+def beat_blaine(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Cinnabar Gym (probe157): the QUIZ route - six machines,
+    answers compiled from pokered, zero HP cost when the
+    steering is right; a wrong answer costs one trainer
+    battle and still opens the gate. Bag room is made for
+    TM38 first (Blaine's script withholds it from a full
+    bag, the Sabrina/TM46 trap). Verified from RAM: seven
+    badge bits, EVENT_BEAT_BLAINE, TM38 in the bag."""
+    world = ex.world
+    cin = world.map_id("CinnabarIsland")
+    gym = world.map_id("CinnabarGym")
+    pc = world.map_id("CinnabarPokecenter")
+    if _event_flag(emu, EV_BEAT_BLAINE):
+        return True
+    if emu.read_state().map_id == cin \
+            and len(_bag_items(emu)) >= 20:
+        if not _surf_walk_to(emu, ex, cin, (11, 11)):
+            return False
+        if emu.read_state().map_id != pc:
+            return False
+        if not deposit_item(emu, ex, pc, ITEM_TM06_TOXIC):
+            return False
+        if not _heal_at_pc(emu, ex, pc):
+            return False
+    if emu.read_state().map_id == cin:
+        if not _surf_walk_to(emu, ex, cin, (18, 3)):
+            return False
+    if emu.read_state().map_id != gym:
+        return False
+
+    def overlay():
+        return _door_overlay(world, gym, CINNABAR_GYM_DOORS,
+                             lambda ev: _event_flag(emu, ev))
+
+    for _round in range(8):
+        if all(_event_flag(emu, ev) for ev in EV_GYM_GATES):
+            break
+        progress = False
+        for _machine, stance, gi, want in CINNABAR_QUIZ:
+            ev = EV_GYM_GATES[gi]
+            if _event_flag(emu, ev):
+                continue
+            st = emu.read_state()
+            if _overlay_path(world, gym, (st.x, st.y), stance,
+                             overlay()) is None:
+                continue
+            if not _overlay_nav(emu, ex, gym, stance, overlay(),
+                                flee_wild=False):
+                continue
+            if _answer_quiz(emu, ev, want):
+                progress = True
+        if not progress:
+            return False
+    if not all(_event_flag(emu, ev) for ev in EV_GYM_GATES):
+        return False
+    if not _overlay_nav(emu, ex, gym, (3, 4), overlay(),
+                        flee_wild=False):
+        return False
+    emu.press("up")
+    emu.tick(15)
+    _press10(emu, "a")
+    for _ in range(120):
+        if emu.read_state().in_battle:
+            break
+        if emu.read_state().in_dialog:
+            _press10(emu, "a")
+        emu.tick(15)
+    if not emu.read_state().in_battle:
+        return False
+    if not _drive_battle_hardened(emu):
+        return False
+    _drain_dialog(emu)
+    st = emu.read_state()
+    return (len(st.badges) == 7
+            and _event_flag(emu, EV_BEAT_BLAINE)
+            and _event_flag(emu, EV_GOT_TM38)
+            and _bag_count(emu, ITEM_TM38) >= 1)
+
+
+def _mom_heal(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Mom's free heal in Pallet (probe157) - colour on the
+    way, soft-fail by design: try the stances around her,
+    verify full HP, leave by the door mat."""
+    world = ex.world
+    pallet = world.map_id("PalletTown")
+    home = world.map_id("RedsHouse1F")
+    if emu.read_state().map_id == pallet:
+        if not _surf_walk_to(emu, ex, pallet, (5, 5)):
+            return False
+    if emu.read_state().map_id != home:
+        return False
+    healed = False
+    for stance in ((5, 4), (4, 3), (6, 3), (5, 2)):
+        _walk_fighting(emu, ex, home, stance, attempts=15)
+        st = emu.read_state()
+        if (st.x, st.y) != stance:
+            continue
+        _face_and_talk(emu, (5, 3))
+        _drain_dialog(emu)
+        if all(m.hp == m.max_hp for m in emu.read_state().party):
+            healed = True
+            break
+    for door in ((3, 7), (2, 7)):
+        try:
+            ex._walk_to(home, door)
+        except StuckError:
+            continue
+        for _ in range(6):
+            emu.press("down")
+            _explore_settle(emu)
+            if emu.read_state().map_id != home:
+                break
+        if emu.read_state().map_id != home:
+            break
+    return healed and emu.read_state().map_id == pallet
+
+
+def super_rod_run(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Pallet -> R1 -> Viridian -> R2 -> Diglett's Cave ->
+    R11 -> R12 -> the Fishing Guru's house and the SUPER ROD
+    (probe157), then home R12 -> R13 -> R14 -> R15 -> Fuchsia
+    and a heal. The guru is an NPC inside his house (map 189;
+    he stands at (2, 4) facing right, talked to from (1, 4) -
+    the Good Rod pattern). Fisher5 (event 1160) is asserted
+    unengaged at the R12 checkpoints: the door path down the
+    pier never enters his sealed pocket."""
+    world = ex.world
+    pallet = world.map_id("PalletTown")
+    lobby_s = world.map_id("DiglettsCaveRoute2")
+    cave = world.map_id("DiglettsCave")
+    lobby_n = world.map_id("DiglettsCaveRoute11")
+    r12 = world.map_id("Route12")
+    house = world.map_id("Route12SuperRodHouse")
+    if _bag_count(emu, ITEM_SUPER_ROD) > 0:
+        return True
+    if _event_flag(emu, EV_BEAT_ROUTE12_FISHER5):
+        return False
+    if emu.read_state().map_id != pallet:
+        if not surf_to(emu, ex, pallet):
+            return False
+    _mom_heal(emu, ex)
+    if not _hop_ride(emu, ex, ["Route1", "ViridianCity",
+                               "Route2"]):
+        return False
+    if not _ride_battling(emu, ex, lobby_s):
+        return False
+    _walk_fighting(emu, ex, lobby_s, (4, 4), attempts=30)
+    if emu.read_state().map_id != cave:
+        return False
+    _walk_fighting(emu, ex, cave, (37, 31), attempts=60,
+                   flee_wild=True)
+    if emu.read_state().map_id != lobby_n:
+        return False
+    if not _hop_ride(emu, ex, ["Route11", "Route12"]):
+        return False
+    if _event_flag(emu, EV_BEAT_ROUTE12_FISHER5):
+        return False
+    _walk_fighting(emu, ex, r12, (11, 77), attempts=80)
+    if emu.read_state().map_id != house:
+        return False
+    _walk_fighting(emu, ex, house, (1, 4), attempts=20)
+    st = emu.read_state()
+    if (st.x, st.y) != (1, 4):
+        return False
+    emu.press("right")
+    emu.tick(20)
+    _press10(emu, "a")
+    for _ in range(300):
+        if _bag_count(emu, ITEM_SUPER_ROD) >= 1:
+            break
+        if emu.read_state().in_dialog:
+            _press10(emu, "a")
+        emu.tick(25)
+    _close_menus(emu)
+    if _bag_count(emu, ITEM_SUPER_ROD) < 1:
+        return False
+    if _event_flag(emu, EV_BEAT_ROUTE12_FISHER5):
+        return False
+    if not _ride_battling(emu, ex, world.map_id("Route13")):
+        return False
+    if not _hop_ride(emu, ex, ["Route14", "Route15",
+                               "FuchsiaCity"]):
+        return False
+    if _event_flag(emu, EV_BEAT_ROUTE12_FISHER5):
+        return False
+    if not _ride_battling(emu, ex, MAP_FUCHSIA_PC):
+        return False
+    return _heal_fuchsia_pc(emu, ex)
+
+
+def _safari_pond_stance(emu: PyBoyEmulator, ex: Executor):
+    """(stance, face_dir) for fishing Safari Center's pond: a
+    _safari_passable land cell next to $14 water, nearest the
+    area anchor. The rod needs a shore/water tile in front
+    (FishingInit's IsNextTileShoreOrWater)."""
+    world = ex.world
+    gm = world.maps[MAP_SZ_CENTER]
+    anchor = SAFARI_ANCHORS[MAP_SZ_CENTER]
+    best = None
+    for y in range(gm.h):
+        for x in range(gm.w):
+            if not _safari_passable(MAP_SZ_CENTER, (x, y)):
+                continue
+            for d, (dx, dy) in _SZ_DIRS.items():
+                n = (x + dx, y + dy)
+                if gm.in_bounds(*n) \
+                        and gm.tiles[n[1]][n[0]] == 0x14:
+                    dist = abs(x - anchor[0]) + abs(y - anchor[1])
+                    if best is None or dist < best[0]:
+                        best = (dist, (x, y), d)
+    if best is None:
+        return None
+    return best[1], best[2]
+
+
+def _fish_cast(emu: PyBoyEmulator) -> str:
+    """Use the SUPER ROD from the bag (the
+    _use_bag_item_on_mon steering minus the mon target: a rod
+    fires straight from the bag list). Returns "bite" (a
+    battle started), "nibble" (no-bite text, drained), or
+    "fail". The caller stands facing water."""
+    mem = emu.pb.memory
+    bag_idx = _bag_index(emu, ITEM_SUPER_ROD)
+    if bag_idx is None:
+        return "fail"
+    _press10(emu, "start")
+    if not _wait_menu_y(emu, 2):
+        return "fail"
+    if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 2):
+        return "fail"
+    _press10(emu, "a")                         # ITEM
+    if not _wait_menu_y(emu, 4):
+        return "fail"
+    if not _steer_menu(
+            emu, lambda: mem[ADDR_MENU_SCROLL] + mem[ADDR_MENU_ITEM],
+            bag_idx):
+        return "fail"
+    _press10(emu, "a")                         # the rod itself
+    for _ in range(30):
+        if emu.read_state().in_battle:
+            return "bite"
+        if mem[ADDR_MENU_TOP_Y] == 11:         # USE/TOSS submenu
+            _press10(emu, "a")                 # USE
+            break
+        emu.tick(5)
+    quiet = 0
+    for _ in range(400):
+        st = emu.read_state()
+        if st.in_battle:
+            return "bite"
+        if st.in_dialog:
+            quiet = 0
+            _press10(emu, "a")
+        else:
+            quiet += 1
+            if quiet >= 25:
+                return "nibble"
+        emu.tick(10)
+    return "fail"
+
+
+def _safari_fish_battle(emu: PyBoyEmulator, owned: set,
+                        log: list, media=None) -> dict:
+    """One Safari battle from the rod (probe157). Policy per
+    the S20 anomaly: NO BAIT, NO ROCK - unbaited balls only
+    (every S20 catch was an unbaited first-ball throw, while
+    baited targets fled 10 of 11). Caps: 15 balls for Dratini
+    (the mission), 6 for bycatch; RUN from owned species.
+    Catches verified by the stored count + _catch_epilogue.
+    `media(kind, emu)`, when given, fires at "encounter",
+    each "throw", and "caught"."""
+    mem = emu.pb.memory
+    sp = mem[ADDR_ENEMY_SPECIES]
+    lv = mem[ADDR_ENEMY_LEVEL]
+    name = SAFARI_SPECIES.get(sp, f"0x{sp:02x}")
+    rec = {"species": name, "level": lv, "bait": 0, "rock": 0,
+           "balls": 0, "outcome": "?", "via": "rod"}
+    log.append(rec)
+    if media:
+        media("encounter", emu)
+    if sp in owned:
+        rec["outcome"] = "fled(owned)"
+        _run_away(emu)
+        return rec
+    cap = 15 if sp == 0x58 else 6     # 0x58 = DRATINI
+    stored0 = _stored_count(emu)
+    guard = 0
+    while emu.read_state().in_battle and guard < 40:
+        guard += 1
+        if _safari_balls(emu) == 0:
+            rec["outcome"] = "balls-out"
+            break
+        if rec["balls"] >= cap:
+            rec["outcome"] = "fled(cap)"
+            _run_away(emu)
+            break
+        if media:
+            media("throw", emu)
+        if not _safari_menu_pick(emu, 0, 1):        # BALL
+            break
+        rec["balls"] += 1
+        caught = False
+        for _ in range(160):
+            _press10(emu, "a")
+            emu.tick(10)
+            if _stored_count(emu) > stored0:
+                caught = True
+                break
+            if not emu.read_state().in_battle:
+                break
+        if caught:
+            ok = _catch_epilogue(emu, stored0 + 1)
+            rec["outcome"] = "CAUGHT" if ok else "caught?"
+            if ok:
+                owned.add(sp)
+                if media:
+                    media("caught", emu)
+            return rec
+    if rec["outcome"] == "?":
+        rec["outcome"] = "fled(enemy)" \
+            if not emu.read_state().in_battle else "stuck"
+    return rec
+
+
+def safari_dratini(emu: PyBoyEmulator, ex: Executor,
+                   log: list = None, media=None,
+                   max_entries: int = 3) -> bool:
+    """Fish Dratini in the Safari Zone (probe157): paid
+    entries (at most `max_entries`), Super Rod at the Center
+    pond - all four areas share Super Rod group 6 (Dratini /
+    Krabby / Psyduck / Slowpoke, all Lv15; a bite is 50% per
+    cast and Dratini is 1 of 4, so ~8 casts expected).
+    Fishing costs no steps (the counter only ticks on walking
+    steps), so an entry fishes until Dratini is caught, the
+    balls run low, or the steps run out. Grass battles in
+    transit are fled by _sz_nav's stock settle; if Dratini
+    falls early with steps and balls to spare, the remainder
+    of that entry paces the Center grass pair under the hunt
+    policy (Scyther 4% / Chansey 1% live there). Ends healed
+    at the Fuchsia Pokecenter; success = Dratini owned."""
+    if log is None:
+        log = []
+    if _bag_count(emu, ITEM_SUPER_ROD) < 1:
+        return False
+    owned = set()
+    st = emu.read_state()
+    for mon in st.party:
+        owned.add(mon.species_id)
+    owned.update(_box_species(emu))
+    if 0x58 in owned:
+        return True
+    stance = _safari_pond_stance(emu, ex)
+    if stance is None:
+        return False
+    (sx, sy), face = stance
+    for _entry in range(max_entries):
+        if not _ride_battling(emu, ex, MAP_SAFARI_GATE):
+            return False
+        money0 = emu.read_state().money
+        _walk_fighting(emu, ex, MAP_SAFARI_GATE, (4, 2),
+                       attempts=20)
+        if (emu.read_state().x, emu.read_state().y) != (4, 2):
+            return False
+        emu.press("right")
+        emu.tick(20)
+        _press10(emu, "a")
+        paid = False
+        for _ in range(200):
+            if _safari_balls(emu) == 30 and \
+                    _event_flag(emu, EV_IN_SAFARI_ZONE):
+                paid = True
+                break
+            if emu.read_state().in_dialog:
+                _press10(emu, "a")
+            emu.tick(25)
+        if not paid or emu.read_state().money != money0 - 500:
+            return False
+        for _ in range(80):
+            if not emu.read_state().in_dialog:
+                break
+            _press10(emu, "a")
+            emu.tick(30)
+        for _ in range(10):
+            if emu.read_state().map_id == MAP_SZ_CENTER:
+                break
+            emu.press("up")
+            _explore_settle(emu)
+            _safari_settle(emu, [])
+        if emu.read_state().map_id != MAP_SZ_CENTER:
+            return False
+        if not _sz_nav(emu, ex, MAP_SZ_CENTER, (sx, sy), [],
+                       budget_guard=10):
+            return False
+        # --- fish ------------------------------------------------
+        casts = 0
+        while _safari_balls(emu) > 4 and _safari_steps(emu) > 12:
+            st = emu.read_state()
+            if st.map_id != MAP_SZ_CENTER \
+                    or (st.x, st.y) != (sx, sy):
+                break
+            emu.press(face)
+            emu.tick(15)
+            casts += 1
+            res = _fish_cast(emu)
+            rec = {"species": "-", "level": 0, "bait": 0,
+                   "rock": 0, "balls": 0, "outcome": f"cast:{res}",
+                   "via": "rod"}
+            if res == "bite":
+                rec = _safari_fish_battle(emu, owned, log, media)
+            else:
+                log.append(rec)
+            if 0x58 in owned:
+                break
+        log.append({"species": "ENTRY", "level": casts,
+                    "bait": 0, "rock": 0, "balls": 0,
+                    "outcome": "casts", "via": "rod"})
+        # --- bonus grass time if Dratini fell early --------------
+        if 0x58 in owned and _safari_steps(emu) > 30 \
+                and _safari_balls(emu) > 4:
+            pair = _safari_grass_pair(MAP_SZ_CENTER)
+            if pair is not None and _sz_nav(
+                    emu, ex, MAP_SZ_CENTER, pair[0], [],
+                    budget_guard=10):
+                toggle = False
+                while emu.read_state().map_id == MAP_SZ_CENTER \
+                        and _safari_steps(emu) > 12 \
+                        and _safari_balls(emu) > 0 \
+                        and not SAFARI_TARGETS <= owned:
+                    tgt = pair[1] if toggle else pair[0]
+                    toggle = not toggle
+                    for d, (dx, dy) in _SZ_DIRS.items():
+                        cur = (emu.read_state().x,
+                               emu.read_state().y)
+                        if (cur[0] + dx, cur[1] + dy) == tgt:
+                            emu.press(d)
+                            break
+                    _safari_hunt_settle(emu, owned, log)
+        # --- leave ------------------------------------------------
+        if emu.read_state().map_id == MAP_SZ_CENTER:
+            _safari_burn_out(emu, owned, log)
+        if emu.read_state().map_id != MAP_SAFARI_GATE:
+            return False
+        for _ in range(12):
+            emu.press("down")
+            _explore_settle(emu)
+            _safari_settle(emu, [])
+            if emu.read_state().map_id != MAP_SAFARI_GATE:
+                break
+        if emu.read_state().map_id == MAP_SAFARI_GATE:
+            return False
+        if not _ride_battling(emu, ex, MAP_FUCHSIA_PC):
+            return False
+        if not _heal_fuchsia_pc(emu, ex):
+            return False
+        if 0x58 in owned:
+            return True
+    return 0x58 in owned
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--rom", required=True, help="path to a Pokemon Red ROM")

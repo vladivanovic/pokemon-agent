@@ -230,6 +230,16 @@ class PyBoyEmulator:
         back - probe144's use_flash verified 6 -> 0 live)."""
         return self._field_move(mon_index, submenu_index)
 
+    def field_surf(self, mon_index: int, submenu_index: int) -> bool:
+        """Use Surf from the party menu (see _field_move). The
+        player must already be FACING a shore/water tile: the
+        engine checks wTileInFrontOfPlayer (IsNextTileShoreOrWater)
+        when Surf is chosen. On success the engine itself steps
+        the player onto the water and sets wWalkBikeSurfState = 2;
+        whether boarding actually happened is the caller's check
+        (it reads that byte and the landing cell from RAM)."""
+        return self._field_move(mon_index, submenu_index)
+
     def _field_move(self, mon_index: int, submenu_index: int) -> bool:
         """Use a field move from the party menu: START -> POKEMON ->
         party mon `mon_index` -> item `submenu_index` of its

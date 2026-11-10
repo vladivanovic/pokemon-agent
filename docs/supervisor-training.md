@@ -1595,3 +1595,122 @@ dex 22, money Y113,288. Cinnabar needs only Surf;
 the Seafoam crossing wants both, and now has both.
 Still Vlad's calls: the Super Rod trip (and Dratini),
 Route 16's Snorlax, the TM shelf, Rare Candy / HP Up.
+
+## 22. The Grand Tour (2026-11-10, probe157): surf machinery built and proven - and Route 20 is sealed
+
+Vlad's chosen route: surf around Seafoam to Cinnabar (Blaine),
+on to Pallet and the Super Rod, home to Fuchsia, then fish
+Dratini in the Safari Zone. Phase 0 landed in full. The
+crossing did not - because the geography the route assumes
+does not exist in Gen 1. This section records both halves,
+and the tour is PARKED on Vlad's call at the Seafoam shore.
+
+SURF MACHINERY (built, live-proven). Engine facts compiled
+from pokered: there is NO A-button water prompt in Gen 1;
+boarding is the party-menu SURF field move. The tile in
+front must pass IsNextTileShoreOrWater (sampled tile
+$14/$32/$48); the engine steps the player onto the water
+itself and sets wWalkBikeSurfState (0xD700) to 2. While
+surfing, stepping onto a land-passable cell auto-disembarks;
+onto $14/$48 (and $32 off SHIP_PORT) you keep surfing.
+Build: the generator now emits the sampled `tiles` and the
+tileset passable list (`coll`) for ALL 247 maps (every
+pre-existing field byte-identical, verified by field-diff);
+world.py gains GameMap.surf_cells, GameMap.tile_walkable
+(engine-true passability from tiles x coll - the walk grid
+cannot be trusted where it is the open-grid coherence
+fallback: Route 20, Pokemon Mansion 3F, Rocket Hideout B4F,
+SS Anne 1F Rooms, Celadon Mansion Roof, Lance's Room),
+World.surf_path (land U surf BFS: warp-destination rule,
+ledge hops, TilePairCollisionsWater pairs) and
+World.surf_crossings (journey()'s arrival arithmetic);
+pyboy_emu gains field_surf (the _field_move macro);
+run_real gains the surf core (surfing / _surf_carrier /
+_surf_board / _surf_step / _surf_walk_to / surf_to):
+one RAM-verified step at a time, wilds fled, trainers
+fought, capability gated on the live party read (Lapras).
+
+Two live traps banked. (1) TRAINER SIGHT-LOCK: a step can
+be refused in all four directions with no battle - the
+trainer has spotted the player and the engagement script
+stalls while directions keep being pressed; _refusal_recover
+idles with neutral input, taps A, and resolves the battle
+that fires (R19's Swimmer4, whose LIVE sprite sits at
+(9, 13), two tiles south of his .asm object coords - a
+tall-map sprite-loading offset). (2) A fled battle can
+leave its empty text box standing, swallowing every later
+direction press; the steppers drain it (close_dialog).
+
+PROOF HOP (probe157a; re-run byte-identical): Fuchsia PC ->
+out -> Route 19 via the ledge staircase -> beach stance
+(9, 9) -> BOARD (surf byte 2, standing on (9, 10)) -> swim
+to (9, 16) -> disembark (byte 0, on foot at (9, 9)).
+Swimmer4 beaten on the walk back (+150 yen). R19->R20
+crossing also proven (landed surfing at R20 (95, 4)-ish;
+the held crossing press carries a few tiles into the new
+map - surf_to verifies the map, not the arrival cell).
+
+THE BLOCKER: ROUTE 20 HAS NO SURFACE PASSAGE PAST SEAFOAM.
+With engine-true passability, the island (x43-62), $3A
+shoal columns at x43/x55/x62, the row-1 $3A band (the row-0
+"all-water northern channel" is a sealed border strip) and
+the southern strip split at x62 cut Route 20 into two
+basins that share NO cell:
+- East basin (from R19): the island's north shore, the west
+  cave's yard, the x44-45 channel, the west pool - a closed
+  system, reachable and fully navigable, going nowhere west.
+- West basin (from Cinnabar): the southern strip (rows
+  14-16) and the lagoon's east pool (x56-61, rows 12-16).
+Verified three ways: tile data + BFS region computation;
+unit tests (test_route20_has_no_surface_passage_past_seafoam);
+LIVE - a westward press at (63, 14) bumps and
+wTileInFrontOfPlayer reads $3A. (One live read briefly
+suggested $14 there; it was a stale facing byte, one step
+behind - re-measured under a settled face.) The $11 plateau
+patches are decorative mesas ($11 is not in Overworld_Coll)
+- not standable; both cave entrances sit in ledge bands and
+are reached from their own yards. No ledge hop bridges the
+basins (every face's back cell is unstandable mesa), there
+are no Strength objects on the surface, and the land detour
+is closed too (the Fuchsia->Lavender road is one-way-locked
+northbound (S20), and Cycling Road needs the Bicycle we do
+not have).
+
+The only through-route is Seafoam's interior. A 1F-only
+transit exists on the compiled grid: west door (4-5, 17) ->
+west corridor -> the (6-7, 11) gap -> the central chamber
+-> east rows 12-15 -> east door (26-27, 17). The two 1F
+boulders are off that path; no Strength is needed; Articuno
+is on B4F and untouched by it. The brief's fence - do not
+enter the Seafoam cave system - was written for a surface
+route that does not exist, so rather than improvise past
+an explicit fence the tour parked: retreat to Fuchsia,
+heal, save probe157/blocked-at-seafoam.state (sha256
+4682fcdb62aabb80...; deltas vs the chain head: +150 yen,
+Swimmer4's beaten flag). CHAIN HEAD UNCHANGED:
+probe156/lapras-strength.state.
+
+VLAD'S CALL: (a) authorise the 1F-only transit (the cave
+lobby only - no B1F, no Articuno, no loot) and resume the
+tour as planned; (b) authorise a fuller Seafoam crossing
+if the 1F transit proves impassable live; (c) abandon the
+Cinnabar route - noting Blaine, the Super Rod and Dratini
+all hang off it (Pallet is unreachable any other way:
+the R21 surf starts at Cinnabar, and the land roads are
+one-way-locked or Bike-gated).
+
+PORT STATE: the surf machinery, tile_walkable and the
+generator's tiles/coll emission are in and tested
+(142/142, 11 new). The tour functions - mansion_secret_key,
+beat_blaine (quiz answers and gate events 680-685 compiled),
+super_rod_run, safari_dratini (Super Rod group 6: Dratini /
+Krabby / Psyduck / Slowpoke, all Lv15, Dratini 12.5% per
+cast; unbaited-ball policy per the S20 anomaly) - are
+written into run_real S22 from compiled pokered ground
+truth (Mansion switch doors with ReplaceTileBlock b=Y,
+c=X semantics and per-cell gate-block patterns) but are
+UNPROVEN: the leg stopped before their first live step.
+No cold replay past the block was possible; the
+deterministic spans that did run (the proof hop) replay
+byte-identical from lapras-strength.state. Media:
+probe157/media (beach stance, first surf, disembarked).

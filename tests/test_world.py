@@ -330,7 +330,10 @@ class TestWorld(unittest.TestCase):
         self.assertIsNotNone(b1.tiles)
         self.assertIn(frozenset((0x20, 0x05)), b1.pair_forbidden)
         pallet = self.w.maps[self.w.map_id("PalletTown")]
-        self.assertIsNone(pallet.tiles)
+        # Since probe157 the generator emits the sampled tiles for
+        # EVERY map (the surf layer needs them); the pair table is
+        # still pair-tilesets only.
+        self.assertIsNotNone(pallet.tiles)
         self.assertEqual(pallet.pair_forbidden, frozenset())
 
     def test_cavern_elevation_crossing_is_refused(self):
@@ -362,6 +365,161 @@ class TestWorld(unittest.TestCase):
                            self.w.map_id("LavenderTown"),
                            capabilities=frozenset({"cut", "flash"}))
         self.assertIsNotNone(j)
+
+
+class TestSurf(unittest.TestCase):
+    """The surf layer (probe157): water cells compiled from the
+    sampled tiles, land+water pathing, and connection crossings.
+    Geometry pinned against the pokered map data by hand during
+    the Grand Tour build (docs section 22)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.w = default_world()
+
+    def test_route19_boarding_line(self):
+        r19 = self.w.maps[self.w.map_id("Route19")]
+        # The beach: row 9 is standable sand, row 10 is water.
+        # (x=11 is a fence post - not standable, no boarding there.)
+        for x in list(range(4, 11)) + [12, 13]:
+            self.assertTrue(r19.walkable(x, 9), (x, 9))
+            self.assertIn((x, 10), r19.surf_cells)
+            self.assertFalse(r19.walkable(x, 10), (x, 10))
+        self.assertFalse(r19.walkable(11, 9))
+
+    def test_route20_north_channel_is_all_water(self):
+        r20 = self.w.maps[self.w.map_id("Route20")]
+        for x in (0, 20, 50, 80, 99):
+            self.assertIn((x, 0), r20.surf_cells)
+
+    def test_fuchsia_south_exit_reaches_route19(self):
+        fuchsia = self.w.map_id("FuchsiaCity")
+        r19 = self.w.map_id("Route19")
+        crossings = self.w.surf_crossings(fuchsia, "south")
+        self.assertTrue(crossings)
+        for _exit, dst, arr in crossings:
+            self.assertEqual(dst, r19)
+            self.assertTrue(self.w.surf_enterable(r19, *arr))
+
+    def test_fuchsia_to_beach_surf_path(self):
+        # From the Pokecenter door to the R19 boarding line: the
+        # path must cross Fuchsia on land, cross south, then walk
+        # the beach - all in the two maps' own surf_paths.
+        w = self.w
+        fuchsia = w.map_id("FuchsiaCity")
+        pc = w.map_id("FuchsiaPokecenter")
+        door = next((wp.x, wp.y) for wp in w.maps[fuchsia].warps
+                    if wp.dest_id == pc)
+        exits = w.surf_crossings(fuchsia, "south")
+        self.assertIsNotNone(w.surf_path(fuchsia, door, exits[0][0]))
+        r19 = w.map_id("Route19")
+        arr = exits[0][2]
+        self.assertIsNotNone(w.surf_path(r19, arr, (9, 9)))
+
+    def test_route19_west_crossing_lands_on_route20_water(self):
+        # R19 has NO south connection: the crossing to R20 is off
+        # R19's west edge (water rows 40-52) onto R20's east edge.
+        w = self.w
+        r19, r20 = w.map_id("Route19"), w.map_id("Route20")
+        crossings = w.surf_crossings(r19, "west")
+        self.assertTrue(crossings)
+        for _exit, dst, arr in crossings:
+            self.assertEqual(dst, r20)
+            self.assertIn(arr, w.maps[r20].surf_cells)
+
+    def test_route20_west_crossing_disembarks_on_cinnabar(self):
+        w = self.w
+        r20 = w.map_id("Route20")
+        cin = w.map_id("CinnabarIsland")
+        crossings = w.surf_crossings(r20, "west")
+        self.assertTrue(crossings)
+        gm = w.maps[cin]
+        landings = 0
+        for _exit, dst, arr in crossings:
+            self.assertEqual(dst, cin)
+            self.assertTrue(w.surf_enterable(cin, *arr), arr)
+            if gm.walkable(*arr):
+                # Stepping west onto Cinnabar's east shore lands
+                # on land cells (auto-disembark), rows 4..13.
+                landings += 1
+                self.assertTrue(4 <= arr[1] <= 13, arr)
+        self.assertGreater(landings, 0)
+
+    def test_cinnabar_to_pallet_by_water(self):
+        w = self.w
+        cin = w.map_id("CinnabarIsland")
+        r21 = w.map_id("Route21")
+        pallet = w.map_id("PalletTown")
+        north = w.surf_crossings(cin, "north")
+        self.assertTrue(north)
+        _exit, dst, arr = north[0]
+        self.assertEqual(dst, r21)
+        self.assertIn(arr, w.maps[r21].surf_cells)
+        # Up the west channel to the top of R21...
+        top = w.surf_crossings(r21, "north")
+        self.assertTrue(top)
+        self.assertIsNotNone(w.surf_path(r21, arr, top[0][0]))
+        # ...and into Pallet's pond, disembarking west or east.
+        _e2, dst2, arr2 = top[0]
+        self.assertEqual(dst2, pallet)
+        self.assertIn(arr2, w.maps[pallet].surf_cells)
+        self.assertIsNotNone(w.surf_path(pallet, arr2, (3, 14)))
+
+    def test_route20_grid_is_open_fallback_but_tiles_are_true(self):
+        # Route 20's walk grid is the generator's open-grid
+        # coherence fallback (its two Seafoam warps cannot
+        # connect under a ledge-blind BFS), so the grid calls
+        # even water walkable. tile_walkable reads the sampled
+        # tiles against the tileset list and stays engine-true.
+        w = self.w
+        r20 = w.maps[w.map_id("Route20")]
+        self.assertTrue(r20.walkable(45, 6))        # grid lies
+        self.assertFalse(r20.tile_walkable(45, 6))  # $14 water
+        self.assertFalse(r20.tile_walkable(50, 5))  # $37 ledge face
+        self.assertTrue(r20.tile_walkable(61, 5))   # $30 shore rock
+
+    def test_route20_surf_path_respects_ledge_faces(self):
+        # Into the Seafoam island system from the R19 side: the
+        # path boards for the x62 $32 lane and the x44-45 channel
+        # instead of "walking" on water, walks the island's real
+        # land, and never stands on a ledge face.
+        w = self.w
+        r20 = w.maps[w.map_id("Route20")]
+        path = w.surf_path(w.map_id("Route20"), (95, 4), (46, 12))
+        self.assertIsNotNone(path)
+        for cell in path[1:]:
+            self.assertNotIn(cell, r20.ledges)
+        for a, b in zip(path, path[1:]):
+            d = (b[0] - a[0], b[1] - a[1])
+            self.assertIn(d, [(0, -1), (0, 1), (-1, 0), (1, 0),
+                              (0, -2), (0, 2), (-2, 0), (2, 0)])
+
+    def test_route20_has_no_surface_passage_past_seafoam(self):
+        # THE GRAND TOUR BLOCKER (probe157, docs S22): Gen 1's
+        # Route 20 is sealed by the Seafoam island, its $3A
+        # shoal columns (x43, x55, x62) and the split southern
+        # strip. From the R19 side you can reach the island's
+        # west yard, its channel and west pool - but no cell of
+        # the Cinnabar-side basin; from Cinnabar you can reach
+        # the southern strip and the lagoon's east pool - but
+        # not the channel system. The only through-route is
+        # Seafoam's interior (or the caves generally). Verified
+        # in data here and live in probe157 (a westward press
+        # at (63, 14) bumps: the front tile reads $3A).
+        w = self.w
+        r20 = w.map_id("Route20")
+        self.assertIsNone(w.surf_path(r20, (95, 4), (0, 4)))
+        self.assertIsNone(w.surf_path(r20, (95, 4), (30, 15)))
+        self.assertIsNotNone(w.surf_path(r20, (0, 4), (58, 14)))
+        self.assertIsNone(w.surf_path(r20, (0, 4), (44, 12)))
+
+    def test_surf_path_reaches_open_water_land_path_cannot(self):
+        w = self.w
+        pallet = w.map_id("PalletTown")
+        # The middle of Pallet's pond: no land path exists, the
+        # surf path goes straight in.
+        self.assertIsNone(w.tile_path(pallet, (5, 6), (6, 15)))
+        self.assertIsNotNone(w.surf_path(pallet, (5, 6), (6, 15)))
 
 
 if __name__ == "__main__":

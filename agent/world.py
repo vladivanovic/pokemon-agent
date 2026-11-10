@@ -44,6 +44,33 @@ Tile = Tuple[int, int]
 
 # Maps that are open water: entering them on foot is impossible.
 WATER_MAP_NAMES = {"Route19", "Route20", "Route21"}
+
+# Surf model (probe157, docs section 22), compiled from pokered.
+# Gen 1 has no A-button water prompt: boarding is the party-menu
+# SURF field move. The engine's water rules (IsNextTileShoreOrWater
+# and CollisionCheckOnWater in home/overworld.asm) read the SAMPLED
+# tile of the cell in front (the same bottom-left sample the walk
+# grids are built from):
+#   $14 water        -> can board onto it; stepping onto it while
+#                       surfing keeps you surfing
+#   $32 (east shore) -> boardable; keeps you surfing except on the
+#                       SHIP_PORT tileset, where it is a platform
+#   $48 (SZ shore)   -> boardable; keeps you surfing
+# Stepping onto a cell whose sample is in the tileset's ordinary
+# land-passable list AUTO-DISEMBARKS (surf state cleared). Only
+# maps whose tileset is in WaterTilesets can board at all.
+WATER_TILESETS = frozenset({
+    "OVERWORLD", "FOREST", "DOJO", "GYM", "SHIP", "SHIP_PORT",
+    "CAVERN", "FACILITY", "PLATEAU"})
+SURF_WATER_TILE = 0x14
+SURF_SHORE_TILES = frozenset({0x32, 0x48})
+# TilePairCollisionsWater: while surfing, steps between these
+# sampled-tile pairs are refused outright.
+SURF_PAIR_FORBIDDEN = {
+    "FOREST": frozenset({frozenset((0x14, 0x2E)),
+                         frozenset((0x48, 0x2E))}),
+    "CAVERN": frozenset({frozenset((0x14, 0x05))}),
+}
 # Warp destinations that sit across water even though the source map is land.
 SURF_WARP_DESTINATIONS = {"PowerPlant"}
 # Places Fly can take you (towns/cities with a Pokemon Center, plus Indigo).
@@ -125,6 +152,50 @@ class GameMap:
     # pair table. Modelled in _bfs_steps like ledges and Cut.
     tiles: Optional[List[List[int]]] = None
     pair_forbidden: FrozenSet[FrozenSet[int]] = frozenset()
+    # The tileset's passable tile-id list (the generator's "coll"):
+    # engine passability recomputed from the sampled tiles. Unlike
+    # the walk grid this stays true on maps whose grid is the
+    # open-grid coherence fallback (Route 20, Pokemon Mansion 3F,
+    # Rocket Hideout B4F, ...).
+    coll: FrozenSet[int] = frozenset()
+    _surf_cells: Optional[FrozenSet[Tile]] = field(
+        default=None, repr=False, compare=False)
+
+    def tile_walkable(self, x: int, y: int) -> bool:
+        """Engine-true land passability: the cell's sampled tile
+        is in the tileset's passable list (warp cells forced, as
+        in the generated grid). Falls back to the walk grid when
+        the tile data is absent (synthetic maps in tests)."""
+        if not self.in_bounds(x, y):
+            return False
+        if any(wp.x == x and wp.y == y for wp in self.warps):
+            return True
+        if self.tiles is None or not self.coll:
+            return self.walkable(x, y)
+        return self.tiles[y][x] in self.coll
+
+    @property
+    def surf_cells(self) -> FrozenSet[Tile]:
+        """Cells occupiable ON THE WATER (probe157): sampled tile
+        is $14 (water) or a shore tile ($32/$48) on a WaterTilesets
+        map. On SHIP_PORT maps $32 is a disembark platform, not a
+        surf-continuation tile, and is excluded. A cell can be both
+        land-walkable and a surf cell (the shore tiles sit in some
+        tilesets' passable lists): on foot it is land; while
+        surfing, stepping onto it keeps you surfing."""
+        if self._surf_cells is None:
+            cells = set()
+            if self.tileset in WATER_TILESETS and self.tiles:
+                for y, row in enumerate(self.tiles):
+                    for x, t in enumerate(row):
+                        if t == SURF_WATER_TILE or \
+                                t in SURF_SHORE_TILES:
+                            if t == 0x32 and \
+                                    self.tileset == "SHIP_PORT":
+                                continue
+                            cells.add((x, y))
+            self._surf_cells = frozenset(cells)
+        return self._surf_cells
 
     def cut_block_cells(self, face: Tile) -> FrozenSet[Tile]:
         """All cells of the tree block whose face is `face`."""
@@ -214,6 +285,7 @@ class World:
                 tiles=m.get("tiles"),
                 pair_forbidden=frozenset(
                     frozenset(p) for p in m.get("pair_forbidden", [])),
+                coll=frozenset(m.get("coll", [])),
             )
         # Exit warps (dest = LAST_MAP) lead back to wherever warps into this
         # map. Precompute entrance maps for graph edges.
@@ -446,6 +518,106 @@ class World:
                     return list(reversed(path))
                 q.append(n)
         return None
+
+    # -- surf (probe157) ------------------------------------------------
+    def surf_enterable(self, map_id: int, x: int, y: int) -> bool:
+        """Can the player OCCUPY (x, y) travelling on foot or on the
+        water - i.e. it is land-passable or a surf cell? Land
+        passability is tile_walkable (sampled tile vs the tileset
+        list), NOT the walk grid: Route 20's grid is the open-grid
+        fallback and calls its water walkable."""
+        gm = self.maps[map_id]
+        if not gm.in_bounds(x, y):
+            return False
+        return gm.tile_walkable(x, y) or (x, y) in gm.surf_cells
+
+    def surf_path(self, map_id: int, start: Tile, goal: Tile,
+                  blocked: FrozenSet[Tile] = frozenset()
+                  ) -> Optional[List[Tile]]:
+        """BFS shortest path within one map over land U surf cells.
+        Includes both endpoints; None when unreachable. Same warp
+        rule as tile_path: warp tiles are destinations, not corridors.
+        `blocked` tiles are walls for this call (a swimmer standing
+        on the water is a transient obstacle). The engine's
+        TilePairCollisionsWater pairs (FOREST/CAVERN) are refused.
+        Ledge hops are modelled like _bfs_steps (a face stepped on
+        in its jump direction lands two cells away - the path then
+        contains a non-adjacent step, which the surf stepper reads
+        as a hop): Route 19's beach approach is a ledge staircase,
+        so the land segments need it."""
+        gm = self.maps[map_id]
+        if start == goal:
+            return [start]
+        warp_tiles = {(wp.x, wp.y) for wp in gm.warps}
+        pairs = SURF_PAIR_FORBIDDEN.get(gm.tileset, frozenset())
+
+        def linked(cur: Tile, n: Tile) -> bool:
+            if n in blocked:
+                return False
+            if not self.surf_enterable(map_id, n[0], n[1]):
+                return False
+            if n in warp_tiles and n != goal:
+                return False
+            if pairs and gm.tiles:
+                pair = frozenset((gm.tiles[cur[1]][cur[0]],
+                                  gm.tiles[n[1]][n[0]]))
+                if pair in pairs:
+                    return False
+            return True
+
+        prev: Dict[Tile, Optional[Tile]] = {start: None}
+        q = deque([start])
+        while q:
+            cur = q.popleft()
+            for dx, dy in DIRS.values():
+                n = (cur[0] + dx, cur[1] + dy)
+                cands = [n]
+                face = (cur[0] + dx, cur[1] + dy)
+                if gm.ledges.get(face) == (dx, dy):
+                    cands.append((cur[0] + 2 * dx, cur[1] + 2 * dy))
+                for n in cands:
+                    if n in prev or not linked(cur, n):
+                        continue
+                    prev[n] = cur
+                    if n == goal:
+                        path = [n]
+                        while prev[path[-1]] is not None:
+                            path.append(prev[path[-1]])
+                        return list(reversed(path))
+                    q.append(n)
+        return None
+
+    def surf_crossings(self, map_id: int, direction: str
+                       ) -> List[Tuple[Tile, int, Tile]]:
+        """(exit_cell, dst_map, arrival_cell) for every connection
+        leaving `map_id` in `direction` whose exit cell can be stood
+        on (foot or surf) and whose arrival cell can be entered.
+        Arrival arithmetic mirrors journey()'s cross step."""
+        gm = self.maps[map_id]
+        dx, dy = DIRS[direction]
+        out: List[Tuple[Tile, int, Tile]] = []
+        for d2, dst, off in self.connections.get(map_id, []):
+            if d2 != direction or dst not in self.maps:
+                continue
+            dgm = self.maps[dst]
+            if dy != 0:
+                ey = 0 if dy < 0 else gm.h - 1
+                cells = [(x, ey) for x in range(gm.w)]
+            else:
+                ex = 0 if dx < 0 else gm.w - 1
+                cells = [(ex, y) for y in range(gm.h)]
+            for cell in cells:
+                if not self.surf_enterable(map_id, cell[0], cell[1]):
+                    continue
+                if dy != 0:
+                    arr = (cell[0] - 2 * off,
+                           dgm.h - 1 if dy < 0 else 0)
+                else:
+                    arr = (dgm.w - 1 if dx < 0 else 0,
+                           cell[1] - 2 * off)
+                if self.surf_enterable(dst, arr[0], arr[1]):
+                    out.append((cell, dst, arr))
+        return out
 
     def tile_paths_from(self, map_id: int, start: Tile,
                         targets: Set[Tile],
