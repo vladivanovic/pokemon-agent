@@ -673,3 +673,110 @@ class TestTeachStrength(unittest.TestCase):
         tokens = self._tmhm_tokens("arcanine.asm")
         for hm in ("CUT", "FLY", "SURF", "STRENGTH", "FLASH"):
             self.assertNotIn(hm, tokens)
+
+
+class TestGrandTourTables(unittest.TestCase):
+    """probe158's corrected data pins: each of these was
+    wrong in the §22 draft and cost a live failure."""
+
+    def test_cinnabar_gate_events_are_681_to_686(self):
+        # quiz gate index i sets event 680 + i (FlagAction
+        # counts from GATE0_UNLOCKED=680 with the index, not
+        # index-1) - proven live in probe158m2/m4.
+        self.assertEqual(rr.EV_GYM_GATES,
+                         (681, 682, 683, 684, 685, 686))
+
+    def test_cinnabar_doors_pair_gate_events_in_order(self):
+        events = [ev for _blk, _gid, ev in rr.CINNABAR_GYM_DOORS]
+        self.assertEqual(events, list(rr.EV_GYM_GATES))
+        blocks = [blk for blk, _gid, _ev in rr.CINNABAR_GYM_DOORS]
+        self.assertEqual(blocks, [(9, 3), (6, 3), (6, 6),
+                                  (3, 8), (2, 6), (2, 3)])
+
+    def test_cinnabar_quiz_gates_index_the_event_table(self):
+        for _machine, _stance, gi, _want in rr.CINNABAR_QUIZ:
+            self.assertEqual(rr.EV_GYM_GATES[gi], 681 + gi)
+
+    def test_mansion_second_b1f_statue(self):
+        # hidden_events lists two B1F statues; the route
+        # toggles (18, 26) first, then (20, 4).
+        self.assertEqual(rr.MANSION_STATUES_ALT[216], (18, 26))
+        self.assertEqual(rr.MANSION_STATUES[216], (20, 4))
+
+    def test_mansion_doors_match_floor_scripts(self):
+        self.assertEqual(
+            rr.MANSION_DOORS[214],
+            [((4, 2), 0x5F, False), ((9, 4), 0x54, True),
+             ((3, 11), 0x5F, True)])
+        self.assertEqual(
+            rr.MANSION_DOORS[215],
+            [((7, 2), 0x5F, False), ((7, 5), 0x5F, True)])
+        self.assertEqual(
+            rr.MANSION_DOORS[216],
+            [((13, 8), 0x2D, False), ((6, 11), 0x5F, False),
+             ((4, 3), 0x5F, True), ((8, 8), 0x54, True)])
+
+    def test_seafoam_cascade_events(self):
+        self.assertEqual(rr.SEAFOAM_CASCADE_EVENTS,
+                         (1294, 1295, 2496, 2497, 2504, 2505))
+
+    def test_bike_voucher_item_id(self):
+        self.assertEqual(rr.ITEM_BIKE_VOUCHER, 0x2D)
+
+
+class TestGrandTourWorldFacts(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from agent.world import default_world
+        cls.w = default_world()
+
+    def test_seafoam_holes_and_boulder_starts_are_floor(self):
+        # Hole cells are steppable floor (that is what makes
+        # them walker hazards); boulders start on floor too.
+        w = self.w
+        holes = {"SeafoamIslands1F": {(17, 6), (24, 6)},
+                 "SeafoamIslandsB1F": {(18, 6), (23, 6)},
+                 "SeafoamIslandsB2F": {(19, 6), (22, 6)},
+                 "SeafoamIslandsB3F": {(3, 16), (6, 16)}}
+        for name, cells in holes.items():
+            gm = w.maps[w.map_id(name)]
+            for cell in cells:
+                self.assertTrue(gm.tile_walkable(*cell),
+                                (name, cell))
+        starts = {"SeafoamIslands1F": {(18, 10), (26, 7)},
+                  "SeafoamIslandsB1F": {(17, 6), (22, 6)},
+                  "SeafoamIslandsB2F": {(18, 6), (23, 6)}}
+        for name, cells in starts.items():
+            gm = w.maps[w.map_id(name)]
+            for cell in cells:
+                self.assertTrue(gm.tile_walkable(*cell),
+                                (name, cell))
+
+    def test_safari_pond_stance_is_reachable(self):
+        # probe158o: the unfiltered search picked (15, 14),
+        # a shore segment fenced off by posts and unreachable
+        # from the entry - the nav died on the spot. The
+        # filtered pick must be BFS-reachable from the anchor
+        # and face a $14 water cell.
+        from collections import deque
+        ex = SimpleNamespace(world=self.w)
+        stance, face = rr._safari_pond_stance(None, ex)
+        self.assertNotEqual(stance, (15, 14))
+        gm = self.w.maps[rr.MAP_SZ_CENTER]
+        anchor = rr.SAFARI_ANCHORS[rr.MAP_SZ_CENTER]
+        warps = {(w.x, w.y) for w in gm.warps}
+        reach = {anchor}
+        queue = deque([anchor])
+        while queue:
+            cx, cy = queue.popleft()
+            for dx, dy in rr._SZ_DIRS.values():
+                n = (cx + dx, cy + dy)
+                if n not in reach and n not in warps \
+                        and rr._safari_passable(rr.MAP_SZ_CENTER,
+                                                n):
+                    reach.add(n)
+                    queue.append(n)
+        self.assertIn(stance, reach)
+        dx, dy = rr._SZ_DIRS[face]
+        front = (stance[0] + dx, stance[1] + dy)
+        self.assertEqual(gm.tiles[front[1]][front[0]], 0x14)
