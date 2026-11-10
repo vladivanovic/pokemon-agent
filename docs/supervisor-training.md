@@ -1537,3 +1537,61 @@ Fuchsia PC, party healed, Lapras aboard with Surf,
 dex 22, money Y113,288. Open for Vlad: the Strength
 carrier, the Super Rod trip (and with it Dratini), and
 Route 16's Snorlax.
+
+## 21. Lapras Strength (2026-11-10, probe156): verification first, and the five-minute leg
+
+The smallest leg of the run, run under the rule the
+previous one bought: verify before you offer, and
+verify again before you teach. Vlad's re-decision
+(2026-11-10) put HM04 on Lapras - Strength into the
+free 4th slot, no replacement, after the Arcanine
+pick proved engine-impossible in S20.
+
+Both pre-checks passed before a single input was
+pressed. First, the ROM data: Lapras's tmhm learnset
+in pokered's data/pokemon/base_stats/lapras.asm - the
+very bitfield CanLearnTM reads - lists SURF and
+STRENGTH. Second, the live save: a fresh RAM read of
+probe155/safari-hunt.state showed Lapras in party
+slot 6 holding exactly [Water Gun, Growl, Surf,
+empty], Blastoise at [Hydro Pump, Tail Whip, Bubble,
+Water Gun] and Arcanine at [Bite, Roar, Ember].
+
+The teach itself was the bag flow behind
+_teach_hm_free_slot, held to the same strict-append
+assertion: the only legal change is Strength landing
+in the first empty slot. It did - Lapras now runs
+[Water Gun, Growl, Surf, Strength] with Strength at
+its full 15 PP. Everything else is byte-identical to
+the start state: both other movesets, the party
+order, money Y113,288, the 17-stack bag (HM04 still
+x1 - an HM is never consumed), dex 22, the box.
+
+Media (probe156/media): the fast dialog ride's frame
+burst froze on the bag list - at headless cadence the
+screenshots lag the text - so the teach was re-driven
+slowly on a scratch copy to catch the text frames.
+The catch was worth it: alongside "Booted up an HM!",
+the party ABLE screen shows Blastoise and Lapras ABLE
+and Arcanine NOT ABLE - the S20 incompatibility
+finding rendered in the game's own UI - over the
+words "LAPRAS learned STRENGTH!".
+
+Port: teach_strength in run_real.py - the pupil is
+located by the Surf it already carries, its live
+moveset is read before any input, a four-move or
+Surf-less pupil stops the step untouched, and the
+teach runs through _teach_hm_free_slot. Cold replay
+from safari-hunt.state through the port alone ended
+field-identical to the probe's chain head (party,
+money, bag, box, dex all compared). Tests 131/131
+(3 new: TestTeachStrength parses both learnsets out
+of pokered - Lapras holds SURF + STRENGTH, Arcanine
+holds no HMs - so the S20 finding is now a regression
+test, not just a story). Chain head
+probe156/lapras-strength.state: Fuchsia PC, party
+healed, Lapras the two-HM carrier (Surf + Strength),
+dex 22, money Y113,288. Cinnabar needs only Surf;
+the Seafoam crossing wants both, and now has both.
+Still Vlad's calls: the Super Rod trip (and Dratini),
+Route 16's Snorlax, the TM shelf, Rare Candy / HP Up.

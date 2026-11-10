@@ -8334,6 +8334,48 @@ def teach_hm_to_boxed(emu: PyBoyEmulator, ex: Executor,
     return heal(emu, ex)
 
 
+def teach_strength(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """HM04 STRENGTH -> Lapras (probe156, Vlad's re-decision
+    2026-11-10). Vlad first chose Arcanine over Roar, but
+    Arcanine's tmhm bitfield - the very data CanLearnTM
+    reads - contains NO HMs at all (probe155, verified
+    three ways; writing the move in was declined as
+    fabrication). Verification-first is the standing rule
+    from that lesson: Lapras's pokered learnset lists
+    STRENGTH (data/pokemon/base_stats/lapras.asm, and the
+    in-game ABLE screen agrees - probe156 media), the
+    pupil is located by the SURF it already carries, its
+    live moveset is read from RAM before any input, and
+    the teach runs through _teach_hm_free_slot's strict
+    append assertion: the ONLY legal change is STRENGTH
+    appended into the free 4th slot. Live result: Lapras
+    [Water Gun, Growl, Surf, Strength] - the two-HM
+    carrier for the Seafoam crossing. Every other party
+    member's move bytes stay identical and HM04 remains
+    in the bag (HMs are never consumed). A pupil with no
+    free slot, or without Surf, stops the step untouched
+    - forgetting a move is the player's call."""
+    if _bag_count(emu, ITEM_HM04_STRENGTH) < 1:
+        return False
+    idx = _party_index_of(emu, SPECIES_LAPRAS)
+    if idx is None:
+        return False
+    from agent.state import ADDR_PARTY_MONS
+    mem = emu.pb.memory
+    base = ADDR_PARTY_MONS + 44 * idx
+    before = [mem[base + 8 + j] for j in range(4)]
+    if MOVE_STRENGTH in before:
+        return True
+    if MOVE_SURF not in before:      # not the Surf carrier
+        return False
+    if sum(1 for m in before if m) >= 4:
+        return False                 # no free slot: stop
+    if not _teach_hm_free_slot(emu, idx, ITEM_HM04_STRENGTH,
+                               MOVE_STRENGTH):
+        return False
+    return _bag_count(emu, ITEM_HM04_STRENGTH) == 1
+
+
 def get_good_rod(emu: PyBoyEmulator, ex: Executor) -> bool:
     """The Good Rod: a free gift from the Fishing Guru's
     brother in Fuchsia (house map 164; the guru stands at

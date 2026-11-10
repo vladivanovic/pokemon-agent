@@ -635,3 +635,41 @@ class TestSafariHunt(unittest.TestCase):
     def test_area_names_cover_all_areas(self):
         self.assertEqual(set(rr.SAFARI_AREAS_BY_NAME.values()),
                          {217, 218, 219, 220})
+
+
+class TestTeachStrength(unittest.TestCase):
+    """probe156: HM04 -> Lapras, Vlad's re-decision after
+    Arcanine proved engine-incompatible. The verification-
+    first rule made a test: read the tmhm learnsets from
+    pokered itself - the data CanLearnTM reads."""
+
+    def _tmhm_tokens(self, species_file):
+        from pathlib import Path
+        asm = (Path(rr.__file__).resolve().parent.parent
+               / "pokered" / "data" / "pokemon" / "base_stats"
+               / species_file)
+        if not asm.exists():
+            self.skipTest("pokered tree not present")
+        text = asm.read_text()
+        block = text.split("tmhm", 1)[1].split("; end", 1)[0]
+        block = block.replace("\\", " ").replace("\n", " ")
+        return {tok.strip(",") for tok in block.split()
+                if tok.strip(",")}
+
+    def test_strength_step_wired(self):
+        self.assertTrue(callable(rr.teach_strength))
+        self.assertEqual(rr.ITEM_HM04_STRENGTH, 0xC7)
+        self.assertEqual(rr.MOVE_STRENGTH, 70)
+        self.assertEqual(rr.MOVE_SURF, 57)
+        self.assertEqual(rr.SPECIES_LAPRAS, 0x13)
+
+    def test_lapras_learnset_includes_both_hms(self):
+        tokens = self._tmhm_tokens("lapras.asm")
+        self.assertIn("SURF", tokens)
+        self.assertIn("STRENGTH", tokens)
+
+    def test_arcanine_learnset_has_no_hms(self):
+        # the probe155 finding that forced the re-decision
+        tokens = self._tmhm_tokens("arcanine.asm")
+        for hm in ("CUT", "FLY", "SURF", "STRENGTH", "FLASH"):
+            self.assertNotIn(hm, tokens)
