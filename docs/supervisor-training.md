@@ -2243,3 +2243,70 @@ before that leg runs. Still open: Articuno; Safari
 Tauros/Scyther + West; TM shelf / Rare Candy /
 HP Up / Carbos; party arrangement (Pidgey in,
 Diglett boxed).
+
+## 26. The road to Indigo — STOPPED at the Route 22 rival (probe164)
+
+Vlad's kickoff (2026-11-11) carried one explicit ruling:
+Moltres is LEFT ALONE. The leg ran prep + the rival and
+stopped under the standing stop rule — two genuine
+blackouts to the rival. Route 23, Victory Road and the
+Plateau were never entered; Moltres/Articuno untouched;
+chain head unchanged (probe162/viridian.state).
+
+Prep (verified, reusable): the bag held ZERO healing
+items, and Viridian Mart sells no potions at all (Poke
+Ball / Antidote / Parlyz Heal / Burn Heal — the Gen 1
+quirk). So: deposited S.S. TICKET + HELIX FOSSIL +
+SILPH SCOPE at Viridian PC (bag 20 -> 17, all
+retrievable), flew to Fuchsia, bought SUPER POTION x6 +
+REVIVE x2 + FULL HEAL x2 at Fuchsia Mart (clerk across
+the counter from stance (2,5) — buy_mart_item's default;
+stance (1,5) is the counter tile itself and pathing
+refuses it), flew back. Total spend 8,400 (700x6 +
+1500x2 + 600x2, to the yen). Checkpoint:
+probe164/prepped.state sha256 5be2f20e...37b.
+
+The rival (compiled from Rival2Data's Route 22 set,
+Squirtle line — matches the brief's expectation except
+Exeggcute is Growlithe in this starter row): PIDGEOT 47 /
+RHYHORN 45 / GYARADOS 45 / GROWLITHE 47 / ALAKAZAM 50 /
+VENUSAUR 53. Trigger cells (29,4)/(29,5); event 1318
+(beat) / 1319 (wants battle, verified armed at start).
+
+Two driver defects were found and fixed first, neither
+a blackout (both runs aborted in-battle, party intact,
+disclosed per the Snorlax precedent): (1) the shift
+prompt — when a trainer's mon faints, _advance_battle's
+A presses answer YES to "Will VLAD change POKEMON?" and
+open the party list (top_y 1, in_dialog True), where A
+re-selects the active mon forever; ONE B press declines
+cleanly (proven live, probe164 dbg3). (2) A silent-spin
+branch: with Venusaur asleep and Arcanine dead, the
+policy ordered Water Gun from Oddish — a move it does
+not know — failing silently for 215 turns (a
+no-progress watchdog now guards the driver pattern).
+
+The policy (PP economy: Hydro Pump capped 2/2/2,
+Water Gun/Bubble otherwise, Arcanine on Bite duty vs
+Growlithe, hard rule "Gyarados/Alakazam are Blastoise's
+fights", Oddish Sleep Powder plan for Venusaur) then
+lost twice, fairly: Gyarados is the tax — Dragon Rage
+is a flat 40 and pump #1 missed in every run (80% acc),
+so Blastoise reached Alakazam at 63 HP and died to one
+Psychic on the switch turn; Arcanine (134 -> 67 on a
+crit Flamethrower switching into Growlithe) died to the
+next; the Lv3-23 cascade cannot hurt Alakazam (Voltorb
+Tackle = 1 dmg). The near-miss run (different RNG
+stream) reached Venusaur with Blastoise at 21 HP and
+the sleep landed — the fight is a weighted coin flip
+on crits and pump accuracy, not a clean win. Per the
+stop rule the leg halts here; grinding or further
+attempts are Vlad's call. Post-blackout state preserved
+at probe164/dbg4-end.state (Viridian, healed, money
+67,733 — halved twice from the post-prep 135,466 on the
+attempt line; the chain line is untouched at 143,866).
+
+No port this leg: route22_rival does not exist until a
+policy actually beats him. Battle-driver lessons banked
+above (shift-prompt B-decline; move-membership checks;
+watchdog) belong in any future trainer-battle driver.
