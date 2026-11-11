@@ -11138,6 +11138,360 @@ def fly_to(emu: PyBoyEmulator, ex: Executor,
     return emu.read_state().map_id == dest_map
 
 
+# -- Viridian Gym: the arrow floor + Giovanni (probe162) ----
+# Ground truth compiled from pokered, not discovered live:
+# the gym's arrow triggers are the RLE table
+# ViridianGymArrowTilePlayerMovement in scripts/
+# ViridianGym.asm - standing on a trigger cell makes the map
+# script simulate PAD_DIR x N (StartSimulatingJoypadStates),
+# so a slide is up to N steps in the arrow direction,
+# stopped early by walls/sprites, and landing on another
+# trigger chains. probe162e calibrated the semantics live:
+# a single slide takes exactly N steps ((11, 2) RIGHT 6 ->
+# (17, 2); (18, 2) DOWN 9 -> (18, 11), ~48 frames/step).
+# Caveat (probe162c): a slide entered in immediate
+# succession after another can stop short (a DOWN 9 chained
+# straight off the (11, 2) ride ended 2 steps early at
+# (18, 9)) - so the navigator below NEVER trusts a predicted
+# endpoint: it re-reads the live cell after every action and
+# re-plans. Trainer sprites are STAY, but a sight-engaged
+# trainer WALKS UP to the player and stays on his walk-up
+# cell after the fight (probe162b: T5 ended on (10, 4),
+# sealing column 10) - sprite blocking is therefore read
+# LIVE from wSpriteStateData2 (via _boulder_cell), never
+# from the objects table, and if the road seals anyway the
+# gym is exited and re-entered (sprites reset home; beaten
+# trainers stay beaten and do not walk up again).
+ITEM_TM27 = 0xE3              # add_tm FISSURE ; $E3
+EV_VIRIDIAN_GYM_OPEN = 40
+EV_GOT_TM27 = 80
+EV_BEAT_VIRIDIAN_GYM_GIOVANNI = 81
+EV_VIRIDIAN_GYM_TRAINERS = (82, 83, 84, 85, 86, 87, 88, 89)
+VIRIDIAN_GYM_ARROWS = {
+    (19, 11): ("up", 9), (19, 1): ("left", 8),
+    (18, 2): ("down", 9), (11, 2): ("right", 6),
+    (16, 10): ("down", 2), (4, 6): ("down", 7),
+    (5, 13): ("right", 8), (4, 14): ("right", 9),
+    (0, 15): ("up", 8), (1, 15): ("up", 6),
+    (13, 16): ("left", 6), (13, 17): ("left", 12),
+}
+VIRIDIAN_GYM_STANCE = (2, 2)  # south of Giovanni; face up
+# Giovanni's gym team (parties.asm GiovanniData, $FF
+# per-mon levels): Rhyhorn 45 / Dugtrio 42 / Nidoqueen 44 /
+# Nidoking 45 / Rhydon 50, with FISSURE as the LoneMove on
+# mon index 4 (Rhydon, move slot 3 - data/trainers/
+# special_moves.asm entry 8). Gen 1 OHKO moves fail when
+# the user is slower than the target, so a fast lead
+# (Blastoise Lv61+) is immune; never lead a slow mon into
+# the Rhydon. The eight gym trainers (objects + headers +
+# parties): T0 (12,7) CooltrainerM9 Sandslash/Dugtrio 39,
+# T1 (11,11) Blackbelt6 Machop/Machoke 40, T2 (10,7)
+# Tamer3 Rhyhorn 43, T3 (3,7) Blackbelt7 Machoke 43,
+# T4 (13,5) CooltrainerM10 Rhyhorn 43, T5 (10,1)
+# Blackbelt8 Machoke/Machop/Machoke 38, T6 (2,16) Tamer4
+# Arbok/Tauros 39, T7 (6,5) CooltrainerM1 Nidorino/
+# Nidoking 39. The walk-in road from the door crosses only
+# T4's and T5's sight lines.
+_GYM_DIRS = {"up": (0, -1), "down": (0, 1), "left": (-1, 0),
+             "right": (1, 0)}
+
+
+def _gym_sprite_cells(emu: PyBoyEmulator, gmap) -> set:
+    """Live sprite cells on a gym map (player excluded)."""
+    st = emu.read_state()
+    here = (st.x, st.y)
+    cells = set()
+    for k in range(1, 16):
+        c = _boulder_cell(emu, k)
+        if c != here and gmap.in_bounds(*c) \
+                and gmap.tile_walkable(*c):
+            cells.add(c)
+    return cells
+
+
+def _gym_slide_end(gmap, cell, blocked, learned) -> tuple:
+    """Resolve the arrow chain from `cell` on the compiled
+    grid: slide up to N steps per trigger, walls / blocked /
+    learned cells stop a slide, triggers chain."""
+    seen = set()
+    while cell in VIRIDIAN_GYM_ARROWS and cell not in seen:
+        seen.add(cell)
+        d, n = VIRIDIAN_GYM_ARROWS[cell]
+        dx, dy = _GYM_DIRS[d]
+        for _ in range(n):
+            nxt = (cell[0] + dx, cell[1] + dy)
+            if not (gmap.in_bounds(*nxt) and gmap.walk[nxt[1]][nxt[0]]) \
+                    or nxt in blocked or nxt in learned:
+                break
+            cell = nxt
+    return cell
+
+
+def _gym_bfs(gmap, start, goal, blocked, learned):
+    """BFS over walk steps + compiled slides. Returns a list
+    of (direction, stepped_cell, predicted_end) actions."""
+    from collections import deque
+    prev = {start: None}
+    q = deque([start])
+    while q:
+        c = q.popleft()
+        if c == goal:
+            break
+        for d, (dx, dy) in _GYM_DIRS.items():
+            stepped = (c[0] + dx, c[1] + dy)
+            if not (gmap.in_bounds(*stepped)
+                    and gmap.walk[stepped[1]][stepped[0]]) \
+                    or stepped in blocked or stepped in learned:
+                continue
+            end = _gym_slide_end(gmap, stepped, blocked, learned)
+            if end not in prev:
+                prev[end] = (c, d, stepped)
+                q.append(end)
+    if goal not in prev:
+        return None
+    actions = []
+    c = goal
+    while prev[c] is not None:
+        p, d, stepped = prev[c]
+        actions.append((d, stepped, c))
+        c = p
+    return list(reversed(actions))
+
+
+def _gym_settle(emu: PyBoyEmulator) -> bool:
+    """Ride dialogs and hardened-drive any battle until the
+    player is free. Returns True if a battle was driven."""
+    fought = False
+    quiet = 0
+    for _ in range(400):
+        st = emu.read_state()
+        if st.in_battle:
+            fought = True
+            _drive_battle_hardened(emu)
+            quiet = 0
+            continue
+        if st.in_dialog:
+            quiet = 0
+            _press10(emu, "a")
+        else:
+            quiet += 1
+            if quiet >= 6:
+                break
+        emu.tick(25)
+    return fought
+
+
+def _gym_step(emu: PyBoyEmulator, gym_map: int, d: str) -> None:
+    """One press-step inside the gym; if it lands on an arrow
+    trigger, wait out the simulated-pad slide."""
+    emu.press(d)
+    _explore_settle(emu)
+    st = emu.read_state()
+    pos = (st.x, st.y)
+    if st.map_id != gym_map or pos not in VIRIDIAN_GYM_ARROWS \
+            or st.in_battle:
+        return
+    stable = 0
+    for _ in range(160):
+        st = emu.read_state()
+        if st.in_battle or st.map_id != gym_map:
+            return
+        if (st.x, st.y) == pos:
+            stable += 1
+            if stable >= 8:
+                return
+        else:
+            stable = 0
+            pos = (st.x, st.y)
+        emu.tick(15)
+
+
+def _gym_go(emu: PyBoyEmulator, ex: Executor, gym_map: int,
+            gmap, goal, learned: set) -> bool:
+    """Replanning gym navigator: BFS (compiled arrows + live
+    sprites + learned blocks), one action at a time, fighting
+    whatever sight-engages. A step that moves nothing teaches
+    `learned` the stepped cell (a walked-up trainer's body).
+    """
+    for _ in range(240):
+        st = emu.read_state()
+        if st.map_id != gym_map:
+            return False
+        if st.in_battle or st.in_dialog:
+            _gym_settle(emu)
+            st = emu.read_state()
+            if st.map_id != gym_map:
+                return False
+        if (st.x, st.y) == goal:
+            return True
+        blocked = _gym_sprite_cells(emu, gmap)
+        path = _gym_bfs(gmap, (st.x, st.y), goal, blocked,
+                        learned)
+        if not path:
+            return False
+        d, stepped, _end = path[0]
+        before = (st.x, st.y)
+        _gym_step(emu, gym_map, d)
+        st2 = emu.read_state()
+        if (st2.x, st2.y) == before and st2.map_id == gym_map \
+                and not st2.in_battle and not st2.in_dialog:
+            learned.add(stepped)
+    st = emu.read_state()
+    return (st.x, st.y) == goal and st.map_id == gym_map
+
+
+def _gym_exit(emu: PyBoyEmulator, ex: Executor, gym_map: int,
+              gmap, learned: set) -> bool:
+    if not _gym_go(emu, ex, gym_map, gmap, (17, 16), learned):
+        _gym_go(emu, ex, gym_map, gmap, (16, 16), learned)
+    for _ in range(8):
+        emu.press("down")
+        _explore_settle(emu)
+        if emu.read_state().map_id != gym_map:
+            return True
+    return emu.read_state().map_id != gym_map
+
+
+def viridian_gym(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """The Earth Badge (probe162): FLY to Viridian (when not
+    already there), deposit the GOOD ROD at the Viridian PC
+    if the bag is full (Giovanni's TM27 payout needs the
+    20th stack free - the Sabrina lesson), cross the arrow
+    floor fighting only the sight engagements on the road
+    (T4, T5), beat GIOVANNI, ride the badge + TM27 ceremony,
+    exit and heal. Verified from RAM at the end: Earth badge
+    bit (8 badges), EVENT_BEAT_VIRIDIAN_GYM_GIOVANNI,
+    EVENT_GOT_TM27, TM27 x1 in the bag, party at full HP.
+    Stop rule (Vlad's): two blackouts to Giovanni end the
+    leg in failure - no grinding past him. Fences: never
+    west to Route 22, never into Victory Road, no catches,
+    no TM teaching, no stat items; the gym's REVIVE ball is
+    deliberately NOT collected (bag discipline)."""
+    world = ex.world
+    gym = world.map_id("ViridianGym")
+    city = world.map_id("ViridianCity")
+    pc = world.map_id("ViridianPokecenter")
+    gmap = next(m for m in world.maps.values()
+                if m.name == "ViridianGym")
+    if "Earth" in emu.read_state().badges:
+        return _bag_count(emu, ITEM_TM27) >= 1
+    # -- travel: normalise to Viridian City streets
+    st = emu.read_state()
+    if st.map_id == world.map_id("FuchsiaPokecenter"):
+        for door in ((3, 7), (4, 7)):
+            try:
+                ex._walk_to(st.map_id, door)
+            except StuckError:
+                continue
+            for _ in range(6):
+                emu.press("down")
+                _explore_settle(emu)
+                if emu.read_state().map_id != st.map_id:
+                    break
+            if emu.read_state().map_id != st.map_id:
+                break
+        st = emu.read_state()
+    if st.map_id not in (city, gym):
+        if not fly_to(emu, ex, "VIRIDIAN CITY"):
+            return False
+        st = emu.read_state()
+    # -- bag room for TM27 (deposit the superseded Good Rod)
+    if st.map_id == city and len(_bag_items(emu)) >= 20 \
+            and _bag_count(emu, ITEM_GOOD_ROD) >= 1 \
+            and _bag_count(emu, ITEM_TM27) == 0:
+        if not _ride_or_cross(emu, ex, pc):
+            return False
+        if not deposit_item(emu, ex, pc, ITEM_GOOD_ROD):
+            return False
+        if _bag_count(emu, ITEM_GOOD_ROD) != 0 \
+                or len(_bag_items(emu)) != 19:
+            return False
+        for door in ((3, 7), (4, 7)):
+            try:
+                ex._walk_to(pc, door)
+            except StuckError:
+                continue
+            for _ in range(6):
+                emu.press("down")
+                _explore_settle(emu)
+                if emu.read_state().map_id != pc:
+                    break
+            if emu.read_state().map_id != pc:
+                break
+        if emu.read_state().map_id != city:
+            return False
+    # -- the gym (two Giovanni blackouts = stop, per Vlad)
+    for attempt in range(2):
+        if emu.read_state().map_id != gym:
+            if not _ride_or_cross(emu, ex, gym):
+                return False
+        learned: set = set()
+        if not _gym_go(emu, ex, gym, gmap,
+                       VIRIDIAN_GYM_STANCE, learned):
+            # a walked-up trainer can seal the road; sprites
+            # reset home on re-entry, beaten trainers stay put
+            if not _gym_exit(emu, ex, gym, gmap, learned):
+                return False
+            if not _ride_or_cross(emu, ex, gym):
+                return False
+            learned = set()
+            if not _gym_go(emu, ex, gym, gmap,
+                           VIRIDIAN_GYM_STANCE, learned):
+                return False
+        emu.press("up")
+        emu.tick(20)
+        _press10(emu, "a")
+        in_battle = False
+        for _ in range(300):
+            st = emu.read_state()
+            if st.in_battle:
+                in_battle = True
+                break
+            if st.in_dialog:
+                _press10(emu, "a")
+            emu.tick(25)
+        if not in_battle:
+            return False
+        _drive_battle_hardened(emu)
+        # the ceremony rides AFTER the fight: badge + TM27
+        quiet = 0
+        for _ in range(600):
+            st = emu.read_state()
+            if st.in_dialog:
+                quiet = 0
+                _press10(emu, "a")
+            else:
+                quiet += 1
+                if quiet >= 8 and _event_flag(
+                        emu, EV_BEAT_VIRIDIAN_GYM_GIOVANNI):
+                    break
+            emu.tick(25)
+        if _event_flag(emu, EV_BEAT_VIRIDIAN_GYM_GIOVANNI):
+            break
+        # blacked out (or bounced): the wake-up leaves the
+        # party healed at the PC; one retry is allowed
+        if attempt == 1:
+            return False
+        if emu.read_state().map_id == gym:
+            _gym_exit(emu, ex, gym, gmap, set())
+    st = emu.read_state()
+    if "Earth" not in st.badges or len(st.badges) != 8 \
+            or not _event_flag(emu, EV_GOT_TM27) \
+            or _bag_count(emu, ITEM_TM27) != 1:
+        return False
+    # -- out, heal, finish in Viridian City
+    if emu.read_state().map_id == gym:
+        if not _gym_exit(emu, ex, gym, gmap, set()):
+            return False
+    if not _ride_or_cross(emu, ex, pc):
+        return False
+    if not _heal_at_pc(emu, ex, pc):
+        return False
+    st = emu.read_state()
+    return st.map_id == city and len(st.badges) == 8 \
+        and all(m.hp == m.max_hp for m in st.party)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--rom", required=True, help="path to a Pokemon Red ROM")

@@ -858,3 +858,105 @@ class TestFlyLeg(unittest.TestCase):
                 memory = FakeMem()
         self.assertEqual(rr._fly_header_town(FakeEmu()),
                          "PALLET TOWN")
+
+
+class TestViridianLeg(unittest.TestCase):
+    """probe162: the Viridian leg - Good Rod deposit for
+    TM27 bag room, the arrow floor compiled from pokered's
+    RLE table, Giovanni for the Earth Badge. Data pins from
+    pokered + the live probe162 runs (docs S25)."""
+
+    def _pokered(self, *parts):
+        from pathlib import Path
+        p = (Path(rr.__file__).resolve().parent.parent
+             / "pokered").joinpath(*parts)
+        if not p.exists():
+            self.skipTest("pokered tree not present")
+        return p.read_text()
+
+    def test_viridian_functions_wired(self):
+        for fn in (rr.viridian_gym, rr._gym_go, rr._gym_step,
+                   rr._gym_bfs, rr._gym_slide_end,
+                   rr._gym_sprite_cells, rr._gym_exit):
+            self.assertTrue(callable(fn))
+
+    def test_viridian_constants(self):
+        self.assertEqual(rr.ITEM_TM27, 0xE3)
+        self.assertEqual(rr.EV_VIRIDIAN_GYM_OPEN, 40)
+        self.assertEqual(rr.EV_GOT_TM27, 80)
+        self.assertEqual(rr.EV_BEAT_VIRIDIAN_GYM_GIOVANNI, 81)
+        self.assertEqual(rr.EV_VIRIDIAN_GYM_TRAINERS,
+                         tuple(range(82, 90)))
+        self.assertEqual(rr.VIRIDIAN_GYM_STANCE, (2, 2))
+
+    def test_arrow_table_matches_pokered(self):
+        # parse ViridianGymArrowTilePlayerMovement out of
+        # the gym script and compare trigger-for-trigger
+        asm = self._pokered("scripts", "ViridianGym.asm")
+        block = asm.split("ViridianGymArrowTilePlayerMovement:",
+                          1)[1].split("db -1", 1)[0]
+        moves = {}
+        for line in block.splitlines():
+            line = line.strip()
+            if not line.startswith("map_coord_movement"):
+                continue
+            nums = line.split("map_coord_movement", 1)[1]
+            x, y, label = [t.strip() for t in nums.split(",")]
+            m = asm.split(label + ":", 1)[1].split("db -1", 1)[0]
+            first = m.strip().splitlines()[0].strip()
+            pad, count = [t.strip()
+                          for t in first[2:].split(",")]
+            moves[(int(x), int(y))] = (
+                pad.replace("PAD_", "").lower(), int(count))
+        self.assertEqual(moves, rr.VIRIDIAN_GYM_ARROWS)
+
+    def test_giovanni_party_matches_pokered(self):
+        asm = self._pokered("data", "trainers", "parties.asm")
+        block = asm.split("GiovanniData:", 1)[1]
+        entries = [ln.strip() for ln in block.splitlines()
+                   if ln.strip().startswith("db $FF")]
+        gym = entries[2]  # Hideout, Silph, then the Gym
+        toks = [t.strip() for t in gym[2:].split(",")]
+        self.assertEqual(toks[0], "$FF")
+        team = [(int(toks[i]), toks[i + 1])
+                for i in range(1, len(toks) - 1, 2)]
+        self.assertEqual(team, [(45, "RHYHORN"), (42, "DUGTRIO"),
+                                (44, "NIDOQUEEN"),
+                                (45, "NIDOKING"), (50, "RHYDON")])
+
+    def test_slide_resolution_on_compiled_grid(self):
+        from agent.world import default_world
+        gmap = next(m for m in default_world().maps.values()
+                    if m.name == "ViridianGym")
+        end = rr._gym_slide_end(gmap, (11, 2), set(), set())
+        self.assertEqual(end, (17, 2))       # RIGHT 6, full
+        end = rr._gym_slide_end(gmap, (18, 2), set(), set())
+        self.assertEqual(end, (18, 11))      # DOWN 9, full
+        end = rr._gym_slide_end(gmap, (13, 17), set(), set())
+        self.assertEqual(end, (1, 17))       # LEFT 12, full
+        # a sprite on the lane stops the slide early
+        end = rr._gym_slide_end(gmap, (11, 2), {(14, 2)},
+                                set())
+        self.assertEqual(end, (13, 2))
+
+    def test_road_to_giovanni_exists(self):
+        from agent.world import default_world
+        gmap = next(m for m in default_world().maps.values()
+                    if m.name == "ViridianGym")
+        home = {(2, 1), (12, 7), (11, 11), (10, 7), (3, 7),
+                (13, 5), (10, 1), (2, 16), (6, 5), (16, 15),
+                (16, 9)}
+        path = rr._gym_bfs(gmap, (16, 16),
+                           rr.VIRIDIAN_GYM_STANCE, home, set())
+        self.assertIsNotNone(path)
+
+    def test_viridian_gym_fences(self):
+        # Vlad's fences, pinned in the source: no Route 22,
+        # no Victory Road, and the Good Rod deposit (the
+        # TM27 bag-room step) is part of the leg.
+        import inspect
+        src = inspect.getsource(rr.viridian_gym)
+        self.assertNotIn("Route22", src)
+        self.assertNotIn("VictoryRoad", src)
+        self.assertIn("ITEM_GOOD_ROD", src)
+        self.assertIn("deposit_item", src)

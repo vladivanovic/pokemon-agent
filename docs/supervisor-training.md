@@ -2111,3 +2111,135 @@ Diglett boxed (the Fly-leg brief's end state; Vlad can
 re-shuffle anytime). Ahead: Giovanni's Viridian Gym
 (Earth Badge), the final rival fights, Victory Road,
 the Elite Four.
+
+## 25. The Viridian leg (probe162, port-verified probe163)
+
+Vlad's order (2026-11-11): the Earth Badge, #8, the
+last one. From the Fly leg's chain head (probe160/
+fly.state, Fuchsia PC, Blastoise Lv61, bag at 20
+stacks). Fences held throughout: no Route 22 exit,
+no Victory Road, no catches, no TM teaching, no
+stat items, Articuno untouched.
+
+FLIGHT + DEPOSIT: exit Fuchsia PC -> fly_to Viridian
+(landing (23, 26), RAM-verified) -> Viridian PC:
+deposit GOOD ROD (0x4D, superseded by the Super Rod)
+verified from RAM - bag 20 -> 19 stacks, Good Rod x1
+in PC storage. The deposit is the Sabrina lesson
+applied BEFORE the fight: Giovanni's script gives
+TM27 Fissure in the post-battle ceremony, and at 20
+stacks the bag-full branch would have bounced it
+(the script does allow a re-talk retry via
+EVENT_GOT_TM27, but the badge run should not need
+it). The gym's REVIVE item ball at (16, 9) was
+deliberately NOT collected for the same bag
+discipline.
+
+THE ARROW FLOOR, COMPILED: the gym script's default
+handler looks the player's cell up in
+ViridianGymArrowTilePlayerMovement (scripts/
+ViridianGym.asm) and, on a hit, simulates the pad
+(StartSimulatingJoypadStates) with wJoyIgnore set -
+12 triggers: (19,11) UP 9, (19,1) LEFT 8, (18,2)
+DOWN 9, (11,2) RIGHT 6, (16,10) DOWN 2, (4,6) DOWN 7,
+(5,13) RIGHT 8, (4,14) RIGHT 9, (0,15) UP 8,
+(1,15) UP 6, (13,16) LEFT 6, (13,17) LEFT 12.
+probe162e calibrated the semantics live: a slide is
+up to N steps in the arrow direction, stopped early
+by walls/sprites, triggers chain, ~48 frames/step -
+(11,2) RIGHT 6 landed exactly (17,2); (18,2) DOWN 9
+landed exactly (18,11). One anomaly banked: in
+probe162c a DOWN 9 entered in immediate succession
+after the (11,2) ride stopped 2 steps early at
+(18,9); entered cold it runs the full 9. The ported
+navigator therefore never trusts a predicted
+endpoint - it re-reads the live cell after every
+action and re-plans (BFS over the compiled grid +
+slides, sprite cells read LIVE from
+wSpriteStateData2 via _boulder_cell).
+
+THE WALK-UP TRAP (probe162b's failure, fixed in
+162c): gym trainers are STAY sprites, but a sight-
+engaged trainer WALKS UP to the player and remains
+on his walk-up cell after the battle. T5 (Blackbelt,
+(10,1)) engaged at (10,5) and stayed on (10,4),
+sealing the only column north; a static-sprite BFS
+bumped it 160 times and died. The fix is threefold:
+live sprite blocking, a learned set fed by
+no-progress steps, and - if the road seals anyway -
+exit + re-enter (sprites reset home; beaten trainers
+stay beaten and do not walk up again; the re-entry
+fallback was armed but not needed in 162c).
+
+TRAINERS: the door-to-Giovanni road crosses exactly
+two sight lines. T4 CooltrainerM2 (13,5), Rhyhorn 43
+(event 86): Blastoise took zero damage. T5
+Blackbelt3 (10,1), Machoke/Machop/Machoke 38 (event
+87): zero damage, and the XP levelled Blastoise
+61 -> 62 (203 HP) before Giovanni. Payouts +2,455.
+The other six were never engaged. NOTE for flag
+readers: beating Giovanni runs the script's
+SetEventRange TRAINER_0..7, so all eight trainer
+flags read TRUE after the badge although only two
+were fought (verified: all False at entry, all True
+in badge.state, money consistent with two fights).
+The same script sets EVENT_2ND_ROUTE22_RIVAL_BATTLE
+and EVENT_ROUTE22_RIVAL_WANTS_BATTLE - the game has
+armed the Route 22 rival for the League leg; we did
+not go west.
+
+GIOVANNI: compiled team (parties.asm $FF format)
+Rhyhorn 45 / Dugtrio 42 / Nidoqueen 44 / Nidoking 45
+/ Rhydon 50, plus the LoneMove FISSURE on mon index
+4 (Rhydon, move slot 3; special_moves.asm entry 8).
+The OHKO threat is theoretical against this lead:
+Gen 1 OHKO moves fail when the user is slower than
+the target, and Rhydon (Spd ~60) never outspeeds a
+Lv62 Blastoise. Blastoise soloed: 203 -> 127 HP
+(76 damage across the whole gym run), Hydro Pump
+5/5 spent, Bubble x12, Water Gun untouched; no other
+party member took a point. Payout +4,950. Ceremony
+ridden to completion and verified from RAM: 8 badge
+bits (Earth present), EVENT_BEAT_VIRIDIAN_GYM_
+GIOVANNI (81), EVENT_GOT_TM27 (80), TM27 x1 in the
+bag (20 stacks again). Zero blackouts - the
+two-blackout stop rule never came into play.
+
+EXIT + FINISH: out on foot (replanning navigator),
+healed at the Viridian PC. Chain head probe162/
+viridian.state (sha256 174661d2...345e): Viridian
+City (23, 28), all full HP - Blastoise 62, Arcanine
+39, Voltorb 16, Oddish 23, Lapras 15, Pidgey 3;
+money 143,866 (+7,405 on the leg); dex 27; badges 8;
+bag 20 stacks incl. TM27, Master Ball x1 (never
+thrown), Great x3, Poke x8. PC storage now also
+holds the Good Rod.
+
+PORT: viridian_gym + _gym_go / _gym_step / _gym_bfs /
+_gym_slide_end / _gym_sprite_cells / _gym_settle /
+_gym_exit in run_real.py (the full leg: PC exit,
+flight, deposit, gym, two-blackout stop rule, heal).
+Tests: TestViridianLeg x7 (arrow table parsed back
+out of pokered's script and compared trigger-for-
+trigger; Giovanni's party parsed from parties.asm;
+slide endpoints on the compiled grid incl. a
+sprite-blocked lane; the door->stance road exists;
+fence pins: no Route22 / VictoryRoad in the source,
+deposit wired) - suite 164/164. FIDELITY: this leg
+IS cold-replayed through the ported code - probe163
+ran viridian_gym from probe160/fly.state and the
+endpoint matched the live chain head on every field
+(map/position (23,28), money 143,866 to the yen,
+party species/levels/HP/moves/PP, bag stack-for-
+stack, box, dex 27, 8 badges, TM27 held, Good Rod
+in storage, all event flags).
+
+OPEN DECISIONS (Vlad's, untouched): the League leg
+is next per the roadmap - Route 22 rival (now armed
+by Giovanni's script), Victory Road, the Elite Four
++ Champion - and MOLTRES sits inside Victory Road
+in Gen 1, so its catch call is Vlad's to make
+before that leg runs. Still open: Articuno; Safari
+Tauros/Scyther + West; TM shelf / Rare Candy /
+HP Up / Carbos; party arrangement (Pidgey in,
+Diglett boxed).
