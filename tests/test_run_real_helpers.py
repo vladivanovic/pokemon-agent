@@ -1080,3 +1080,233 @@ class TestRoadToIndigo(unittest.TestCase):
         self.assertIn("ITEM_SUPER_POTION, 6", src)
         self.assertIn("ITEM_REVIVE, 2", src)
         self.assertIn("ITEM_FULL_HEAL, 2", src)
+
+
+class TestLeagueLeg(unittest.TestCase):
+    """probe167: the League leg - prompt-aware grind,
+    assembly and the Elite Four gauntlet."""
+
+    def _pokered(self, *parts):
+        from pathlib import Path
+        p = (Path(rr.__file__).resolve().parent.parent
+             / "pokered").joinpath(*parts)
+        if not p.exists():
+            self.skipTest("pokered tree not present")
+        return p.read_text()
+
+    def test_league_functions_wired(self):
+        for fn in (rr.league_grind, rr.league_assemble,
+                   rr.elite_four, rr._league_grind_one,
+                   rr._league_fight, rr._league_decide,
+                   rr._league_menu_move, rr._league_heal_trip,
+                   rr._corridor_care, rr._step_walk,
+                   rr._ride_ending, rr._answer_learn_prompt,
+                   rr._guarded_advance, rr._close_all_menus):
+            self.assertTrue(callable(fn))
+
+    def test_league_species_ids_match_pokered(self):
+        # Gen 1 internal ids count EVERY const in
+        # pokemon_constants.asm INCLUDING const_skip
+        # slots - the probe's table that skipped them was
+        # low by the skip count and silently disabled
+        # whole policy branches for a run (docs S28).
+        txt = self._pokered("constants",
+                            "pokemon_constants.asm")
+        names = []
+        started = False
+        import re
+        for line in txt.splitlines():
+            if "const_def" in line:
+                started = True
+                continue
+            if not started:
+                continue
+            m = re.match(r"\s*const (\w+)", line)
+            if m:
+                names.append(m.group(1))
+                continue
+            m = re.match(r"\s*const_skip(?:\s+(\d+))?",
+                         line)
+            if m:
+                names.extend(["SKIP"] * int(m.group(1)
+                                             or 1))
+            if "NUM_POKEMON" in line:
+                break
+        pairs = [("SP_LAPRAS", "LAPRAS"),
+                 ("SP_SNORLAX", "SNORLAX"),
+                 ("SP_PIDGEOT", "PIDGEOT"),
+                 ("SP_RHYDON", "RHYDON"),
+                 ("SP_DEWGONG", "DEWGONG"),
+                 ("SP_CLOYSTER", "CLOYSTER"),
+                 ("SP_SLOWBRO", "SLOWBRO"),
+                 ("SP_JYNX", "JYNX"),
+                 ("SP_ONIX", "ONIX"),
+                 ("SP_HITMONCHAN", "HITMONCHAN"),
+                 ("SP_HITMONLEE", "HITMONLEE"),
+                 ("SP_MACHAMP", "MACHAMP"),
+                 ("SP_GENGAR", "GENGAR"),
+                 ("SP_GOLBAT", "GOLBAT"),
+                 ("SP_HAUNTER", "HAUNTER"),
+                 ("SP_ARBOK", "ARBOK"),
+                 ("SP_DRAGONAIR", "DRAGONAIR"),
+                 ("SP_AERODACTYL", "AERODACTYL"),
+                 ("SP_DRAGONITE", "DRAGONITE"),
+                 ("SP_GLOOM", "GLOOM"),
+                 ("SP_VOLTORB", "VOLTORB"),
+                 ("SP_ALAKAZAM", "ALAKAZAM"),
+                 ("SP_VENUSAUR", "VENUSAUR"),
+                 ("SP_GYARADOS", "GYARADOS")]
+        for const_name, species in pairs:
+            self.assertEqual(getattr(rr, const_name),
+                             names.index(species),
+                             const_name)
+
+    def test_league_learn_plans_reach_final_movesets(self):
+        def apply_plan(start, plan):
+            exp = list(start)
+            for lv in sorted(plan):
+                move, p = plan[lv]
+                if p[0] == "accept":
+                    exp[exp.index(p[1])] = move
+                elif p[0] == "append" and len(exp) < 4:
+                    exp.append(move)
+            return exp
+        lapras = apply_plan(
+            [rr.MOVE_WATER_GUN, rr.MOVE_GROWL, rr.MOVE_SURF,
+             rr.MOVE_STRENGTH], rr._LEAGUE_LEARN_LAPRAS)
+        self.assertEqual(lapras, [rr.MOVE_SING,
+                                  rr.MOVE_ICE_BEAM,
+                                  rr.MOVE_SURF,
+                                  rr.MOVE_STRENGTH])
+        snorlax = apply_plan(
+            [rr.MOVE_HEADBUTT, rr.MOVE_AMNESIA, rr.MOVE_REST],
+            rr._LEAGUE_LEARN_SNORLAX)
+        self.assertEqual(snorlax, [rr.MOVE_DOUBLE_EDGE,
+                                   rr.MOVE_AMNESIA,
+                                   rr.MOVE_REST,
+                                   rr.MOVE_BODY_SLAM])
+
+    def _snap(self, party, active_idx, enemy):
+        class Mon:
+            def __init__(self, sp, hp, max_hp, moves, pp):
+                self.species_id = sp
+                self.hp = hp
+                self.max_hp = max_hp
+                self.moves = moves
+                self.pp = pp
+                self.status = 0
+                self.level = 50
+
+        class Snap:
+            pass
+        s = Snap()
+        s.party = [Mon(*row) for row in party]
+        s.active = s.party[active_idx]
+        s.active_idx = active_idx
+        s.enemy = enemy
+        s.alive = lambda sp: any(
+            m.species_id == sp and m.hp > 0
+            for m in s.party)
+        s.mon = lambda sp: next(
+            (m for m in s.party if m.species_id == sp),
+            None)
+        return s
+
+    def test_league_champion_lines(self):
+        full = [(rr.SP_LAPRAS, 222, 222,
+                 [rr.MOVE_SING, rr.MOVE_ICE_BEAM,
+                  rr.MOVE_SURF, rr.MOVE_STRENGTH],
+                 [15, 10, 15, 15]),
+                (rr.SP_BLASTOISE, 221, 221,
+                 [rr.MOVE_HYDRO_PUMP, 39, rr.MOVE_BUBBLE,
+                  rr.MOVE_WATER_GUN], [5, 30, 30, 15]),
+                (rr.SP_GLOOM, 64, 64,
+                 [rr.MOVE_ACID, rr.MOVE_POISON_POWDER,
+                  rr.MOVE_CUT, rr.MOVE_STUN_SPORE],
+                 [30, 35, 30, 30]),
+                (rr.SP_SNORLAX, 236, 236,
+                 [rr.MOVE_DOUBLE_EDGE, rr.MOVE_AMNESIA,
+                  rr.MOVE_REST, rr.MOVE_BODY_SLAM],
+                 [15, 20, 10, 15]),
+                (rr.SP_ARCANINE, 180, 180,
+                 [rr.MOVE_BITE, rr.MOVE_LEER, rr.MOVE_EMBER],
+                 [25, 30, 25]),
+                (rr.SP_VOLTORB, 40, 40,
+                 [rr.MOVE_TACKLE, 103, 148], [30, 40, 20])]
+        fs = rr._LEAGUE_FS
+        old_fight = fs.fight
+        try:
+            fs.fight = "champion"
+            fs.reset_fight()
+            # Lapras never faces Alakazam: Arcanine's Bite
+            # is the answer (the redo's winning line)
+            s = self._snap(full, 0,
+                           (rr.SP_ALAKAZAM, 140, 140, 59))
+            self.assertEqual(rr._league_decide(s, "menu"),
+                             ("switch", rr.SP_ARCANINE))
+            # Rhydon is Blastoise's Water Gun, not a pump
+            s = self._snap(full, 1,
+                           (rr.SP_RHYDON, 208, 208, 61))
+            self.assertEqual(rr._league_decide(s, "menu"),
+                             ("move", rr.MOVE_WATER_GUN))
+            # Pidgeot eats Ice Beam, not the last Surf
+            s = self._snap(full, 0,
+                           (rr.SP_PIDGEOT, 190, 190, 61))
+            self.assertEqual(rr._league_decide(s, "menu"),
+                             ("move", rr.MOVE_ICE_BEAM))
+            # Snorlax alone vs Venusaur with dry slams:
+            # never a targetless switch
+            dry = [(rr.SP_LAPRAS, 0, 222,
+                    full[0][3], full[0][4]),
+                   (rr.SP_BLASTOISE, 0, 221,
+                    full[1][3], full[1][4]),
+                   (rr.SP_GLOOM, 0, 64,
+                    full[2][3], full[2][4]),
+                   (rr.SP_SNORLAX, 236, 236,
+                    full[3][3], [0, 20, 10, 0]),
+                   (rr.SP_ARCANINE, 0, 180,
+                    full[4][3], full[4][4]),
+                   (rr.SP_VOLTORB, 0, 40,
+                    full[5][3], full[5][4])]
+            s = self._snap(dry, 3,
+                           (rr.SP_VENUSAUR, 167, 189, 65))
+            act = rr._league_decide(s, "menu")
+            self.assertEqual(act[0], "move")
+        finally:
+            fs.fight = old_fight
+            fs.reset_fight()
+
+    def test_league_room_table(self):
+        names = [r[0] for r in rr._LEAGUE_ROOMS]
+        self.assertEqual(names, ["lorelei", "bruno",
+                                 "agatha", "lance",
+                                 "champion"])
+        # the winning Champion line led Lapras
+        self.assertEqual(rr._LEAGUE_ROOMS[4][4],
+                         rr.SP_LAPRAS)
+        self.assertEqual(rr._LEAGUE_ROOM_IDS,
+                         {"LancesRoom": 113})
+        self.assertEqual(rr._LEAGUE_PUMP_CAPS,
+                         {"lorelei": 0, "bruno": 1,
+                          "agatha": 2, "lance": 4,
+                          "champion": 5})
+
+    def test_league_fences(self):
+        import inspect
+        # Vlad's fences, pinned: no ball thrown (the
+        # Master Ball stays unthrown), no TM taught, and
+        # the stat items are never spent by the leg.
+        for fn in (rr.league_grind, rr.league_assemble,
+                   rr.elite_four):
+            src = inspect.getsource(fn)
+            self.assertNotIn("_throw_ball", src)
+            self.assertNotIn("teach_", src)
+            self.assertNotIn("ITEM_MASTER_BALL", src)
+            self.assertNotIn("ITEM_RARE_CANDY", src)
+            self.assertNotIn("ITEM_HP_UP", src)
+        src = inspect.getsource(rr.league_assemble)
+        self.assertIn("45400", src)
+        self.assertIn("ITEM_TM27", src)
+        src = inspect.getsource(rr.elite_four)
+        self.assertIn("Hall of Fame", src)
+        self.assertIn("Pallet", src)

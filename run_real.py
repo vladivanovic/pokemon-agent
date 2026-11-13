@@ -12588,6 +12588,1920 @@ def victory_road(emu: PyBoyEmulator, ex: Executor) -> bool:
         m.hp == m.max_hp for m in st.party)
 
 
+# --- the League (probe167): grind, assembly, Elite Four ---
+#
+# Vlad's call (2026-11-13): "Grind a proper League team
+# first (Lapras and a third attacker up), then run it."
+# The winning line, all at the Pokemon Mansion with the
+# Cinnabar PC as the heal loop:
+#   * LAPRAS 15 -> 50 - the Lance answer and second Water
+#     cannon. Learn plan is deliberate, never mashed:
+#     SING accepted over WATER GUN (the sleep source -
+#     Gloom's Sleep Powder was lost to an auto-replace at
+#     its evolution and Gen 1 has no relearner), MIST and
+#     CONFUSE RAY and HYDRO PUMP declined, BODY SLAM over
+#     GROWL, ICE BEAM over BODY SLAM (Strength is the
+#     party's only copy and the Victory Road return still
+#     needed it). Final: [Sing, Ice Beam, Surf, Strength].
+#   * SNORLAX 30 -> 48 - the third attacker: walls the
+#     Champion's Alakazam, self-sustains with Rest through
+#     a no-PC gauntlet. BODY SLAM auto-appended into the
+#     free slot, HARDEN declined, DOUBLE-EDGE over
+#     HEADBUTT. Final: [Double-Edge, Amnesia, Rest,
+#     Body Slam].
+#   * ARCANINE 48 -> 52 top-up (its Gen 1 learnset is
+#     empty - zero prompt risk). BLASTOISE stays 67: PP,
+#     not levels, is his constraint.
+# Assembly at the Viridian PC (Gen 1's Indigo Plateau
+# Lobby has NO PC - nurse, mart clerk, guide only), seven
+# non-essential stacks deposited, Pidgey benched for
+# Voltorb (40 HP death-switch vs 15, Screech lottery; Fly
+# is useless inside the gauntlet), the return crossing on
+# the ported route23/victory_road machinery, and a
+# 45,400-yen stock-up at the Indigo mart (Full Restore x8,
+# Max Potion x4, Revive +6, Full Heal +4 on top of the
+# prep stock). Gauntlet: Lorelei (Snorlax solo - Amnesia
+# wall, one Rest), Bruno (Lapras Surf; Blastoise's Water
+# Gun one-shots the Onix pair so Lapras's Surf lasts),
+# Agatha (Lapras/Blastoise; Hydro Pump budget protected),
+# Lance (a bloodbath - Lapras, Blastoise and Snorlax all
+# fainted; Arcanine's Bite closed the last Dragonite),
+# Champion (Lapras and Blastoise fainted; Arcanine Bit
+# Venusaur down from 142). Hall of Fame verified on
+# screen; the game lands back at Pallet Town (5,6).
+# Total blackouts in the gauntlet: ZERO (two fight
+# aborts were driver defects, recovered from mid-battle
+# states - see docs S28).
+#
+# Species-id warning (the leg's costliest lesson): Gen 1
+# internal species ids count EVERY const in pokered's
+# pokemon_constants.asm INCLUDING the const_skip slots
+# (the MissingNos). A parse that skips them undercounts -
+# probe167's E() table was low by exactly the skip count
+# (Pidgeot read as 0x7C instead of 0x97), which silently
+# disabled every policy branch keyed on Pidgeot /
+# Alakazam / Venusaur / Dragonite for a whole run. The
+# SP_ constants below are the live-verified values.
+
+SP_LAPRAS = 0x13
+SP_SNORLAX = 0x84
+SP_PIDGEOT = 0x97
+SP_RHYDON = 0x01
+SP_DEWGONG = 0x78
+SP_CLOYSTER = 0x8B
+SP_SLOWBRO = 0x08
+SP_JYNX = 0x48
+SP_ONIX = 0x22
+SP_HITMONCHAN = 0x2C
+SP_HITMONLEE = 0x2B
+SP_MACHAMP = 0x7E
+SP_GENGAR = 0x0E
+SP_GOLBAT = 0x82
+SP_HAUNTER = 0x93
+SP_ARBOK = 0x2D
+SP_DRAGONAIR = 0x59
+SP_AERODACTYL = 0xAB
+SP_DRAGONITE = 0x42
+SP_GLOOM = 0xBA
+SP_VOLTORB = 0x06
+
+MOVE_SING = 47
+MOVE_MIST = 20
+MOVE_BODY_SLAM = 34
+MOVE_CONFUSE_RAY = 97
+MOVE_ICE_BEAM = 58
+MOVE_HEADBUTT = 29
+MOVE_HARDEN = 106
+MOVE_DOUBLE_EDGE = 38
+MOVE_AMNESIA = 133
+MOVE_REST = 156
+MOVE_GROWL = 45
+MOVE_STUN_SPORE = 78
+MOVE_ACID = 51
+MOVE_POISON_POWDER = 77
+MOVE_LEER = 43
+MOVE_TACKLE = 33
+
+ITEM_FULL_RESTORE = 0x10
+ITEM_MAX_POTION = 0x11
+
+from agent.state import ADDR_TILEMAP  # 0xC3A0
+
+# display names for the move-list detector: only the
+# moves the League six (plus bench) can actually carry
+_LEAGUE_MOVE_NAMES = {
+    MOVE_WATER_GUN: "WATER GUN", MOVE_GROWL: "GROWL",
+    MOVE_SURF: "SURF", MOVE_STRENGTH: "STRENGTH",
+    MOVE_SING: "SING", MOVE_MIST: "MIST",
+    MOVE_BODY_SLAM: "BODY SLAM",
+    MOVE_CONFUSE_RAY: "CONFUSE RAY",
+    MOVE_ICE_BEAM: "ICE BEAM",
+    MOVE_HYDRO_PUMP: "HYDRO PUMP",
+    MOVE_HEADBUTT: "HEADBUTT", MOVE_AMNESIA: "AMNESIA",
+    MOVE_REST: "REST", MOVE_HARDEN: "HARDEN",
+    MOVE_DOUBLE_EDGE: "DOUBLE-EDGE", MOVE_BITE: "BITE",
+    MOVE_LEER: "LEER", MOVE_EMBER: "EMBER",
+    MOVE_ACID: "ACID", MOVE_POISON_POWDER: "POISONPOWDER",
+    MOVE_CUT: "CUT", MOVE_STUN_SPORE: "STUN SPORE",
+    MOVE_TACKLE: "TACKLE", 84: "THUNDERSHOCK",
+    103: "SCREECH", MOVE_FLASH: "FLASH", 16: "GUST",
+    MOVE_FLY: "FLY", 39: "TAIL WHIP", MOVE_BUBBLE: "BUBBLE",
+    MOVE_SLEEP_POWDER: "SLEEP POWDER",
+}
+
+_LEAGUE_PARTY_NAMES = {SP_BLASTOISE: "BLASTOISE",
+                       SP_ARCANINE: "ARCANINE",
+                       SP_GLOOM: "GLOOM",
+                       SP_LAPRAS: "LAPRAS",
+                       SP_SNORLAX: "SNORLAX",
+                       SP_VOLTORB: "VOLTORB",
+                       SPECIES_PIDGEY: "PIDGEY"}
+
+
+def _plog(*a):
+    print(*a, flush=True)
+
+
+# ---------- screen text + learn prompts ----------
+
+_LEAGUE_FONT = {}
+for _i in range(26):
+    _LEAGUE_FONT[0x80 + _i] = chr(65 + _i)
+    _LEAGUE_FONT[0xA0 + _i] = chr(97 + _i)
+for _i in range(10):
+    _LEAGUE_FONT[0xF6 + _i] = str(_i)
+_LEAGUE_FONT.update({0x7F: " ", 0xE6: "?", 0xE7: "!",
+                     0xE8: ".", 0xF4: ",", 0xE3: "-",
+                     0xE0: "'", 0x9A: "x", 0xE9: ":",
+                     0xF0: "\u00a5"})
+
+
+def _screen_text(emu: PyBoyEmulator) -> str:
+    mem = emu.pb.memory
+    rows = []
+    for r in range(18):
+        row = bytes(mem[ADDR_TILEMAP + r * 20 + c]
+                    for c in range(20))
+        rows.append("".join(_LEAGUE_FONT.get(b, "\u00b7")
+                            for b in row))
+    return "\n".join(rows)
+
+
+def _norm_text(txt: str) -> str:
+    return " ".join(txt.split())
+
+
+def _prompt_visible(emu: PyBoyEmulator) -> bool:
+    t = _norm_text(_screen_text(emu))
+    return ("trying to" in t and "learn" in t) or \
+        "make room" in t or "Delete an older" in t or \
+        "more than 4 moves" in t
+
+
+class _PromptAbort(Exception):
+    pass
+
+
+def _answer_learn_prompt(emu: PyBoyEmulator, sp: int,
+                         plan, log, tag: str) -> None:
+    """We're on (or one page before) a learn prompt.
+    Single A steps until a decision menu resolves:
+    MAX==1 (YES/NO) or MAX==3 (the forget list directly).
+    plan: ("decline",) | ("accept", forget_move_id) |
+    ("append",)."""
+    mem = emu.pb.memory
+    log(f"PROMPT ({tag}) plan={plan}")
+    for stage in range(50):
+        st = emu.read_state()
+        if not st.in_battle and not st.in_dialog:
+            log("  prompt evaporated (battle over)")
+            return
+        sig = (mem[ADDR_MENU_TOP_Y], mem[ADDR_MENU_ITEM],
+               mem[ADDR_MAX_MENU_ITEM])
+        if sig[2] == 1:
+            want = 1 if plan[0] == "decline" else 0
+            if not _steer_byte(emu,
+                               lambda: mem[ADDR_MENU_ITEM],
+                               want):
+                raise _PromptAbort("steer yes/no failed")
+            _press10(emu, "a")
+            emu.tick(70)
+            if plan[0] == "decline":
+                return
+            for _ in range(50):
+                sig2 = (mem[ADDR_MENU_TOP_Y],
+                        mem[ADDR_MENU_ITEM],
+                        mem[ADDR_MAX_MENU_ITEM])
+                if sig2[2] == 3:
+                    break
+                _press10(emu, "a")
+                emu.tick(35)
+            else:
+                raise _PromptAbort("forget list never opened")
+            break
+        if sig[2] == 3:
+            break
+        _press10(emu, "a")
+        emu.tick(40)
+    else:
+        raise _PromptAbort("prompt never reached a menu")
+    if plan[0] == "decline":
+        # no YES/NO was offered: B abandons the learning
+        _press10(emu, "b")
+        emu.tick(70)
+        return
+    if plan[0] == "append":
+        return
+    forget = plan[1]
+    _idx, moves = _mon_moves(emu, sp)
+    if forget not in moves:
+        raise _PromptAbort(f"forget {forget} not in {moves}")
+    slot = moves.index(forget)
+    log(f"  forget list: moves={moves} slot={slot}")
+    if not _steer_byte(emu, lambda: mem[ADDR_MENU_ITEM],
+                       slot):
+        raise _PromptAbort("steer forget slot failed")
+    _press10(emu, "a")
+    emu.tick(80)
+
+
+def _mon_moves(emu: PyBoyEmulator, sp: int):
+    idx, mon = _mon_of(emu, sp)
+    if mon is None:
+        return None, None
+    return idx, list(mon.moves)
+
+
+def _last_damaging_move(emu: PyBoyEmulator, idx: int,
+                        move_order=None):
+    mon = emu.read_state().party[idx]
+    if move_order:
+        pp_of = dict(zip(mon.moves, mon.pp))
+        for mv in move_order:
+            if pp_of.get(mv, 0) > 0:
+                return mv
+        return None
+    pick = None
+    for mv, pp in zip(mon.moves, mon.pp):
+        if mv in _MOVE_INFO and pp > 0:
+            pick = mv
+    return pick
+
+
+def _guarded_advance(emu: PyBoyEmulator, sp: int, plan,
+                     log, tag: str, rounds: int = 160) -> str:
+    """_advance_battle's logic with a tripwire: the moment
+    learn-prompt text is on screen, stop mashing and answer
+    deliberately. Returns 'menu' / 'over'."""
+    mem = emu.pb.memory
+
+    def press(button):
+        _raw(emu, button, hold=4, settle=22)
+        emu.tick(8)
+
+    for _ in range(rounds):
+        st = emu.read_state()
+        if not st.in_battle:
+            return "over"
+        if _prompt_visible(emu):
+            _answer_learn_prompt(emu, sp, plan, log, tag)
+            return _ride_out_prompt(emu, sp, plan, log, tag)
+        if mem[ADDR_MENU_TOP_Y] == 12:
+            press("b")
+            emu.tick(40)
+            continue
+        if mem[ADDR_MENU_TOP_Y] == 14:
+            r0 = mem[ADDR_MENU_ITEM]
+            if r0 in (0, 1):
+                press("down" if r0 == 0 else "up")
+                emu.tick(35)
+                if mem[ADDR_MENU_ITEM] != r0:
+                    press("up" if r0 == 0 else "down")
+                    emu.tick(35)
+                    return "menu"
+            if st.in_dialog:
+                press("a")
+                emu.tick(65)
+            else:
+                emu.tick(30)
+            continue
+        if st.in_dialog:
+            press("a")
+            emu.tick(65)
+            continue
+        emu.tick(30)
+    return "menu" if emu.read_state().in_battle else "over"
+
+
+def _ride_out_prompt(emu: PyBoyEmulator, sp: int, plan,
+                     log, tag: str) -> str:
+    """After a prompt answer: single careful A steps (with
+    the tripwire still armed) until the battle is over."""
+    for _ in range(400):
+        st = emu.read_state()
+        if not st.in_battle and not st.in_dialog:
+            emu.wait_free(max_rounds=6, stable_needed=2)
+            if not emu.read_state().in_battle:
+                return "over"
+        if _prompt_visible(emu):
+            _answer_learn_prompt(emu, sp, plan, log, tag)
+            continue
+        _press10(emu, "a")
+        emu.tick(30)
+    raise _PromptAbort("ride_out did not end")
+
+
+def _use_move_at_menu(emu: PyBoyEmulator,
+                      move_id: int) -> bool:
+    """From the live main battle menu (sig 14,0,9): FIGHT
+    -> move list (top_y 12) -> the move. Mirrors
+    _battle_use_move without its internal ride."""
+    from agent.state import ADDR_PARTY_MONS
+    mem = emu.pb.memory
+    if _battle_menu_sig(emu) != (14, 0, 9):
+        return False
+    active = mem[ADDR_BATTLE_MON_SPECIES]
+    idx = None
+    for i, mon in enumerate(emu.read_state().party):
+        if mon.species_id == active:
+            moves = [mem[ADDR_PARTY_MONS + 44 * i + 8 + j]
+                     for j in range(4)]
+            if move_id in moves:
+                idx = moves.index(move_id)
+            break
+    if idx is None:
+        return False
+    _press10(emu, "a")
+    for _ in range(80):
+        if mem[ADDR_MENU_TOP_Y] == 12:
+            break
+        emu.tick(20)
+    if mem[ADDR_MENU_TOP_Y] != 12:
+        return False
+    _steer_byte(emu, lambda: mem[ADDR_MENU_ITEM], idx + 1)
+    _raw(emu, "a", hold=4, settle=22)
+    emu.tick(70)
+    return True
+
+
+def _league_grind_fight(emu: PyBoyEmulator, ex: Executor,
+                        sp: int, plan, log, tag: str,
+                        move_order=None) -> str:
+    """One wild fight, prompt-aware end to end."""
+    t_start = time.time()
+    while True:
+        if time.time() - t_start > 60:
+            raise _PromptAbort("fight wall-clock cap")
+        st = emu.read_state()
+        if not st.in_battle:
+            return "over"
+        if _enemy_hp(emu) == 0:
+            return _ride_out_prompt(emu, sp, plan, log, tag)
+        if _prompt_visible(emu):
+            _answer_learn_prompt(emu, sp, plan, log, tag)
+            return _ride_out_prompt(emu, sp, plan, log, tag)
+        idx, mon = _mon_of(emu, sp)
+        if mon is None:
+            return "over"
+        if mon.hp == 0:
+            # grinder down: flee the wild fight if a menu
+            # comes; else ride it out (no XP and no prompts
+            # for a fainted mon)
+            _guarded_advance(emu, sp, plan, log, tag,
+                             rounds=10)
+            if not emu.read_state().in_battle:
+                return "over"
+            if _battle_menu_sig(emu) == (14, 0, 9):
+                _press10(emu, "down")
+                _press10(emu, "right")
+                _press10(emu, "a")
+                emu.tick(90)
+                if not emu.read_state().in_battle:
+                    return "fled"
+            _advance_battle(emu, rounds=60)
+            return "over"
+        r = _guarded_advance(emu, sp, plan, log, tag,
+                             rounds=60)
+        if r == "over" or not emu.read_state().in_battle:
+            return "over"
+        if _enemy_hp(emu) == 0 or _prompt_visible(emu):
+            continue
+        mv = _last_damaging_move(emu, idx, move_order)
+        if mv is None:
+            _advance_battle(emu, rounds=40)
+            return "over"
+        if not _use_move_at_menu(emu, mv):
+            _guarded_advance(emu, sp, plan, log, tag,
+                             rounds=20)
+        emu.tick(50)
+
+
+def _clear_wild_battle(emu: PyBoyEmulator) -> bool:
+    for _ in range(6):
+        if not emu.read_state().in_battle:
+            return True
+        _drive_battle_typed(emu, flee_wild=True)
+        emu.tick(30)
+    return not emu.read_state().in_battle()
+
+
+def _league_heal_trip(emu: PyBoyEmulator, ex: Executor,
+                      sp: int, log) -> bool:
+    """Exit Mansion -> Cinnabar PC heal -> re-lead ->
+    re-enter, every sub-step logged (the composed
+    _grind_heal_trip failed silently once during the
+    probe; this one says where)."""
+    world = ex.world
+    pc = world.map_id("CinnabarPokecenter")
+
+    def stage(name, ok):
+        log(f"  trip stage {name}: {ok}")
+        return ok
+
+    if not stage("exit_mansion", _exit_mansion(emu, ex)):
+        return False
+    _clear_wild_battle(emu)
+    if not stage("ride_pc", _ride_or_cross(emu, ex, pc)):
+        return False
+    _clear_wild_battle(emu)
+    if not stage("heal", heal_at_pokecenter(emu, ex, pc)):
+        return False
+    if emu.read_state().map_id == pc:
+        _exit_building(emu, ex, pc)
+    if not stage("lead", party_lead(emu, sp)):
+        return False
+    if not stage("enter", _enter_mansion(emu, ex)):
+        return False
+    _clear_wild_battle(emu)
+    _idx, mon = _mon_of(emu, sp)
+    ok = mon is not None and mon.hp == mon.max_hp
+    log(f"  trip done, hp="
+        f"{None if mon is None else (mon.hp, mon.max_hp)} "
+        f"ok={ok}")
+    return ok
+
+
+def _league_grind_one(emu: PyBoyEmulator, ex: Executor,
+                      sp: int, target: int, learn: dict,
+                      log=_plog, move_order=None,
+                      gate_lo: float = 0.55, tag="grind"):
+    """Lead-and-solo Mansion 1F grind of `sp` to `target`
+    with prompt-aware fights and a moveset audit after
+    every level-up. learn: {level: (move_id, plan)} with
+    plan ("decline",), ("accept", forget_move_id) or
+    ("append",) for a free-slot auto-learn. Returns
+    (ok, fights, trips, blackouts)."""
+    world = ex.world
+    m1 = world.map_id("PokemonMansion1F")
+    pc = world.map_id("CinnabarPokecenter")
+
+    def next_plan(level):
+        for lv in sorted(learn):
+            if lv > level:
+                return learn[lv][1]
+        return ("decline",)
+
+    def apply_expected(expected, from_lv, to_lv):
+        exp = list(expected)
+        for lv in sorted(learn):
+            if from_lv < lv <= to_lv:
+                move, plan = learn[lv]
+                if plan[0] == "accept":
+                    exp[exp.index(plan[1])] = move
+                elif plan[0] == "append" and len(exp) < 4:
+                    exp.append(move)
+        return exp
+
+    idx, mon = _mon_of(emu, sp)
+    if mon is None:
+        return False, 0, 0, 0
+    level = mon.level
+    expected = list(mon.moves)
+    fights = trips = blackouts = 0
+    leg = 0
+    while level < target:
+        idx, mon = _mon_of(emu, sp)
+        if mon is None:
+            return False, fights, trips, blackouts
+        status = getattr(mon, "status", 0)
+        if mon.hp == 0 or mon.hp < gate_lo * mon.max_hp \
+                or _damaging_pp(emu, idx) <= 10 or status:
+            trips += 1
+            log(f"heal trip {trips} (hp={mon.hp}/{mon.max_hp}"
+                f" pp={_damaging_pp(emu, idx)} st={status})")
+            if not _league_heal_trip(emu, ex, sp, log):
+                log("heal trip failed once - retrying")
+                _clear_wild_battle(emu)
+                if not _league_heal_trip(emu, ex, sp, log):
+                    log("heal trip failed twice")
+                    return False, fights, trips, blackouts
+            continue
+        if emu.read_state().map_id != m1:
+            if not _enter_mansion(emu, ex):
+                return False, fights, trips, blackouts
+            _clear_wild_battle(emu)
+        dest = _GRIND_PACE_ENDS[leg % 2]
+        leg += 1
+        guard = 0
+        while (emu.read_state().x, emu.read_state().y) != dest \
+                and guard < 40:
+            guard += 1
+            st = emu.read_state()
+            if st.in_battle:
+                plan = next_plan(level)
+                try:
+                    _league_grind_fight(
+                        emu, ex, sp, plan, log,
+                        f"L{level + 1}",
+                        move_order=move_order)
+                except _PromptAbort as e:
+                    log("PROMPT ABORT:", e)
+                    return False, fights, trips, blackouts
+                fights += 1
+                st2 = emu.read_state()
+                if all(m.hp == 0 for m in st2.party):
+                    blackouts += 1
+                    log(f"BLACKOUT {blackouts} - recovering")
+                    for _ in range(20):
+                        if emu.read_state().map_id != m1:
+                            break
+                        emu.tick(30)
+                    if emu.read_state().map_id == pc:
+                        _exit_building(emu, ex, pc)
+                    if not party_lead(emu, sp):
+                        return False, fights, trips, blackouts
+                    if not _enter_mansion(emu, ex):
+                        return False, fights, trips, blackouts
+                    _clear_wild_battle(emu)
+                    break
+                idx2, mon2 = _mon_of(emu, sp)
+                if mon2.level != level:
+                    new_expected = apply_expected(
+                        expected, level, mon2.level)
+                    live = list(mon2.moves)
+                    log(f"LEVEL {level} -> {mon2.level}: "
+                        f"live={live} expected={new_expected}")
+                    if live != new_expected:
+                        log("MOVESET MISMATCH")
+                        return False, fights, trips, blackouts
+                    expected = new_expected
+                    level = mon2.level
+                    if level >= target:
+                        break
+                break  # re-check the HP gate before pacing on
+            if st.map_id != m1:
+                break
+            if st.y != 26:
+                d = "up" if st.y > 26 else "down"
+            elif dest[0] > st.x:
+                d = "right"
+            elif dest[0] < st.x:
+                d = "left"
+            else:
+                break
+            emu.press(d)
+            _explore_settle(emu, max_frames=200)
+    return True, fights, trips, blackouts
+
+
+# the deliberate learn plans of the winning line
+_LEAGUE_LEARN_LAPRAS = {
+    16: (MOVE_SING, ("accept", MOVE_WATER_GUN)),
+    20: (MOVE_MIST, ("decline",)),
+    25: (MOVE_BODY_SLAM, ("accept", MOVE_GROWL)),
+    31: (MOVE_CONFUSE_RAY, ("decline",)),
+    38: (MOVE_ICE_BEAM, ("accept", MOVE_BODY_SLAM)),
+    46: (MOVE_HYDRO_PUMP, ("decline",)),
+}
+_LEAGUE_LEARN_SNORLAX = {
+    35: (MOVE_BODY_SLAM, ("append",)),
+    41: (MOVE_HARDEN, ("decline",)),
+    48: (MOVE_DOUBLE_EDGE, ("accept", MOVE_HEADBUTT)),
+}
+
+
+def league_grind(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Phase 1 of the League leg (probe167): fly to
+    Cinnabar, swap the boxed SNORLAX in for Voltorb at the
+    PC, then the three Mansion grinds - LAPRAS 15 -> 50,
+    SNORLAX 30 -> 48, ARCANINE 48 -> 52 - each lead-and-
+    solo with prompt-aware learn handling and per-level
+    moveset audits. Ends healed at the Cinnabar PC with
+    the final six's levels in place. Money is never spent;
+    grind blackouts are recoverable and do not count
+    toward any stop rule."""
+    emu.wait_free(max_rounds=8, stable_needed=2)
+    if not fly_to(emu, ex, "CINNABAR ISLAND"):
+        return False
+    world = ex.world
+    pc = world.map_id("CinnabarPokecenter")
+    if not _ride_or_cross(emu, ex, pc):
+        return False
+    if not pc_swap(emu, ex, pc, SP_VOLTORB, SP_SNORLAX):
+        return False
+    if _party_index_of(emu, SP_SNORLAX) is None:
+        return False
+    if not party_lead(emu, SP_LAPRAS):
+        return False
+    ok, f1, t1, b1 = _league_grind_one(
+        emu, ex, SP_LAPRAS, 50, _LEAGUE_LEARN_LAPRAS,
+        move_order=[MOVE_SURF, MOVE_ICE_BEAM, MOVE_STRENGTH],
+        tag="lapras")
+    print(f"lapras grind: ok={ok} fights={f1} trips={t1} "
+          f"blackouts={b1}", flush=True)
+    if not ok:
+        return False
+    if not party_lead(emu, SP_SNORLAX):
+        return False
+    ok, f2, t2, b2 = _league_grind_one(
+        emu, ex, SP_SNORLAX, 48, _LEAGUE_LEARN_SNORLAX,
+        move_order=[MOVE_BODY_SLAM, MOVE_DOUBLE_EDGE,
+                    MOVE_HEADBUTT],
+        tag="snorlax")
+    print(f"snorlax grind: ok={ok} fights={f2} trips={t2} "
+          f"blackouts={b2}", flush=True)
+    if not ok:
+        return False
+    if not party_lead(emu, SP_ARCANINE):
+        return False
+    ok, f3, t3, b3 = _league_grind_one(
+        emu, ex, SP_ARCANINE, 52, {}, tag="arcanine")
+    print(f"arcanine grind: ok={ok} fights={f3} trips={t3} "
+          f"blackouts={b3}", flush=True)
+    if not ok:
+        return False
+    # finish healed at the Cinnabar PC
+    if not _league_heal_trip(emu, ex, SP_LAPRAS, _plog):
+        return False
+    st = emu.read_state()
+    levels = {hex(m.species_id): m.level for m in st.party}
+    print(f"league grind done: levels={levels} "
+          f"money={st.money}", flush=True)
+    return True
+
+
+# ---------- League fight engine ----------
+
+class _LeagueAbort(Exception):
+    pass
+
+
+class _LeagueSnap:
+    """Party + enemy snapshot for one decision point.
+    Enemy reads are double-taken (transition races made
+    single reads lie about level/HP all leg); party
+    species are unique, so the BattleMon byte at 0xD014
+    identifies the active mon."""
+
+    def __init__(self, emu: PyBoyEmulator):
+        st = emu.read_state()
+        mem = emu.pb.memory
+        self.party = st.party
+        _battle_enemy(emu)
+        emu.tick(3)
+        esp, ehp, emax, elv = _battle_enemy(emu)
+        if not (0 < emax <= 714):
+            emax = ehp
+        self.enemy = (esp, ehp, emax, elv)
+        bsp = mem[0xD014]
+        self.active_idx = None
+        for i, m in enumerate(st.party):
+            if m.species_id == bsp:
+                self.active_idx = i
+                break
+        self.active = (st.party[self.active_idx]
+                       if self.active_idx is not None
+                       else None)
+
+    def alive(self, species: int) -> bool:
+        for m in self.party:
+            if m.species_id == species:
+                return m.hp > 0
+        return False
+
+    def mon(self, species: int):
+        for m in self.party:
+            if m.species_id == species:
+                return m
+        return None
+
+
+def _menu_sig(emu: PyBoyEmulator):
+    mem = emu.pb.memory
+    return (mem[ADDR_MENU_TOP_Y], mem[ADDR_MENU_ITEM],
+            mem[ADDR_MAX_MENU_ITEM])
+
+
+def _party_menu_open(emu: PyBoyEmulator, n_party: int) -> bool:
+    # in-battle party list: top_y 1 and max == party - 1.
+    # The signature alone false-fires on stale bytes during
+    # the battle intro, so the screen must also show at
+    # least three of our party's names (the real list
+    # always does; the intro never does).
+    if not emu.read_state().in_battle:
+        return False
+    if _menu_sig(emu)[0] != 1 or _menu_sig(emu)[2] != n_party - 1:
+        return False
+    t = _norm_text(_screen_text(emu))
+    names = [_LEAGUE_PARTY_NAMES[m.species_id]
+             for m in emu.read_state().party
+             if m.species_id in _LEAGUE_PARTY_NAMES]
+    return sum(1 for n in names if n in t) >= 3
+
+
+def _shift_prompt(emu: PyBoyEmulator) -> bool:
+    if not emu.read_state().in_battle:
+        return False
+    t = _norm_text(_screen_text(emu))
+    return "change" in t and "Will" in t
+
+
+def _choose_party_slot(emu: PyBoyEmulator, species: int,
+                       log, tag: str) -> bool:
+    """At an open in-battle party list, steer to `species`
+    and confirm."""
+    st = emu.read_state()
+    idx = None
+    for i, m in enumerate(st.party):
+        if m.species_id == species:
+            idx = i
+            break
+    if idx is None:
+        raise _LeagueAbort(f"{tag}: species {species!r} "
+                           "not in party")
+    mem = emu.pb.memory
+    if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], idx):
+        # the cursor can be wedged by the "already in
+        # battle" message (a stray A selected the active
+        # mon): dismiss it with A and steer again
+        _press10(emu, "a")
+        emu.tick(45)
+        if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM],
+                           idx):
+            raise _LeagueAbort(f"{tag}: party steer failed")
+    _press10(emu, "a")
+    emu.tick(90)
+    if emu.read_state().in_battle and \
+            _party_menu_open(emu,
+                             len(emu.read_state().party)):
+        # the confirm A was eaten (a menu race the cold
+        # replay hit twice): the cursor is already on the
+        # target - confirm once more
+        _press10(emu, "a")
+        emu.tick(90)
+    return True
+
+
+def _move_list_open(emu: PyBoyEmulator) -> bool:
+    """The battle move list is open: top_y 12 and the
+    screen lists at least two of the active mon's moves
+    (the party list is checked separately and first)."""
+    if _menu_sig(emu)[0] != 12:
+        return False
+    mem = emu.pb.memory
+    bsp = mem[0xD014]
+    active = None
+    for m in emu.read_state().party:
+        if m.species_id == bsp:
+            active = m
+            break
+    if active is None:
+        return False
+    t = _norm_text(_screen_text(emu))
+    shown = 0
+    for mv in active.moves:
+        nm = _LEAGUE_MOVE_NAMES.get(mv, "")
+        if nm and nm in t:
+            shown += 1
+    return shown >= 2
+
+
+def _league_send_move(emu: PyBoyEmulator, snap: _LeagueSnap,
+                      move_id: int, log, tag: str) -> bool:
+    """Send a move with verification by PP/HP deltas. The
+    stock helper can stall with the move list left open
+    (its final A not registering); if the list is open we
+    steer the 1-based cursor and press A directly. A 0-PP
+    selection beeps and wedges the list - the caller's
+    policy must never send one (the decide guard); if it
+    happens anyway this returns False after retries."""
+    mem = emu.pb.memory
+
+    def pp_now():
+        st = emu.read_state()
+        for mon in st.party:
+            if mon.species_id == mem[0xD014]:
+                return dict(zip(mon.moves,
+                                mon.pp)).get(move_id, 0)
+        return 0
+
+    pp0 = pp_now()
+    ehp0 = _battle_enemy(emu)[1]
+    for _attempt in range(3):
+        if _move_list_open(emu):
+            idx = list(snap.active.moves).index(move_id)
+            if not _steer_byte(emu,
+                               lambda: mem[ADDR_MENU_ITEM],
+                               idx + 1):
+                emu.tick(30)
+                continue
+            _raw(emu, "a", hold=4, settle=22)
+            emu.tick(70)
+        else:
+            if not _battle_use_move(emu, move_id):
+                emu.tick(30)
+        t_end = time.time() + 6
+        while time.time() < t_end:
+            if not emu.read_state().in_battle:
+                return True
+            if pp_now() < pp0:
+                return True
+            if _battle_enemy(emu)[1] != ehp0:
+                return True
+            if _menu_sig(emu)[0] == 14:
+                return True
+            if _party_menu_open(emu, len(snap.party)):
+                return True
+            emu.tick(25)
+        if _move_list_open(emu) and pp_now() >= pp0:
+            continue
+    return pp_now() < pp0 or not _move_list_open(emu)
+
+
+def _league_ride_decision(emu: PyBoyEmulator, log,
+                          tag: str, seconds: int = 120) -> str:
+    """Ride battle text until the next decision point:
+    'menu' (battle menu), 'party' (faint/entry list),
+    'shift' (post-KO change prompt) or 'over'."""
+    mem = emu.pb.memory
+    n = len(emu.read_state().party)
+    b_streak = 0
+    t_end = time.time() + seconds
+    while time.time() < t_end:
+        st = emu.read_state()
+        if not st.in_battle:
+            return "over"
+        if _menu_sig(emu)[0] == 14:
+            emu.tick(30)
+            if emu.read_state().in_battle and \
+                    _menu_sig(emu)[0] == 14:
+                return "menu"
+            continue
+        if _move_list_open(emu):
+            emu.tick(20)
+            if _move_list_open(emu):
+                return "movelist"
+            continue
+        if _shift_prompt(emu):
+            return "shift"
+        if _party_menu_open(emu, n):
+            emu.tick(30)
+            if _party_menu_open(emu, n):
+                return "party"
+            continue
+        if _prompt_visible(emu):
+            log(f"{tag}: learn prompt inside battle - "
+                "declining by league policy")
+            _answer_learn_prompt(emu, 0, ("decline",), log,
+                                 tag)
+            continue
+        if st.in_dialog:
+            if _menu_sig(emu)[2] == 1:
+                # a YES/NO menu is (about to be) live: an A
+                # here would answer it blind (that is how a
+                # stray A once answered a shift prompt YES
+                # and opened the party list mid-fight)
+                emu.tick(20)
+                continue
+            _press10(emu, "a")
+            emu.tick(18)
+            b_streak = 0
+            continue
+        if _menu_sig(emu)[0] == 12 and b_streak < 6:
+            # a sub-window we did not open - the move list,
+            # reached when a dialog-riding A lands exactly
+            # as the main menu opens and selects FIGHT.
+            # Back out of it. Only when NOT in dialog: the
+            # (12, 0, 2) switch-animation window shares
+            # top_y 12 and must be ridden with A instead.
+            _press10(emu, "b")
+            emu.tick(35)
+            b_streak += 1
+            continue
+        emu.tick(20)
+    raise _LeagueAbort(f"{tag}: ride timed out "
+                       f"(sig={_menu_sig(emu)})")
+
+
+def _league_fight(emu: PyBoyEmulator, ex: Executor, decide,
+                  log, tag: str, max_turns: int = 90):
+    """Run one trainer battle. decide(snap, kind) returns:
+    kind 'menu':  ('move', move_id) | ('switch', species)
+    kind 'shift': ('stay',) | ('switch', species)
+    kind 'party': species to send (faint replacement)"""
+    mem = emu.pb.memory
+    turns = 0
+    while True:
+        point = _league_ride_decision(emu, log, tag)
+        if point == "over":
+            log(f"{tag}: battle over after {turns} turns")
+            return _LeagueSnap(emu)
+        snap = _LeagueSnap(emu)
+        if point == "shift":
+            act = decide(snap, "shift")
+            log(f"{tag}: shift prompt vs enemy "
+                f"{snap.enemy[0]:#x} -> {act}")
+            if act[0] == "stay":
+                _press10(emu, "b")
+                emu.tick(60)
+            else:
+                if not _steer_byte(
+                        emu, lambda: mem[ADDR_MENU_ITEM], 0):
+                    raise _LeagueAbort(f"{tag}: shift steer")
+                _press10(emu, "a")
+                emu.tick(60)
+                for _ in range(100):
+                    if _party_menu_open(emu, len(snap.party)):
+                        break
+                    emu.tick(15)
+                _choose_party_slot(emu, act[1], log, tag)
+            continue
+        if point == "party":
+            if snap.active is not None and snap.active.hp > 0:
+                # no faint: this list is an accident (a
+                # stray A answered the shift prompt YES or
+                # opened PKMN). B cancels it - at a shift
+                # list that is exactly "stay".
+                log(f"{tag}: party list with a living "
+                    "active - cancelling (accidental)")
+                _press10(emu, "b")
+                emu.tick(60)
+                continue
+            sp = decide(snap, "party")
+            log(f"{tag}: send {sp:#x} (faint replacement)")
+            _choose_party_slot(emu, sp, log, tag)
+            continue
+        if point == "movelist":
+            # the move list is already open (a stray A or a
+            # stalled helper): decide and send from here
+            act = decide(snap, "menu")
+            a = snap.active
+            log(f"{tag} T{turns + 1}* (list open): us "
+                f"{a.species_id:#x} {a.hp}/{a.max_hp} vs "
+                f"{snap.enemy[0]:#x} L{snap.enemy[3]} "
+                f"{snap.enemy[1]}/{snap.enemy[2]} -> {act}")
+            if act[0] != "move":
+                _press10(emu, "b")
+                emu.tick(45)
+                continue
+            turns += 1
+            if not _league_send_move(emu, snap, act[1], log,
+                                     tag):
+                raise _LeagueAbort(f"{tag}: move not sent "
+                                   "(list)")
+            continue
+        # battle menu
+        turns += 1
+        if turns > max_turns:
+            raise _LeagueAbort(f"{tag}: turn cap {max_turns}")
+        act = decide(snap, "menu")
+        a = snap.active
+        log(f"{tag} T{turns}: us {a.species_id:#x} "
+            f"{a.hp}/{a.max_hp} vs {snap.enemy[0]:#x} "
+            f"L{snap.enemy[3]} {snap.enemy[1]}/{snap.enemy[2]}"
+            f" -> {act}")
+        if act[0] == "switch" and act[1] is None:
+            # no living switch target: attack with the
+            # active mon instead (any PP'd move, else slot
+            # 0 - Struggle engages when truly dry). A
+            # ('switch', None) once crashed the probe run
+            # one turn from the Champion's last mon.
+            mv = None
+            if a is not None:
+                ppmap = dict(zip(a.moves, a.pp))
+                for m in a.moves:
+                    if ppmap.get(m, 0) > 0:
+                        mv = m
+                        break
+                if mv is None and a.moves:
+                    mv = a.moves[0]
+            log(f"{tag}: switch had no target - "
+                f"attacking with {mv}")
+            act = ("move", mv)
+        if act[0] == "move":
+            # normalise the 2x2 cursor back to FIGHT
+            # (row 0, col 9) for _battle_use_move
+            if mem[ADDR_MENU_COL] == 15:
+                _raw(emu, "left", hold=4, settle=22)
+                emu.tick(30)
+            if not _league_send_move(emu, snap, act[1], log,
+                                     tag):
+                raise _LeagueAbort(f"{tag}: move not sent")
+        elif act[0] == "switch":
+            # PKMN is row 0, col 15 on the 2x2 grid. The
+            # column steer races the menu's opening
+            # animation on rare occasions (the cold replay
+            # lost a Bruno switch to it): retry the whole
+            # opening a few times before giving up - the
+            # game is still sitting at the battle menu, so
+            # a retry costs nothing.
+            opened = False
+            for _try in range(3):
+                if not _steer_byte(
+                        emu, lambda: mem[ADDR_MENU_ITEM], 0):
+                    emu.tick(60)
+                    continue
+                for _ in range(14):
+                    if mem[ADDR_MENU_COL] == 15:
+                        break
+                    _raw(emu, "right", hold=6, settle=26)
+                    emu.tick(35)
+                if mem[ADDR_MENU_COL] != 15:
+                    emu.tick(60)
+                    continue
+                _press10(emu, "a")
+                emu.tick(60)
+                for _ in range(100):
+                    if _party_menu_open(emu,
+                                        len(snap.party)):
+                        break
+                    emu.tick(15)
+                if _party_menu_open(emu, len(snap.party)):
+                    opened = True
+                    break
+                _press10(emu, "b")
+                emu.tick(45)
+            if not opened:
+                raise _LeagueAbort(f"{tag}: PKMN open "
+                                   "failed")
+            _choose_party_slot(emu, act[1], log, tag)
+        else:
+            raise _LeagueAbort(f"{tag}: bad action {act}")
+
+
+def _league_clear_post_battle(emu: PyBoyEmulator, log,
+                              tag: str) -> bool:
+    """After a battle: ride out any remaining dialog and
+    DECLINE any pending learn prompt (league policy) until
+    the field is stable."""
+    for _ in range(120):
+        st = emu.read_state()
+        if st.in_battle:
+            emu.tick(20)
+            continue
+        if _prompt_visible(emu):
+            log(f"{tag}: post-battle learn prompt - "
+                "declining")
+            _answer_learn_prompt(emu, 0, ("decline",), log,
+                                 tag)
+            continue
+        if st.in_dialog:
+            _press10(emu, "a")
+            emu.tick(18)
+            continue
+        emu.wait_free(max_rounds=3, stable_needed=2)
+        st = emu.read_state()
+        if not st.in_dialog and not st.in_battle:
+            return True
+    return False
+
+
+# ---------- League battle policies ----------
+
+_LEAGUE_PUMP_CAPS = {"lorelei": 0, "bruno": 1, "agatha": 2,
+                     "lance": 4, "champion": 5}
+_LEAGUE_MOVE_POWER = {mv: info[0]
+                      for mv, info in _MOVE_INFO.items()}
+
+
+def _league_frac(mon) -> float:
+    return mon.hp / mon.max_hp if mon.max_hp else 0
+
+
+def _league_pp_of(mon, move: int) -> int:
+    return dict(zip(mon.moves, mon.pp)).get(move, 0)
+
+
+def _league_asleep(mon) -> bool:
+    return (getattr(mon, "status", 0) & 0x07) != 0
+
+
+def _league_frozen(mon) -> bool:
+    return (getattr(mon, "status", 0) & 0x20) != 0
+
+
+class _LeagueFS:
+    """Per-run fight state shared across the gauntlet
+    (Hydro Pump is one PP budget for all five fights)."""
+
+    def __init__(self):
+        self.pumps = 0
+        self.fight = None
+        self.reset_fight()
+
+    def reset_fight(self):
+        self.sing = {}
+        self.enemy_key = None
+        self.enemy_hp = None
+        self.instance = 0
+        self.amnesia = 0
+        self.asleep_turns = 0
+        self.rest_sleep_until = -1
+        self.turn = 0
+        self.last_active = None
+        self.spore_used = False
+        self.enemy_turns = 0
+
+    def track(self, snap: _LeagueSnap):
+        self.turn += 1
+        esp, ehp, emax, elv = snap.enemy
+        key = (esp, elv)
+        if key != self.enemy_key or \
+                (self.enemy_hp is not None
+                 and ehp > self.enemy_hp + 2):
+            self.instance += 1
+            self.enemy_turns = 0
+        self.enemy_key = key
+        self.enemy_hp = ehp
+        self.enemy_turns += 1
+        a = snap.active
+        if a is not None and \
+                a.species_id != self.last_active:
+            self.amnesia = 0
+            self.asleep_turns = 0
+            self.last_active = a.species_id
+
+    def sing_count(self) -> int:
+        return self.sing.get(
+            (self.enemy_key, self.instance), 0)
+
+    def note_sing(self):
+        k = (self.enemy_key, self.instance)
+        self.sing[k] = self.sing.get(k, 0) + 1
+
+
+_LEAGUE_FS = _LeagueFS()
+
+
+def _league_prefs(fight: str, esp: int):
+    if fight == "lorelei":
+        if esp == SP_JYNX:
+            return [SP_ARCANINE, SP_SNORLAX, SP_LAPRAS,
+                    SP_BLASTOISE]
+        return [SP_SNORLAX, SP_LAPRAS, SP_ARCANINE,
+                SP_BLASTOISE]
+    if fight == "bruno":
+        if esp in (SP_ONIX,):
+            return [SP_LAPRAS, SP_BLASTOISE, SP_SNORLAX,
+                    SP_ARCANINE]
+        return [SP_LAPRAS, SP_SNORLAX, SP_BLASTOISE,
+                SP_ARCANINE]
+    if fight == "agatha":
+        return [SP_LAPRAS, SP_BLASTOISE, SP_ARCANINE,
+                SP_GLOOM]
+    if fight == "lance":
+        if esp in (SP_AERODACTYL, SP_DRAGONITE):
+            return [SP_LAPRAS, SP_BLASTOISE, SP_SNORLAX,
+                    SP_ARCANINE]
+        return [SP_LAPRAS, SP_SNORLAX, SP_BLASTOISE,
+                SP_ARCANINE]
+    if fight == "champion":
+        if esp == SP_ALAKAZAM:
+            return [SP_SNORLAX, SP_ARCANINE, SP_LAPRAS,
+                    SP_BLASTOISE]
+        if esp in (SP_RHYDON, SP_ARCANINE, SP_GYARADOS,
+                   SP_VENUSAUR):
+            return [SP_LAPRAS, SP_BLASTOISE, SP_SNORLAX,
+                    SP_ARCANINE]
+        return [SP_SNORLAX, SP_LAPRAS, SP_ARCANINE,
+                SP_BLASTOISE]
+    return [SP_BLASTOISE, SP_LAPRAS, SP_SNORLAX,
+            SP_ARCANINE]
+
+
+def _league_pick(snap: _LeagueSnap, prefs):
+    for sp in prefs:
+        if snap.alive(sp) and \
+                (snap.active is None
+                 or sp != snap.active.species_id):
+            return sp
+    for m in snap.party:
+        if m.hp > 0 and (snap.active is None
+                         or m.species_id
+                         != snap.active.species_id):
+            return m.species_id
+    return None
+
+
+def _league_decide(snap: _LeagueSnap, kind: str):
+    fs = _LEAGUE_FS
+    fight = fs.fight
+    esp, ehp, emax, elv = snap.enemy
+    if kind == "party":
+        return _league_pick(snap, _league_prefs(fight, esp))
+    if kind == "shift":
+        a = snap.active
+        if a is None:
+            return ("stay",)
+        if fight == "champion" and esp == SP_RHYDON \
+                and a.species_id not in (SP_LAPRAS,
+                                         SP_BLASTOISE) \
+                and snap.alive(SP_LAPRAS):
+            return ("switch", SP_LAPRAS)
+        if _league_frac(a) < 0.2:
+            tgt = _league_pick(snap,
+                               _league_prefs(fight, esp))
+            if tgt is not None:
+                return ("switch", tgt)
+        return ("stay",)
+    # menu
+    fs.track(snap)
+    a = snap.active
+    if _league_frozen(a):
+        return ("switch", _league_pick(
+            snap, _league_prefs(fight, esp)))
+    if _league_asleep(a):
+        fs.asleep_turns += 1
+        if fs.asleep_turns >= 3 and \
+                fs.turn > fs.rest_sleep_until:
+            return ("switch", _league_pick(
+                snap, _league_prefs(fight, esp)))
+    else:
+        fs.asleep_turns = 0
+    mv = _league_menu_move(snap, fs, fight, esp, elv)
+    if mv[0] == "move" and _league_pp_of(a, mv[1]) <= 0:
+        # 0-PP guard: a move with no PP left beeps and
+        # wedges the move list forever. Substitute the
+        # strongest damaging move that still has PP,
+        # else switch (the engine coerces a targetless
+        # switch back to attacking).
+        cands = [(_LEAGUE_MOVE_POWER.get(m, 0), m)
+                 for m in a.moves
+                 if _LEAGUE_MOVE_POWER.get(m, 0) > 0
+                 and _league_pp_of(a, m) > 0]
+        if cands:
+            cands.sort(reverse=True)
+            _plog(f"pp-guard: {mv[1]} empty -> "
+                  f"{cands[0][1]}")
+            mv = ("move", cands[0][1])
+        else:
+            tgt = _league_pick(snap,
+                               _league_prefs(fight, esp))
+            _plog(f"pp-guard: no damaging PP -> switch "
+                  f"{tgt}")
+            mv = ("switch", tgt)
+    if mv[0] == "move" and mv[1] == MOVE_HYDRO_PUMP:
+        fs.pumps += 1
+    if mv[0] == "move" and mv[1] == MOVE_AMNESIA:
+        fs.amnesia += 1
+    if mv[0] == "move" and mv[1] == MOVE_SING:
+        fs.note_sing()
+    if mv[0] == "move" and mv[1] == MOVE_REST:
+        fs.rest_sleep_until = fs.turn + 2
+    if mv[0] == "move" and mv[1] == MOVE_STUN_SPORE:
+        fs.spore_used = True
+    return mv
+
+
+def _league_menu_move(snap: _LeagueSnap, fs: _LeagueFS,
+                      fight: str, esp: int, elv: int):
+    a = snap.active
+    asp = a.species_id
+    af = _league_frac(a)
+    cap = _LEAGUE_PUMP_CAPS[fight]
+
+    if fight == "lorelei":
+        if asp == SP_SNORLAX:
+            if esp == SP_JYNX:
+                return ("move", MOVE_BODY_SLAM)
+            if fs.amnesia < 2 and af > 0.55:
+                return ("move", MOVE_AMNESIA)
+            if af < 0.45 and _league_pp_of(a, MOVE_REST) > 0:
+                return ("move", MOVE_REST)
+            if esp == SP_LAPRAS and af > 0.75:
+                return ("move", MOVE_DOUBLE_EDGE)
+            if _league_pp_of(a, MOVE_BODY_SLAM) <= 4:
+                return ("move", MOVE_DOUBLE_EDGE)
+            return ("move", MOVE_BODY_SLAM)
+        if asp == SP_LAPRAS:
+            if esp == SP_LAPRAS and fs.sing_count() == 0 \
+                    and af > 0.6:
+                return ("move", MOVE_SING)
+            return ("move", MOVE_SURF)
+        if asp == SP_ARCANINE:
+            if esp in (SP_JYNX, SP_CLOYSTER):
+                return ("move", MOVE_EMBER)
+            return ("move", MOVE_BITE)
+        return ("move", MOVE_WATER_GUN)
+
+    if fight == "bruno":
+        if asp == SP_LAPRAS:
+            if esp == SP_MACHAMP \
+                    and fs.sing_count() == 0 and af > 0.5:
+                return ("move", MOVE_SING)
+            if esp in (SP_HITMONCHAN, SP_HITMONLEE) \
+                    and af < 0.35:
+                return ("switch", SP_SNORLAX)
+            return ("move", MOVE_SURF)
+        if asp == SP_BLASTOISE:
+            if esp == SP_MACHAMP:
+                return ("switch", SP_SNORLAX)
+            return ("move", MOVE_WATER_GUN)
+        if asp == SP_SNORLAX:
+            if af < 0.4 and _league_pp_of(a, MOVE_REST) > 0:
+                return ("move", MOVE_REST)
+            return ("move", MOVE_BODY_SLAM)
+        return ("move", MOVE_BITE)
+
+    if fight == "agatha":
+        if asp == SP_GLOOM:
+            if not fs.spore_used and esp in (
+                    SP_ARBOK, SP_GENGAR):
+                return ("move", MOVE_STUN_SPORE)
+            return ("switch", _league_pick(
+                snap, _league_prefs(fight, esp)))
+        if asp == SP_LAPRAS:
+            if esp == SP_GOLBAT:
+                return ("move", MOVE_ICE_BEAM)
+            if esp == SP_GENGAR and elv == 60:
+                if fs.sing_count() < 2 and af > 0.5:
+                    return ("move", MOVE_SING)
+                if fs.enemy_turns >= 4:
+                    return ("switch", SP_BLASTOISE)
+                return ("move", MOVE_SURF)
+            if esp == SP_ARBOK and fs.sing_count() == 0 \
+                    and af > 0.7:
+                return ("move", MOVE_SING)
+            if fs.enemy_turns >= 6:
+                return ("switch", SP_BLASTOISE)
+            return ("move", MOVE_SURF)
+        if asp == SP_BLASTOISE:
+            if esp in (SP_GENGAR, SP_HAUNTER) \
+                    and fs.pumps < cap:
+                return ("move", MOVE_HYDRO_PUMP)
+            return ("move", MOVE_WATER_GUN)
+        if asp == SP_ARCANINE:
+            if esp in (SP_GENGAR, SP_HAUNTER):
+                return ("move", MOVE_EMBER)
+            return ("move", MOVE_BITE)
+        return ("move", MOVE_SURF)
+
+    if fight == "lance":
+        if asp == SP_LAPRAS:
+            if esp == SP_GYARADOS:
+                if fs.sing_count() == 0 and af > 0.6:
+                    return ("move", MOVE_SING)
+                if _league_pp_of(a, MOVE_ICE_BEAM) > 0:
+                    return ("move", MOVE_ICE_BEAM)
+                return ("switch", SP_SNORLAX)
+            if esp == SP_AERODACTYL:
+                return ("move", MOVE_SURF)
+            if _league_pp_of(a, MOVE_ICE_BEAM) > 0:
+                return ("move", MOVE_ICE_BEAM)
+            return ("move", MOVE_SURF)
+        if asp == SP_SNORLAX:
+            if esp == SP_AERODACTYL:
+                return ("switch", SP_BLASTOISE)
+            if af < 0.4 and _league_pp_of(a, MOVE_REST) > 0:
+                return ("move", MOVE_REST)
+            return ("move", MOVE_BODY_SLAM)
+        if asp == SP_BLASTOISE:
+            if esp in (SP_AERODACTYL, SP_DRAGONITE) \
+                    and fs.pumps < cap:
+                return ("move", MOVE_HYDRO_PUMP)
+            if esp == SP_GYARADOS:
+                return ("switch", SP_LAPRAS
+                        if snap.alive(SP_LAPRAS)
+                        else SP_SNORLAX)
+            return ("move", MOVE_WATER_GUN)
+        return ("move", MOVE_BITE)
+
+    if fight == "champion":
+        # the redo's lines (the first attempt's branches
+        # for Pidgeot/Alakazam/Venusaur never fired - the
+        # probe's species table was offset, S28): Lapras
+        # Ice Beams Pidgeot and never faces Alakazam;
+        # Arcanine's Bite is the Alakazam answer; Rhydon
+        # goes to Blastoise's Water Gun (Lapras's last
+        # Surf stays in reserve); his Arcanine eats a
+        # Hydro Pump; Gyarados gets Sing -> Ice Beam;
+        # Venusaur gets Ice Beam / pumps with a Gloom
+        # Stun Spore cameo.
+        if asp == SP_LAPRAS:
+            if esp == SP_ALAKAZAM:
+                return ("switch", SP_ARCANINE
+                        if snap.alive(SP_ARCANINE)
+                        else SP_SNORLAX)
+            if esp == SP_RHYDON:
+                return ("move", MOVE_SURF)
+            if esp == SP_GYARADOS:
+                if fs.sing_count() == 0 and af > 0.5:
+                    return ("move", MOVE_SING)
+                return ("move", MOVE_ICE_BEAM)
+            if esp == SP_VENUSAUR:
+                return ("move", MOVE_ICE_BEAM)
+            if esp == SP_PIDGEOT:
+                return ("move", MOVE_ICE_BEAM)
+            return ("move", MOVE_SURF
+                    if _league_pp_of(a, MOVE_SURF) > 0
+                    else MOVE_ICE_BEAM)
+        if asp == SP_SNORLAX:
+            if esp == SP_ALAKAZAM:
+                return ("switch", SP_ARCANINE
+                        if snap.alive(SP_ARCANINE)
+                        else SP_LAPRAS)
+            if esp == SP_RHYDON:
+                return ("switch", SP_BLASTOISE
+                        if snap.alive(SP_BLASTOISE)
+                        else SP_LAPRAS)
+            if esp == SP_VENUSAUR:
+                tgt = _league_pick(
+                    snap, [SP_GLOOM, SP_LAPRAS, SP_BLASTOISE])
+                if tgt is not None:
+                    return ("switch", tgt)
+                if fs.amnesia < 1:
+                    return ("move", MOVE_AMNESIA)
+                return ("move", MOVE_DOUBLE_EDGE)
+            if esp == SP_PIDGEOT:
+                if af > 0.8 and \
+                        _league_pp_of(a, MOVE_DOUBLE_EDGE) > 0:
+                    return ("move", MOVE_DOUBLE_EDGE)
+                return ("switch", SP_LAPRAS)
+            if af < 0.45 and _league_pp_of(a, MOVE_REST) > 0:
+                return ("move", MOVE_REST)
+            return ("move", MOVE_BODY_SLAM)
+        if asp == SP_BLASTOISE:
+            if esp == SP_RHYDON:
+                return ("move", MOVE_WATER_GUN)
+            if esp == SP_ARCANINE:
+                if fs.pumps < 2:
+                    return ("move", MOVE_HYDRO_PUMP)
+                return ("move", MOVE_WATER_GUN)
+            if esp == SP_GYARADOS:
+                if snap.alive(SP_LAPRAS):
+                    return ("switch", SP_LAPRAS)
+                if fs.pumps < 4:
+                    return ("move", MOVE_HYDRO_PUMP)
+                return ("move", MOVE_WATER_GUN)
+            if esp == SP_VENUSAUR:
+                if fs.pumps < 5:
+                    return ("move", MOVE_HYDRO_PUMP)
+                return ("move", MOVE_WATER_GUN)
+            if esp == SP_ALAKAZAM:
+                return ("switch", SP_ARCANINE
+                        if snap.alive(SP_ARCANINE)
+                        else SP_SNORLAX)
+            return ("move", MOVE_WATER_GUN)
+        if asp == SP_ARCANINE:
+            if esp == SP_VENUSAUR:
+                if snap.alive(SP_LAPRAS) or \
+                        snap.alive(SP_BLASTOISE):
+                    return ("switch", SP_LAPRAS
+                            if snap.alive(SP_LAPRAS)
+                            else SP_BLASTOISE)
+                return ("move", MOVE_EMBER)
+            if esp == SP_RHYDON:
+                return ("switch", SP_BLASTOISE
+                        if snap.alive(SP_BLASTOISE)
+                        else SP_LAPRAS)
+            return ("move", MOVE_BITE)
+        if asp == SP_GLOOM:
+            if esp == SP_VENUSAUR and not fs.spore_used:
+                return ("move", MOVE_STUN_SPORE)
+            return ("switch", _league_pick(
+                snap, _league_prefs(fight, esp)))
+        return ("switch", _league_pick(
+            snap, _league_prefs(fight, esp)))
+    return ("move", MOVE_TACKLE)
+
+
+# ---------- corridor care ----------
+
+def _close_all_menus(emu: PyBoyEmulator) -> None:
+    """B-press out of every menu layer (item result ->
+    party list -> bag list -> start menu -> field) and
+    settle. Corridor care once saved a state with the bag
+    still open, which silently wedged every later walk
+    (directional presses steered the menu, not the
+    avatar)."""
+    for _ in range(6):
+        _press10(emu, "b")
+        emu.tick(35)
+    emu.wait_free(max_rounds=4, stable_needed=2)
+
+
+def _league_use_item(emu: PyBoyEmulator, item: int,
+                     idx: int, why: str) -> bool:
+    before = _bag_count(emu, item)
+    ok = _use_bag_item_on_mon(emu, item, idx)
+    _close_all_menus(emu)
+    after = _bag_count(emu, item)
+    if not ok and after == before:
+        # the field-menu item helper flakes intermittently
+        # (it cost a Full Restore in the probe run too):
+        # nothing was consumed, so simply use it again
+        _plog(f"care: item {item} on mon {idx} ({why}) "
+              "flaked - retrying")
+        ok = _use_bag_item_on_mon(emu, item, idx)
+        _close_all_menus(emu)
+        after = _bag_count(emu, item)
+    _plog(f"care: item {item} on mon {idx} ({why}) "
+          f"ok={ok} bag {before}->{after}")
+    return after < before
+
+
+def _corridor_care(emu: PyBoyEmulator, workers) -> None:
+    """Between gauntlet fights (there is no PC and no
+    nurse inside): revive the fainted, cure status, top
+    up the mons that work the next fight."""
+    st = emu.read_state()
+    for i, m in enumerate(st.party):
+        if m.hp == 0 and _bag_count(emu, ITEM_REVIVE) > 0:
+            _league_use_item(emu, ITEM_REVIVE, i, "revive")
+    st = emu.read_state()
+    for i, m in enumerate(st.party):
+        if m.hp > 0 and getattr(m, "status", 0) \
+                and m.species_id in workers:
+            if _bag_count(emu, ITEM_FULL_RESTORE) > 0:
+                _league_use_item(emu, ITEM_FULL_RESTORE, i,
+                                 "status+hp")
+            elif _bag_count(emu, ITEM_FULL_HEAL) > 0:
+                _league_use_item(emu, ITEM_FULL_HEAL, i,
+                                 "status")
+    st = emu.read_state()
+    for i, m in enumerate(st.party):
+        if m.species_id not in workers or m.hp == 0:
+            continue
+        f = _league_frac(m)
+        if f >= 0.92:
+            continue
+        if f < 0.75 and _bag_count(emu, ITEM_FULL_RESTORE) > 0:
+            _league_use_item(emu, ITEM_FULL_RESTORE, i,
+                             "deep top-up")
+        elif f < 0.88 and _bag_count(emu, ITEM_MAX_POTION) > 0:
+            _league_use_item(emu, ITEM_MAX_POTION, i,
+                             "top-up")
+        elif _bag_count(emu, ITEM_SUPER_POTION) > 0:
+            _league_use_item(emu, ITEM_SUPER_POTION, i,
+                             "small top-up")
+    st = emu.read_state()
+    _plog("care done:", [(hex(m.species_id), m.hp, m.max_hp,
+                          getattr(m, "status", 0))
+                         for m in st.party])
+
+
+# ---------- E4 room machinery ----------
+
+# the world model carries twelve maps named LancesRoom
+# (ids 105-117, a name-table offset in that range); the
+# game's real Lance's Room, live-verified, is 113.
+_LEAGUE_ROOM_IDS = {"LancesRoom": 113}
+
+
+def _league_room_id(world, name: str) -> int:
+    return _LEAGUE_ROOM_IDS.get(name, world.map_id(name))
+
+
+def _step_walk(emu: PyBoyEmulator, ex: Executor,
+               map_id: int, target, blocked=frozenset()) -> bool:
+    """BFS on the world model's walkable grid (the room's
+    warps and the leader's cell blocked), one verified
+    step at a time. The executor's own walker routes its
+    first step through the leader's cell in the E4 rooms
+    and fails instantly; this does not."""
+    from collections import deque
+    world = ex.world
+    m = world.maps[map_id]
+    warps = {(w.x, w.y) for w in m.warps}
+    blocked = set(blocked) | warps
+
+    def bfs(start, goal):
+        if start == goal:
+            return []
+        prev = {start: None}
+        q = deque([start])
+        while q:
+            cx, cy = q.popleft()
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                n = (cx + dx, cy + dy)
+                if n in prev or n in blocked:
+                    continue
+                if not m.walkable(n[0], n[1]):
+                    continue
+                prev[n] = (cx, cy)
+                if n == goal:
+                    path = []
+                    cur = n
+                    while prev[cur] is not None:
+                        path.append(cur)
+                        cur = prev[cur]
+                    return path[::-1]
+                q.append(n)
+        return None
+
+    for _ in range(14):
+        st = emu.read_state()
+        if st.map_id != map_id:
+            return False
+        if (st.x, st.y) == target:
+            return True
+        path = bfs((st.x, st.y), target)
+        if not path:
+            return False
+        for cell in path:
+            st = emu.read_state()
+            dx = cell[0] - st.x
+            dy = cell[1] - st.y
+            d = {(1, 0): "right", (-1, 0): "left",
+                 (0, 1): "down", (0, -1): "up"}[(dx, dy)]
+            emu.press(d)
+            _explore_settle(emu, max_frames=200)
+            st = emu.read_state()
+            if (st.x, st.y) != cell or st.map_id != map_id:
+                break
+    st = emu.read_state()
+    return st.map_id == map_id and (st.x, st.y) == target
+
+
+def _league_walk_to(emu: PyBoyEmulator, ex: Executor,
+                    map_id: int, cell) -> bool:
+    try:
+        ex._walk_to(map_id, cell)
+    except Exception as e:
+        _plog("walk_to raised:", e)
+    st = emu.read_state()
+    return st.map_id == map_id and (st.x, st.y) == cell
+
+
+def _go_north(emu: PyBoyEmulator, ex: Executor,
+              from_map: int, door_x: int) -> bool:
+    for _ in range(14):
+        if emu.read_state().map_id != from_map:
+            return True
+        emu.press("up")
+        _explore_settle(emu)
+    return emu.read_state().map_id != from_map
+
+
+def _league_talk_and_fight(emu: PyBoyEmulator, ex: Executor,
+                           room_map: int, stance) -> bool:
+    if not _league_walk_to(emu, ex, room_map, stance) and \
+            not _step_walk(emu, ex, room_map, stance):
+        st = emu.read_state()
+        _plog(f"stance miss: at {st.map_id} {st.x},{st.y} "
+              f"want {room_map} {stance}")
+        return False
+    emu.press("up")  # bump-turn to face the leader
+    emu.tick(30)
+    _press10(emu, "a")
+    emu.tick(90)
+    for _ in range(80):
+        if emu.read_state().in_battle:
+            return True
+        if emu.read_state().in_dialog:
+            _press10(emu, "a")
+            emu.tick(25)
+            continue
+        emu.tick(25)
+    return emu.read_state().in_battle
+
+
+def _ride_ending(emu: PyBoyEmulator, ex: Executor):
+    """Champion beaten: ride Oak -> Hall of Fame ->
+    credits -> title -> CONTINUE -> wherever the game
+    lands (Gen 1: Pallet Town, in front of Red's house).
+    Returns (saw_hall_of_fame, final_state)."""
+    world = ex.world
+    hof = world.map_id("HallOfFame")
+    known = {_league_room_id(world, n) for n in (
+        "PalletTown", "RedsHouse1F", "RedsHouse2F",
+        "IndigoPlateau", "IndigoPlateauLobby",
+        "ChampionsRoom", "HallOfFame", "LancesRoom")}
+    saw_hof = False
+    hof_quiet_since = None
+    t_end = time.time() + 600
+    phase = "script"
+    while time.time() < t_end:
+        st = emu.read_state()
+        if st.map_id == hof and not saw_hof:
+            saw_hof = True
+            _plog("HALL OF FAME room reached")
+            emu.tick(120)
+            emu.screenshot("hall-of-fame.png")
+        if phase == "script":
+            if st.in_dialog:
+                hof_quiet_since = None
+                _press10(emu, "a")
+                emu.tick(30)
+                continue
+            # no dialog: A advances the HoF pages, the
+            # credits and THE END alike
+            _press10(emu, "a")
+            emu.tick(40)
+            if saw_hof:
+                if hof_quiet_since is None:
+                    hof_quiet_since = time.time()
+                elif time.time() - hof_quiet_since > 25:
+                    phase = "title"
+                    _plog("post-HoF quiet - forcing title")
+                    continue
+            if st.map_id not in known:
+                phase = "title"
+                _plog("title screen suspected, map:",
+                      st.map_id)
+            continue
+        if phase == "title":
+            _press10(emu, "start")
+            emu.tick(120)
+            _press10(emu, "a")
+            emu.tick(120)
+            phase = "landing"
+            continue
+        # landing
+        emu.wait_free(max_rounds=4, stable_needed=2)
+        st = emu.read_state()
+        if st.map_id in known and st.party \
+                and not st.in_dialog:
+            _plog("landed:", st.map_id, st.x, st.y)
+            return saw_hof, st
+        if st.in_dialog:
+            _press10(emu, "a")
+        emu.tick(40)
+    return saw_hof, emu.read_state()
+
+
+# ---------- assembly + the gauntlet ----------
+
+_LEAGUE_ROOMS = [
+    ("lorelei", "LoreleisRoom", (5, 2), (5, 3), SP_SNORLAX),
+    ("bruno", "BrunosRoom", (5, 2), (5, 3), SP_LAPRAS),
+    ("agatha", "AgathasRoom", (5, 2), (5, 3), SP_LAPRAS),
+    ("lance", "LancesRoom", (6, 1), (6, 2), SP_LAPRAS),
+    # the winning Champion line led Lapras, not Snorlax
+    ("champion", "ChampionsRoom", (4, 2), (4, 3), SP_LAPRAS),
+]
+_LEAGUE_NEXT_WORKERS = {
+    "lorelei": [SP_LAPRAS, SP_SNORLAX, SP_BLASTOISE],
+    "bruno": [SP_LAPRAS, SP_BLASTOISE, SP_ARCANINE],
+    "agatha": [SP_LAPRAS, SP_BLASTOISE, SP_SNORLAX],
+    "lance": [SP_SNORLAX, SP_LAPRAS, SP_BLASTOISE,
+              SP_ARCANINE],
+}
+_INDIGO_MART_LIST = [0x02, 0x03, ITEM_FULL_RESTORE,
+                     ITEM_MAX_POTION, ITEM_FULL_HEAL,
+                     ITEM_REVIVE, 0x1F]  # ULTRA, GREAT, FR,
+                                        # MP, FH, REV, MREPEL
+
+
+def league_assemble(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Phase 2 of the League leg (probe167): fly to
+    Viridian, deposit seven non-essential stacks at the
+    PC (balls, Repels, Super Rod, TM27, HM01, HM02 - the
+    stat items stay untouched in the bag), bench Pidgey
+    for Voltorb, cross Route 23 / Victory Road on the
+    ported machinery (Moltres strictly left alone), heal
+    at Indigo, and stock up at the lobby mart: Full
+    Restore x8, Max Potion x4, Revive +6 (8 total), Full
+    Heal +4 (6 total) = 45,400 yen exactly. Ends in the
+    Indigo lobby, healed and stocked: the pre-League
+    checkpoint position."""
+    emu.wait_free(max_rounds=8, stable_needed=2)
+    if not fly_to(emu, ex, "VIRIDIAN CITY"):
+        return False
+    world = ex.world
+    pc = world.map_id("ViridianPokecenter")
+    if not _ride_or_cross(emu, ex, pc):
+        return False
+    for item in (ITEM_POKE_BALL, ITEM_GREAT_BALL,
+                 ITEM_REPEL, ITEM_SUPER_ROD, ITEM_TM27,
+                 ITEM_HM01, ITEM_HM02_FLY):
+        if _bag_count(emu, item) > 0:
+            if not deposit_item(emu, ex, pc, item):
+                return False
+    if not pc_swap(emu, ex, pc, SPECIES_PIDGEY,
+                   SPECIES_VOLTORB):
+        return False
+    if _party_index_of(emu, SPECIES_VOLTORB) is None:
+        return False
+    if emu.read_state().map_id == pc:
+        _exit_building(emu, ex, pc)
+    if not route23_passage(emu, ex):
+        return False
+    if not victory_road(emu, ex):
+        return False
+    lobby = world.map_id("IndigoPlateauLobby")
+    if emu.read_state().map_id != lobby:
+        return False
+    money0 = emu.read_state().money
+    buys = ((2, ITEM_FULL_RESTORE, 8), (3, ITEM_MAX_POTION, 4),
+            (4, ITEM_FULL_HEAL, 6), (5, ITEM_REVIVE, 8))
+    for idx, item, want in buys:
+        got = buy_mart_item(emu, ex, lobby, idx, item, want)
+        if got < want:
+            print(f"stock-up short: item {item} {got}<{want}",
+                  flush=True)
+            return False
+    spent = money0 - emu.read_state().money
+    print(f"stock-up spent: {spent} (expect 45400)",
+          flush=True)
+    return spent == 45400
+
+
+def elite_four(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Phase 3 of the League leg (probe167): the gauntlet
+    from the Indigo Plateau Lobby - Lorelei, Bruno,
+    Agatha, Lance, Champion - with field-menu corridor
+    care between fights (there is no PC inside; the
+    battle driver has no mid-battle item path, by the
+    player's standing choice). Hydro Pump is one 5-PP
+    budget across all five fights. A full-party wipe is
+    a blackout: this returns False with the game left at
+    the blackout warp (the pre-League checkpoint restore
+    and single re-run are the caller's business, per the
+    leg's stop rule). On the win: rides the Oak / Hall of
+    Fame / credits sequence and returns True once the
+    game lands back at Pallet Town with the Hall of Fame
+    seen."""
+    emu.wait_free(max_rounds=8, stable_needed=2)
+    _close_all_menus(emu)
+    world = ex.world
+    lobby = world.map_id("IndigoPlateauLobby")
+    _LEAGUE_FS.pumps = 0
+    money0 = emu.read_state().money
+    for i, (name, room_name, leader, stance, lead) in \
+            enumerate(_LEAGUE_ROOMS):
+        room = _league_room_id(world, room_name)
+        if not party_lead(emu, lead):
+            _plog(f"{name}: party_lead failed")
+            return False
+        # party_lead's menu flow intermittently leaves
+        # the START menu open (the cold replay died on
+        # exactly that outside Lance's room): guarantee a
+        # clean field before any walking
+        _close_all_menus(emu)
+        st = emu.read_state()
+        if st.map_id == lobby:
+            if not _league_walk_to(emu, ex, lobby, (8, 1)):
+                _plog("lobby door walk failed")
+                return False
+            if not _go_north(emu, ex, lobby, 8):
+                _plog("lobby exit failed")
+                return False
+        elif st.map_id != room:
+            _pname, proom_name, pleader, _ps, _pl = \
+                _LEAGUE_ROOMS[i - 1]
+            pmap = _league_room_id(world, proom_name)
+            cols = sorted({w.x for w in
+                           world.maps[pmap].warps if w.y == 0})
+            exited = False
+            for wx in cols:
+                if _step_walk(emu, ex, pmap, (wx, 1),
+                              blocked={pleader}) and \
+                        _go_north(emu, ex, pmap, wx):
+                    exited = True
+                    break
+            if not exited:
+                _plog(f"{name}: room exit failed")
+                return False
+        if not _league_talk_and_fight(emu, ex, room, stance):
+            _plog(f"{name}: talk failed")
+            return False
+        _LEAGUE_FS.fight = name
+        _LEAGUE_FS.reset_fight()
+        money_pre = emu.read_state().money
+        try:
+            _league_fight(emu, ex, _league_decide, _plog,
+                          name)
+        except _LeagueAbort as e:
+            _plog(f"{name}: FIGHT ABORT: {e}")
+            return False
+        _league_clear_post_battle(emu, _plog, name)
+        st = emu.read_state()
+        _plog(f"{name} done: money {st.money} party:",
+              [(hex(m.species_id), m.level, m.hp, m.max_hp)
+               for m in st.party])
+        if st.money < money_pre or st.map_id != room:
+            # a wipe blacks out to the last PokeCenter -
+            # the game HEALS the party on the warp, so an
+            # all-fainted check can never see it. The
+            # tells are the halved money and waking up
+            # somewhere that is not this room (the cold
+            # replay's Champion wipe showed exactly that:
+            # 119,420 -> 59,710 at a PokeCenter).
+            _plog(f"{name}: BLACKOUT (money "
+                  f"{money_pre} -> {st.money}, map "
+                  f"{st.map_id} != room {room})")
+            return False
+        if name != "champion":
+            _corridor_care(
+                emu, _LEAGUE_NEXT_WORKERS[name])
+    saw_hof, st = _ride_ending(emu, ex)
+    pallet = world.map_id("PalletTown")
+    _plog(f"elite four done: hof={saw_hof} landed map "
+          f"{st.map_id} money {st.money} (start {money0})")
+    return bool(saw_hof and st.map_id == pallet)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--rom", required=True, help="path to a Pokemon Red ROM")

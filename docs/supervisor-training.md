@@ -2476,3 +2476,189 @@ a settle-retry verify; the re-run returns True and
 lands at Indigo Plateau (9,6), money 141,456 yen.
 Two read-too-early races, both in verification reads,
 both fixed in the port; no gameplay logic changed.
+
+## 28. The League — COMPLETE (2026-11-13, probe167): the grind, the gauntlet, the Champion, and the species table that lied
+
+Vlad's call: "Grind a proper League team first (Lapras
+and a third attacker up), then run it." The storyline is
+done: all five fights won, the Hall of Fame reached on
+screen, and the game landed back at Pallet Town (5,6) —
+chain head probe167/post-league.state, sha256
+e7660ae15c7e237074afb2e1909ed6c96bd9b41f803df153db026f378f264352,
+money 125,855 yen, dex 28, badges 8. Zero blackouts in
+the gauntlet.
+
+**Phase 1 — the grind (all Pokemon Mansion 1F, Cinnabar
+PC heal loop, lead-and-solo, per-level moveset audits,
+zero blackouts in every segment, 0 yen spent).** The
+battle driver's stock form A-mashes learn prompts and
+replaces slot 1 — it had already cost Bite in the early
+game — so the grind ran on a prompt-aware driver: screen
+text decoded from the tilemap, a tripwire on every A
+press, and deliberate answers from a per-species plan.
+LAPRAS 15 -> 50 (two stays: 263 fights total across both
+grinds): SING accepted over WATER GUN at 16 (deliberate
+this time — it is the team's sleep source, because of
+the discovery below), MIST declined at 20, BODY SLAM
+over GROWL at 25, CONFUSE RAY declined at 31, ICE BEAM
+over BODY SLAM at 38 (NOT over Strength — Strength is
+the party's only copy and the Victory Road return still
+needed it for boulders), HYDRO PUMP declined at 46.
+Final: [Sing, Ice Beam, Surf, Strength], 214 HP.
+SNORLAX 30 -> 48 (263 fights): BODY SLAM auto-appended
+into the free slot at 35, HARDEN declined at 41,
+DOUBLE-EDGE over HEADBUTT at 48. Final: [Double-Edge,
+Amnesia, Rest, Body Slam]. ARCANINE 48 -> 52 (54
+fights; its Gen 1 learnset is empty — zero prompt
+risk). Blastoise stayed 67: PP, not levels, is his
+constraint.
+
+**Discovery — Gloom does NOT know Sleep Powder.** The
+live moveset at Indigo read [Acid, PoisonPowder, Cut,
+Stun Spore]: Sleep Powder was auto-replaced by Acid at
+the Lv24 evolution level-up during probe165's rival
+fight (the stock driver's slot-1 mash again). Gen 1 has
+no move relearner; it cannot be restored. Mitigation
+adopted: Lapras's Sing is the sleep source (55% vs Sleep
+Powder's 75%); Gloom's Stun Spore remains as paralysis
+utility. Disclosed to Vlad in the leg report.
+
+**Phase 2 — assembly.** Two more corrections to the
+brief's assumptions, both from pokered: Gen 1's Indigo
+Plateau Lobby has NO PC (nurse, mart clerk, guide,
+Cooltrainer, link receptionist — no PC object), so the
+final six were assembled at the Viridian PC; and there
+is no land route from Indigo Plateau back into Victory
+Road 1F (the plateau ride lands on Route 23's north
+strip; the VR door pockets are sealed from the east), so
+Lapras's second grind stayed at the Mansion and the
+final crossing was flown with Pidgey aboard, the bench
+swap done at Viridian on the way back. Deposited at
+Viridian: Poke Ball x8, Great Ball x3, Repel x2, Super
+Rod, TM27, HM01, HM02 (bag 20 -> 13 stacks; the stat
+items — HP Up, Rare Candy, Carbos — stayed untouched in
+the bag, as did the Master Ball, never thrown). Bench
+slot: Voltorb over Pidgey (40 HP death-switch vs 15,
+Screech lottery; Fly is useless inside the gauntlet).
+Final six: Blastoise 67, Lapras 50, Snorlax 48,
+Arcanine 52, Gloom 24, Voltorb 16. Stock-up at the
+Indigo mart, to the yen: Full Restore x8 (3,000),
+Max Potion x4 (2,500), Revive +6 -> 8 (1,500), Full
+Heal +4 -> 6 (600) = 45,400 yen; money 141,456 ->
+96,056. Pre-League checkpoint: probe167/pre-league.state
+(sha256 a70352fd...).
+
+**Phase 3 — the gauntlet** (field-menu care between
+fights; no mid-battle item path, per Vlad's standing
+decline). LORELEI: Snorlax soloed all five — Amnesia x2
+wall (her Dewgong Rested mid-fight), one Rest at 59/231,
+Double-Edge finish vs her Lapras; Snorlax to 49; payout
++5,544 -> 101,600. BRUNO: Lapras Surf one-shot Onix #1,
+Snorlax took the Hitmon tax (236 -> 62), Blastoise's
+Water Gun economy covered the rest; Machamp Surfed out;
++5,742 -> 107,342. AGATHA: Lapras Surfed Gengar-56,
+Blastoise Water-Gunned Golbat and Haunter, Lapras back
+for Arbok and the Lv60 Gengar (Surf 151 -> 35 -> KO);
+Lapras to 51; +5,940 -> 113,282. LANCE: the bloodbath —
+Lapras, Blastoise AND Snorlax all fainted (Dragonite's
+Hyper Beams); Arcanine's Bite closed the last Dragonite
+from 105 HP; +6,138 -> 119,420; the corridor care spent
+3 Revives and 4 Full Restores to put everyone back at
+full. CHAMPION: the redo's lines won it in 23 turns —
+Lapras Ice Beamed Pidgeot, Arcanine Bit Alakazam (never
+let Lapras face it), Blastoise Water-Gunned Rhydon and
+ground Gyarados down, Arcanine Bit Venusaur 142 -> 0
+for the win while Blastoise and Lapras fainted;
++6,435 -> 125,855. Hall of Fame verified on screen
+(media: hall-of-fame.png); landing Pallet Town (5,6).
+
+**The species table that lied (the leg's costliest
+bug).** The probe runner's species constants came from
+a parse of pokered's pokemon_constants.asm that did not
+count the const_skip slots (the MissingNos). Every id
+after the first skips was low by the skip count —
+Pidgeot 0x7C for the true 0x97, Alakazam 0x7A for 0x95,
+Venusaur 0x7F for 0x9A, Dragonite likewise. Every policy
+branch keyed on those species silently never fired, in
+both Champion attempts and (via Dragonite) in Lance's
+fight: Blastoise Water-Gunned a Dragonite it was
+supposed to Hydro Pump, Lapras Surf'd an Alakazam she
+should never have faced. The first Champion attempt
+ended one mon from the win with the whole bench dead;
+its post-mortem (a ('switch', None) decision then
+crashed the runner on a format string) produced the
+engine's targetless-switch coercion. run_real.py's
+hand-written SP_ constants were always correct; the
+port's regression test recounts the constants from
+pokered WITH the skips and pins all 27 League ids.
+
+**Driver defects found and fixed along the way** (all
+in the port): corridor care saved a state with the bag
+menu still open, wedging every later walk (menus eat
+directional presses) — _close_all_menus now runs after
+every item use and again before every room transition
+(party_lead's flow can leave the START menu open the
+same way); a 0-PP move selection beeps and wedges the
+move list forever — the decide-level PP guard
+substitutes or switches, and the send path verifies by
+PP/HP deltas; a stray ride-A answered a shift prompt
+YES once, opening the party list mid-fight — the ride
+no longer A-presses while a two-option menu is live,
+and a party list found with a living active mon is
+cancelled as the accident it is; the executor's walker
+routes its first E4-room step through the leader's
+cell, so room movement uses a step-verified BFS
+(_step_walk) on the model's grid (Agatha's (5,1) door
+approach is unreachable behind her — (4,1) works; the
+world model also carries twelve maps named LancesRoom,
+ids 105-117 — the game's real room, live-verified, is
+113, pinned in _LEAGUE_ROOM_IDS); the field-menu item
+helper flakes intermittently with nothing consumed —
+corridor care retries once; the PKMN column steer races
+the menu opening animation — the switch opening retries
+whole; the slot confirm A can be eaten — it is verified
+against the list still being open and re-pressed; and
+a gauntlet wipe cannot be detected by party HP (the
+blackout warp HEALS the party) — elite_four declares a
+blackout on the halved money and waking outside the
+room just fought.
+
+**Port.** league_grind (prompt-aware Mansion grind +
+learn plans), league_assemble (Viridian deposits +
+bench swap + ported Route 23/VR return + the 45,400-yen
+stock-up) and elite_four (fight engine, policies,
+corridor care, room machinery, ending ride) are in
+run_real.py. Suite 180/180 (6 new tests: wired
+callables, the const_skip species recount, learn-plan
+final movesets, Champion policy lines on stub snaps,
+room/pump tables, fence pins). **Cold replay**
+(probe167r, from pre-league.state through the ported
+elite_four only): four attempts. Attempts 1-2 died in
+Bruno on the menu races above (Lorelei's payout exact
+both times: 101,600). Attempt 3 cleared Lorelei, Bruno
+(107,342) and Agatha (113,282) — all exact — then died
+on the START-menu transition into Lance's room.
+Attempt 4, with all fixes in: Lorelei, Bruno, Agatha
+and Lance ALL beaten with payouts exact to the yen
+(101,600 / 107,342 / 113,282 / 119,420), then the
+Champion fight was LOST — a genuine wipe on that RNG
+line (Venusaur left standing at ~48 HP with Voltorb
+the last mon out), detected and reported by the new
+blackout check. The Champion is a marginal fight: the
+probe's line won it with three fainted and Arcanine at
+50 HP; the replay's line lost it by roughly one mon.
+No fifth attempt was rolled — re-rolling until a win
+would be RNG shopping, not verification. The shipped
+chain head remains the probe run's post-league.state.
+
+**Left open in the save** (all Vlad's calls): Articuno
+(never sighted) and Moltres (decided: leave alone) —
+the birds stay unengaged; Safari leftovers (Tauros and
+Scyther never caught, Safari West unreachable, the bait
+anomaly of S20); the TM shelf (8 TMs in storage) and
+the unspent stat items (Rare Candy, HP Up, Carbos — all
+still in the bag); dex completion beyond 28; and the
+mid-battle item path, declined three times and not
+re-offered. The main storyline — eight badges, the
+Elite Four, the Champion, the Hall of Fame — is
+COMPLETE.
