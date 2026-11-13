@@ -2496,8 +2496,9 @@ replaces slot 1 — it had already cost Bite in the early
 game — so the grind ran on a prompt-aware driver: screen
 text decoded from the tilemap, a tripwire on every A
 press, and deliberate answers from a per-species plan.
-LAPRAS 15 -> 50 (two stays: 263 fights total across both
-grinds): SING accepted over WATER GUN at 16 (deliberate
+LAPRAS 15 -> 50 (two stays: 116 fights for Lv19 -> 35
+and 175 for Lv35 -> 50, plus the short Lv15 -> 19
+opening): SING accepted over WATER GUN at 16 (deliberate
 this time — it is the team's sleep source, because of
 the discovery below), MIST declined at 20, BODY SLAM
 over GROWL at 25, CONFUSE RAY declined at 31, ICE BEAM
