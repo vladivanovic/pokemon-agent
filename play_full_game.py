@@ -33,6 +33,13 @@ are the least-replayed segments; both are bounded and fail loudly.
 The optional web viewer (web_viewer.py, stdlib only) serves the live
 frame + state JSON on localhost; --host 0.0.0.0 opts into LAN access
 (e.g. watching an Orin run from another machine on your network).
+
+--directives FILE turns on the live redirect channel (directives.py):
+external processes append JSON Lines - validated goals that pre-empt
+the storyline, pause/resume/stop - and the runner services them at
+phase boundaries and between executor rounds. With --web, the
+channel defaults to run/directives.jsonl and the viewer page gets a
+redirect form (POST /directive is the same channel's second door).
 """
 
 from __future__ import annotations
@@ -58,9 +65,28 @@ from agent.executor import Executor, SmartFightPolicy
 from agent.memory import EpisodicMemory
 from agent.planner import ChecklistPlanner, LLMPlanner
 from agent.pyboy_emu import PyBoyEmulator
+from agent.supervisor_log import SupervisorLog
 from agent.world import default_world
 
 SPECIES_SQUIRTLE = 0xB1   # pokered pokemon_constants.asm
+
+
+class DirectiveStop(Exception):
+    """A stop directive landed mid-phase: unwind to the runner,
+    which checkpoints run/stopped.state and halts cleanly."""
+
+
+class _OneShotPlanner:
+    """Returns one fixed goal, then None. Lets an external goal ride
+    the executor's own loop - battle/dialog handling, validation,
+    outcome recording - instead of a parallel execution path."""
+
+    def __init__(self, goal):
+        self._goal = goal
+
+    def propose(self, state, world, memory):
+        goal, self._goal = self._goal, None
+        return goal
 
 
 # ---------------------------------------------------------------- ctx
@@ -82,6 +108,9 @@ class Ctx:
         self.recent: list[str] = []
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self.progress_path = self.out_dir / "progress.log"
+        # Live redirect channel (directives.py); None until enabled.
+        self.channel = None
+        self.directives_path: Optional[Path] = None
 
     # -- lifecycle ---------------------------------------------------
     def _build_executor(self) -> None:
@@ -132,6 +161,50 @@ class Ctx:
         with open(self.progress_path, "a", encoding="utf-8") as fh:
             fh.write(line + "\n")
 
+    # -- live redirect channel (directives.py host interface) ---------
+    def read_state(self):
+        return self.state()
+
+    def execute_goal(self, goal):
+        """Run ONE already-validated external goal through the
+        executor's own loop (planner swapped for a one-shot), so the
+        redirect gets the same battle/dialog handling and outcome
+        recording as any storyline goal. Returns (success, detail).
+        (The DirectiveChannel host protocol - directives.py.)"""
+        ex = self.ex
+        old = ex.planner
+        ex.planner = _OneShotPlanner(goal)
+        try:
+            result = ex.run(max_goals=1)
+        finally:
+            ex.planner = old
+        if result.goals_done >= 1:
+            return True, "executor: complete"
+        entry = result.log[-1] if result.log else {}
+        detail = entry.get("error") or "; ".join(
+            entry.get("problems", [])) or result.status
+        return False, f"executor: {result.status}: {detail}"
+
+    def enable_directives(self, path) -> None:
+        from directives import DirectiveChannel
+        self.directives_path = Path(path)
+        self.channel = DirectiveChannel(
+            self.directives_path,
+            self.out_dir / "directives.offset",
+            host=self,
+            slog=SupervisorLog(self.out_dir / "supervisor_log.jsonl"),
+            audit_path=self.out_dir / "directives-audit.jsonl")
+        self.note(f"DIRECTIVES live channel on {self.directives_path} "
+                  f"(consumed offset {self.channel.source.offset}; "
+                  "append JSON lines to redirect - see README)")
+
+    def service_directives(self) -> str:
+        """"ok" to proceed, "stop" when a stop directive landed.
+        Called at phase boundaries and between executor rounds."""
+        if self.channel is None or self.emu is None:
+            return "ok"
+        return self.channel.service()
+
 
 # ------------------------------------------------------- verify tools
 
@@ -176,6 +249,8 @@ def _opening_loop(ctx: Ctx, want_badges: set, max_rounds: int = 800) -> bool:
     flags = {"handover": False, "brock": False,
              "fossil": False, "misty": False}
     for round_no in range(max_rounds):
+        if ctx.service_directives() == "stop":
+            raise DirectiveStop("stop directive during the opening loop")
         st = emu.read_state()
         if want_badges <= set(st.badges):
             return True
@@ -480,6 +555,8 @@ def _ph_vermilion(ctx: Ctx):
     cer = world.map_id("CeruleanCity")
     cerpc = world.map_id("CeruleanPokecenter")
     for _ in range(60):
+        if ctx.service_directives() == "stop":
+            raise DirectiveStop("stop directive during the Vermilion loop")
         st = emu.read_state()
         if "Cascade" in st.badges and st.map_id in (cer, cerpc):
             if rr.eastward_from_cerulean(emu, ex):
@@ -726,6 +803,9 @@ class Runner:
         self.start_index = start_index
         self.last_good: Optional[Path] = None
         self.provider = provider
+        # Set when the halt was a directive stop (a clean, requested
+        # halt with a saved state), not a phase failure.
+        self.stopped_by_directive = False
 
     def checkpoint_path(self, index: int) -> Path:
         return self.ckpt_dir / f"{index + 1:02d}-{self.phases[index].name}.state"
@@ -734,6 +814,30 @@ class Runner:
         return self.provider is not None \
             and self.provider.stop_flag.is_set()
 
+    def _service_directives(self) -> bool:
+        """False when a stop directive landed at this boundary.
+        (DirectiveStop covers stops raised mid-phase.)"""
+        svc = getattr(self.ctx, "service_directives", None)
+        if svc is None:
+            return True
+        return svc() != "stop"
+
+    def _halt_stopped(self, index: int) -> None:
+        """Clean halt on a stop directive: save the live state so
+        the run can resume exactly here, and say how."""
+        self.stopped_by_directive = True
+        stopped = self.out_dir / "stopped.state"
+        try:
+            self.ctx.save_state(stopped)
+            saved = f"state saved to {stopped}"
+        except Exception as exc:
+            saved = f"state save failed ({exc!r})"
+        nxt = self.phases[index].name if index < len(self.phases) else "-"
+        self.ctx.note(
+            f"RUN HALTED by directive stop before/within phase "
+            f"{index + 1}/{len(self.phases)} {nxt}; {saved}; resume "
+            f"with --from-phase {nxt} --state {stopped}")
+
     def run(self) -> bool:
         total = len(self.phases)
         for i in range(self.start_index, total):
@@ -741,7 +845,15 @@ class Runner:
                 self.ctx.note("STOP requested via web control; "
                               f"halting before phase {i + 1}")
                 return False
-            if not self._run_one(i):
+            try:
+                if not self._service_directives():
+                    self._halt_stopped(i)
+                    return False
+                done = self._run_one(i)
+            except DirectiveStop:
+                self._halt_stopped(i)
+                return False
+            if not done:
                 self.ctx.note(
                     f"RUN STOPPED at phase {i + 1}/{total} "
                     f"{self.phases[i].name} after "
@@ -770,6 +882,8 @@ class Runner:
             res = None
             try:
                 res = ph.run(self.ctx)
+            except DirectiveStop:
+                raise
             except Exception as exc:
                 self.ctx.note(f"PHASE {ph.name}: raised {exc!r}")
                 res = False
@@ -821,6 +935,9 @@ class WebProvider:
         self.start_event = threading.Event()
         self.stop_flag = threading.Event()
         self._frame_cache = (0.0, None)
+        # The second door into the redirect channel: POST /directive
+        # appends here; the runner's channel consumes the same file.
+        self.directive_path: Optional[Path] = None
 
     def frame_png(self):
         now = time.time()
@@ -863,6 +980,21 @@ class WebProvider:
             return {"ok": True, "action": "stop"}
         return {"ok": False, "action": action}
 
+    def directive(self, obj) -> dict:
+        """Append one directive (the same JSON the file channel
+        takes) to the run's directive file."""
+        if self.directive_path is None:
+            return {"ok": False, "error": "no directive channel"}
+        if not isinstance(obj, dict):
+            return {"ok": False,
+                    "error": "directive must be a JSON object"}
+        if "goal" not in obj and "action" not in obj:
+            return {"ok": False,
+                    "error": "directive needs a 'goal' or 'action' key"}
+        from directives import append_directive
+        append_directive(self.directive_path, obj)
+        return {"ok": True}
+
 
 # ------------------------------------------------------------- CLI
 
@@ -887,6 +1019,11 @@ def main(argv=None) -> int:
                     default="off",
                     help="opening executor planner (default off: "
                          "the deterministic checklist)")
+    ap.add_argument("--directives", metavar="FILE",
+                    help="live redirect channel: watch FILE (JSON "
+                         "Lines) for external directives - validated "
+                         "goals that pre-empt the storyline, plus "
+                         "pause/resume/stop (see README)")
     ap.add_argument("--web", type=int, metavar="PORT",
                     help="serve the live viewer on this port")
     ap.add_argument("--host", default="127.0.0.1",
@@ -921,6 +1058,15 @@ def main(argv=None) -> int:
                     max_retries=args.max_retries,
                     start_index=start_index)
 
+    # The live redirect channel. An explicit --directives FILE wins;
+    # with --web alone, the channel defaults to a file inside --out
+    # so the viewer page's redirect form works out of the box.
+    directives_arg = args.directives
+    if directives_arg is None and args.web:
+        directives_arg = str(Path(args.out) / "directives.jsonl")
+    if directives_arg is not None:
+        ctx.enable_directives(directives_arg)
+
     start_state = args.state
     ckpts = discover_checkpoints(args.out)
     if start_state is None and (args.resume or args.from_phase) and ckpts:
@@ -952,11 +1098,16 @@ def main(argv=None) -> int:
         from web_viewer import make_server
         provider = WebProvider(ctx)
         runner.provider = provider
+        if ctx.directives_path is not None:
+            provider.directive_path = ctx.directives_path
+            if ctx.channel is not None:
+                # The page's Stop also ends a paused run.
+                ctx.channel.stop_check = provider.stop_flag.is_set
         server = make_server(args.host, args.web, provider)
         threading.Thread(target=server.serve_forever,
                          daemon=True).start()
         ctx.note(f"WEB viewer on http://{args.host}:{args.web}/ "
-                 f"(frame + state; Start/Stop on the page)")
+                 f"(frame + state; Start/Stop + redirect form)")
 
     ok = True
     try:
@@ -967,6 +1118,8 @@ def main(argv=None) -> int:
         if provider is not None:
             provider.info["run_status"] = "running"
         ok = runner.run()
+        if runner.stopped_by_directive:
+            ok = True   # a requested halt is a clean exit
         if provider is not None:
             provider.info["run_status"] = "complete" if ok else "stopped"
     except KeyboardInterrupt:

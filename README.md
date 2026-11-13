@@ -102,6 +102,7 @@ python3 play_full_game.py --web 8000         # + the live viewer (below)
 python3 play_full_game.py --list-phases      # the 34-phase table
 python3 play_full_game.py --out run --resume # continue an interrupted run
 python3 play_full_game.py --from-phase silph --state some.state
+python3 play_full_game.py --directives dir.jsonl  # + live redirects (below)
 ```
 
 Checkpoints land in `run/checkpoints/NN-phase.state`, with a running
@@ -120,6 +121,69 @@ button instead of starting immediately. (The NousResearch-era
 dashboard under `legacy/` is wired to the legacy driver and kept for
 reference; this viewer is the supported one — see `web_viewer.py` for
 why.)
+
+### Redirecting a live run
+
+`--directives FILE` opens a channel through which anything outside
+the process — Hermes, another LLM, a script, or you — can interrupt
+and redirect a run in progress. The channel is an append-only JSON
+Lines file; each line is one directive:
+
+```bash
+# send the agent somewhere else (a goal, in the repo's typed format)
+echo '{"goal": {"target_map_name": "ViridianCity", "reason": "detour"}}' >> dir.jsonl
+# hold the run at the next safe point / let it continue
+echo '{"action": "pause"}'  >> dir.jsonl
+echo '{"action": "resume"}' >> dir.jsonl
+# end the run cleanly (checkpoints run/stopped.state first)
+echo '{"action": "stop"}'   >> dir.jsonl
+```
+
+A goal names its target by exact map name (`target_map_name`, the
+form the LLM planner emits) or by id (`target_map`), with an optional
+`"target_xy": [x, y]`, `"reason"` and `"optional"` — the same shape
+`agent/supervisor_log.py` writes for supervisor proposals. With
+`--web` on, the same channel has a second door: the viewer page
+carries a redirect form (goal box + Pause/Resume/Stop buttons), and
+`POST /directive` accepts the same JSON directly; without an explicit
+`--directives`, web runs default the file to `run/directives.jsonl`.
+
+The rules are the propose-and-verify rules, applied to outsiders
+exactly as to the built-in planner:
+
+- **Nothing executes unvalidated.** A goal directive is parsed into a
+  typed `Goal` and run through `validate_goal` against the live RAM
+  state. Accepted, it pre-empts the storyline, executes through the
+  executor, and the run resumes — the checklist re-derives the next
+  story step from RAM, so a redirect that moved the player is
+  absorbed like a detour. Rejected, it is logged *with the
+  validator's reasons* and the run continues undisturbed.
+- **Granularity is phase boundaries and executor rounds.** The
+  runner services the file before every phase and between rounds of
+  the planner-driven stretches (the opening, the Vermilion loop);
+  the ported leg functions are atomic, so a directive that lands
+  mid-leg is picked up when the leg ends. A redirect is an inserted
+  validated goal, never mid-leg surgery.
+- **Pause holds; stop saves.** `pause` blocks at the next service
+  point until `resume` or `stop`; goals sent while paused queue and
+  run, in order, after the resume. `stop` saves `run/stopped.state`
+  and halts with exit code 0 — pick it up again with
+  `--from-phase <phase> --state run/stopped.state`.
+- **Exactly once.** Consumed lines are tracked by a byte offset
+  persisted in `run/directives.offset`, so a `--resume` restart does
+  not replay old directives.
+
+Every directive lands in `run/progress.log` and in a per-run audit
+(`run/directives-audit.jsonl`); goal directives also appear in the run's
+`run/supervisor_log.jsonl`, tagged `planner: "external"` with the
+validator's verdict and the execution outcome — the same records the
+built-in supervisor produces. This composes with `--supervisor`
+rather than competing with it: the supervisor is the *built-in*
+proposer (a local model suggesting goals at planner rounds), the
+directives channel is the *external* proposer — both feed the same
+validator and the same executor. For an agent like Hermes, steering
+a run is: append a line (or POST), then watch `/state.json` and
+`run/progress.log` for the verdict and the outcome.
 
 ### Running a single leg
 

@@ -103,10 +103,13 @@ class SupervisorLog:
 
     def record_proposal(self, *, model: str, context: dict, state, world,
                         step, proposal, proposal_error: Optional[str],
-                        verdict, decision: str, returned_goal
+                        verdict, decision: str, returned_goal,
+                        planner: str = "llm"
                         ) -> Optional[str]:
         """Log one proposal round. Returns the record_id (None when
-        disabled) so the outcome can be linked back to it."""
+        disabled) so the outcome can be linked back to it. `planner`
+        names the proposer: "llm" for LLMPlanner; the live-redirect
+        channel (directives.py) passes "external"."""
         if not self.enabled:
             return None
         t, ts = _now()
@@ -116,7 +119,7 @@ class SupervisorLog:
             "record_id": record_id,
             "t": t,
             "ts": ts,
-            "planner": "llm",
+            "planner": planner,
             "model": model,
             # The exact context the model was shown - this becomes the
             # training example's user turn verbatim.

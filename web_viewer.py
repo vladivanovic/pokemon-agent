@@ -15,9 +15,16 @@ nothing but http.server:
     GET  /frame.png  the current game frame (PNG, 160x144 x3)
     GET  /state.json map / badges / money / party / current phase
     POST /control    {"action": "start" | "stop"}
+    POST /directive  one live-redirect directive (the same JSON the
+                     --directives file channel takes: {"goal": ...}
+                     or {"action": "pause" | "resume" | "stop"});
+                     the page's redirect form posts here
 
 The provider is duck-typed: anything with frame_png() -> bytes|None,
-state_dict() -> dict and control(action) -> dict. Frame reads are
+state_dict() -> dict and control(action) -> dict; /directive also
+uses directive(obj) -> dict when the provider offers one (the runner
+appends to the run's directive file - one channel, two doors).
+Frame reads are
 unsynchronised reads of the emulator's screen buffer from the HTTP
 thread while the game thread ticks - worst case is a torn frame in
 the viewer, never a control input. State reads are WRAM reads, the
@@ -79,6 +86,22 @@ PAGE = """<!DOCTYPE html>
     </table>
     <h2>Party</h2>
     <table id="party"></table>
+    <h2>Redirect this run</h2>
+    <div style="font-size:12px; color:#8fa1b3; margin-bottom:6px;">
+      A goal is validated against the live state before it runs;
+      rejections are logged with the reason. It takes effect at the
+      next phase boundary or executor round.</div>
+    <textarea id="dirGoal" rows="3" style="width:100%; box-sizing:border-box;
+      background:#0a0c0e; color:#d7dee6; border:1px solid #39424e;
+      border-radius:4px; font:inherit; font-size:12px;"
+      >{"target_map_name": "ViridianCity", "reason": "detour"}</textarea>
+    <div style="margin-top:6px;">
+      <button id="btnGoal">Send goal</button>
+      <button id="btnPause">Pause</button>
+      <button id="btnResume">Resume</button>
+      <button id="btnDirStop">Stop run</button>
+      <span id="dirMsg" style="font-size:12px; color:#9fb0c0;"></span>
+    </div>
     <h2>Progress</h2>
     <div id="log"></div>
   </div>
@@ -93,6 +116,36 @@ PAGE = """<!DOCTYPE html>
   }
   document.getElementById('btnStart').onclick = function(){ ctl('start'); };
   document.getElementById('btnStop').onclick = function(){ ctl('stop'); };
+  function directive(obj) {
+    fetch('/directive', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(obj)}).then(function(r){ return r.json(); })
+    .then(function(d){
+      document.getElementById('dirMsg').textContent =
+        d.ok ? 'queued' : ('refused: ' + (d.error || '?'));
+      tickState();
+    }).catch(function(){});
+  }
+  function sendGoal() {
+    var raw = document.getElementById('dirGoal').value;
+    var obj;
+    try { obj = JSON.parse(raw); }
+    catch(e) {
+      document.getElementById('dirMsg').textContent = 'bad JSON: ' + e;
+      return;
+    }
+    // A bare goal object is wrapped; a full {"goal":...} or
+    // {"action":...} directive is sent as written.
+    if (obj && !obj.goal && !obj.action) obj = {goal: obj};
+    directive(obj);
+  }
+  document.getElementById('btnGoal').onclick = sendGoal;
+  document.getElementById('btnPause').onclick =
+    function(){ directive({action: 'pause'}); };
+  document.getElementById('btnResume').onclick =
+    function(){ directive({action: 'resume'}); };
+  document.getElementById('btnDirStop').onclick =
+    function(){ directive({action: 'stop'}); };
   function tickState() {
     fetch('/state.json').then(function(r){ return r.json(); })
     .then(function(d){
@@ -164,7 +217,8 @@ def make_server(host: str, port: int, provider):
     """Build (but do not start) the viewer HTTP server.
 
     provider: object with frame_png() -> bytes | None,
-    state_dict() -> dict, control(action: str) -> dict.
+    state_dict() -> dict, control(action: str) -> dict, and
+    optionally directive(obj) -> dict for POST /directive.
     """
 
     class Handler(BaseHTTPRequestHandler):
@@ -203,6 +257,22 @@ def make_server(host: str, port: int, provider):
                 except Exception:
                     action = ""
                 body = json.dumps(provider.control(action)).encode()
+                self._send(200, body, "application/json")
+            elif self.path.startswith("/directive"):
+                n = int(self.headers.get("Content-Length") or 0)
+                try:
+                    req = json.loads(self.rfile.read(n) or b"{}")
+                except Exception:
+                    req = None
+                fn = getattr(provider, "directive", None)
+                if req is None:
+                    res = {"ok": False, "error": "body is not JSON"}
+                elif fn is None:
+                    res = {"ok": False,
+                           "error": "no directive channel on this run"}
+                else:
+                    res = fn(req)
+                body = json.dumps(res).encode()
                 self._send(200, body, "application/json")
             else:
                 self._send(404, b"not found", "text/plain")
