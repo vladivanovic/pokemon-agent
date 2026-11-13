@@ -63,13 +63,112 @@ rewrite is summarised at the bottom.
 ## Run it
 
 ```bash
-python3 -m unittest discover -s tests   # 52 tests
+python3 -m unittest discover -s tests   # the test suite
 python3 run_demo.py                     # simulated opening: Pallet -> Pewter
 ```
 
 The demo walks the actual opening of the game — starter from Oak's Lab,
 Oak's Parcel from Viridian Mart, delivery, then north to Pewter City — in
-530 simulated button presses.
+530 simulated button presses, against the simulated backend (no ROM
+needed).
+
+## Play the whole game (real ROM)
+
+`play_full_game.py` plays the **entire game in one process** — power-on
+→ intro → all eight badges → Elite Four → Champion → Hall of Fame — by
+sequencing the same ported leg functions in `run_real.py` that produced
+the completed save line ([`docs/supervisor-training.md`](docs/supervisor-training.md)
+§§1–28). It checkpoints after every phase and retries a failed phase
+from its start checkpoint (max 2 by default, then it stops and reports —
+it never skips a phase silently).
+
+Prerequisites: Python ≥ 3.10 and PyBoy:
+
+```bash
+pip install -e .[pyboy]        # or simply: pip install pyboy
+```
+
+You also need a Pokémon Red ROM, which is **not distributed with this
+repo**: supply your own, or build one from pret/pokered (RGBDS) — that
+build is byte-identical to retail Red (SHA1
+ea9bcae617fdf159b045185467ae58b2e4a48b9a), which is what everything here
+was verified against.
+
+```bash
+export POKERED_ROM=/path/to/pokered.gbc   # or pass --rom each time
+
+python3 play_full_game.py                    # the full game, headless
+python3 play_full_game.py --web 8000         # + the live viewer (below)
+python3 play_full_game.py --list-phases      # the 34-phase table
+python3 play_full_game.py --out run --resume # continue an interrupted run
+python3 play_full_game.py --from-phase silph --state some.state
+```
+
+Checkpoints land in `run/checkpoints/NN-phase.state`, with a running
+`run/progress.log` carrying RAM-verified badges/party/money per phase.
+Save states stay out of git; they are plain files and copy between
+machines byte-for-byte.
+
+### Live viewer
+
+`--web PORT` serves a small page (Python stdlib only, no extra
+dependencies): the live game screen, map/badges/party/dex, the current
+phase, and Start/Stop controls. It binds **localhost by default**; to
+watch an Orin run from another machine on your LAN, add
+`--host 0.0.0.0`. Add `--web-manual` to wait for the page's Start
+button instead of starting immediately. (The NousResearch-era
+dashboard under `legacy/` is wired to the legacy driver and kept for
+reference; this viewer is the supported one — see `web_viewer.py` for
+why.)
+
+### Running a single leg
+
+Every storyline leg is a function in `run_real.py`, and the pattern the
+game was built with is: load a save state, build an executor, call the
+leg, verify from RAM.
+
+```python
+emu = PyBoyEmulator(rom)
+emu.load_state("some.state"); emu.tick(30)
+ex = Executor(emu, default_world(), ChecklistPlanner(),
+              EpisodicMemory(), battle_policy=SmartFightPolicy())
+rock_tunnel_leg(emu, ex)   # ...or any other leg
+```
+
+`run_real.py`'s own `main()` still plays the opening standalone
+(through the Vermilion hooks):
+
+```bash
+python3 run_real.py --rom /path/to/pokered.gbc --workdir run
+```
+
+### On an Orin (AGX / Nano)
+
+The deterministic agent is light — PyBoy plus the world model — and
+ran the full stack on an AGX Orin 64GB in November 2026 (the
+supervisor live run, docs §8). An Orin Nano Super is fine for it too.
+The only heavy optional piece is the supervisor LLM
+(`--supervisor adapter|stock`, applied to the opening planner); it is
+**off by default** — the deterministic line is the product. The
+scripts set the headless SDL dummy drivers themselves; no display is
+needed.
+
+### Honesty note
+
+Each phase is individually proven against the real ROM, and most
+segments were cold-replayed from checkpoints during the build; the
+phase chain in `play_full_game.py` is that same code, with the save
+line's decisions baked in (Squirtle, Fire Stone → Arcanine, Hitmonlee,
+Surf + Strength on Lapras, the Route 16 Snorlax caught — Master Ball
+never thrown — and the League team). What has *not* yet been done is a
+single-process power-on-to-credits soak of the runner itself; that is
+the remaining hardening step, and the checkpoint/retry design exists
+so a soak — or your own run — stops loudly at a phase boundary
+instead of corrupting a save line. Three segments are hand-written
+glue rather than single ported functions (the Fly leg's journeys:
+`fly-journey`, `snorlax-journey`, `teach-fly`), assembled from the
+same primitives along the legs' documented routes; treat their first
+full-run outing as part of the soak.
 
 ## On a real ROM (PyBoy)
 
