@@ -2310,3 +2310,169 @@ No port this leg: route22_rival does not exist until a
 policy actually beats him. Battle-driver lessons banked
 above (shift-prompt B-decline; move-membership checks;
 watchdog) belong in any future trainer-battle driver.
+
+## 27. The road to Indigo — completed (2026-11-12/13, probe165, port + cold replay probe166): the Silph playbook again, and the switch that was a coordinate swap
+
+Vlad's call (2026-11-12) was the Silph precedent,
+verbatim: "Grind first, then re-fight him." Executed
+from probe164/prepped.state (the S26 prep checkpoint:
+Viridian, healed, the 8,400-yen stock in the bag); the
+chain head before it (probe162/viridian.state,
+143,866 yen) is untouched.
+
+**The grind (probe165a/b).** Venue picked from compiled
+pokered pools: Pokemon Mansion 1F (Koffing 30/32,
+Ponyta 28-34, Growlithe 34, Grimer 30, Weezing 37,
+Muk 39 — ~610 avg solo XP/fight, the richest unfought
+pool reachable without passing the rival; the Power
+Plant tops out lower per fight). Lead-and-solo,
+per-level checkpoints, HP gate 55% / damaging-PP gate
+10, free Cinnabar PC heal trips (no item spend; the
+bought stock stays reserved for the road):
+Blastoise 62 -> 66 in 73 fights, 1 heal trip;
+Arcanine 39 -> 48 in ~97 fights over two runs (the
+first died on a Mansion-exit bug at Lv45 — the street
+door is the WEST room's south mats (4-7,27), not the
+(26,27) strip door — resumed from checkpoint), 3 heal
+trips on the resume. Zero blackouts, zero spend.
+Lessons banked: a probe file named `inspect.py`
+shadows the stdlib and poisons imports; `fly_to`
+needs a `wait_free` settle after loading a state (the
+probe166 boundary race, below).
+
+**The re-fight (probe165c) — won on attempt 1.** The
+two S26 driver fixes rode along (B-decline on the
+shift prompt; moveset-aware cascade + watchdog), plus
+the policy delta that mattered: **Alakazam is
+Arcanine's fight.** The S26 hard rule switched
+Blastoise in and fed it a switch-turn Psychic at
+63 HP; at Lv48 Arcanine stays in and Bites (Alakazam's
+Defense is paper): Bite 123 -> 56 -> KO, Arcanine
+untouched. Gyarados: Hydro Pump cap 2 — both pumps
+hit, Blastoise took ZERO damage-dealt back (the S26
+tax simply never landed). Venusaur slept first try
+(Oddish Sleep Powder) and took Ember x3 from
+Arcanine. Payout +3,445 -> 138,911 yen. Side effect,
+reported not chosen: Oddish participated, levelled
+to 24 and evolved into Gloom on the road (dex
+27 -> 28).
+
+**Route 23 (probe165d).** Viridian heal, the gate,
+all five badge guards passed at their object
+coordinates, one surf stretch (12,103) -> (11,70),
+ending in front of the VR door at (4,32).
+
+**Victory Road (probe165e + the endgame drives).**
+1F: the "switch" is a boulder switch — BOULDER1
+(5,15) in 18 pushes onto (17,13) [event 2327]; the
+opened gate block's passable row is its NORTH row.
+2F switch 1: (4,14) west/south onto (1,16) [event
+1336]; gate 1; the long loop to the (23,7) ladder.
+Fight toll in VR: Blastoise levelled 66 -> 67 in
+trainer fights and the typed driver burned Hydro
+Pump to 0 PP; trainer payouts +2,545 -> 141,456 yen.
+
+Then the routing problem that ate the middle of the
+leg. The design, read from the scripts:
+`Route23SetVictoryRoadBoulders` (runs on Route 23
+entry) hides 2F's BOULDER3 and resets both 2F switch
+events and the 3F hole event; 3F's hole handler is
+what shows BOULDER3 again (HideObject on the 3F
+boulder that falls, ShowObject on the 2F one, event
+1638). So switch 2's boulder does not exist until a
+3F boulder falls through the hole at (23,15) — the
+hole drop is mandatory, a branch state that tried to
+push BOULDER3 directly was chasing a ghost.
+
+Reaching the hole took three unlocks, each a lesson:
+
+1. **The push-aware save-state BFS lied.** A BFS over
+   (player cell, boulder cells) from the 3F landing
+   exhausted at 406 states and "proved" the south
+   unreachable — its step edges silently dropped real
+   steps (held-input drift / frozen-player loads), so
+   the exhaustion was over a subgraph. The engine is
+   the only oracle: a hand-driven column-12 walk
+   (rows 6 -> 11) walked straight into the band's
+   north strip. A BFS whose edges are sampled steps
+   must verify its step model before its verdicts
+   are believed.
+2. **dbmapcoord stores (y, x).** 3F's switch is
+   scripted as `dbmapcoord 3, 5`, long read as cell
+   (3,5)-the-wall or as a red herring. The macro emits
+   `db \2, \1` and CheckBoulderCoords compares
+   (Y, X) — so the switch cell is (3,5) after all:
+   ordinary floor in the NW room by the (2,0) warp.
+   Its boulder is B1 (22,3), which rides the top band
+   west (row 1, leapfrogging with rows 0/2 as the
+   return lane), drops into the NW room and pushes
+   east (2,5) -> (3,5). The gate (block (3,5) -> $1d,
+   cells (6-7,10-11)) opens the west platform; the
+   (17,5) tile-21 stairs are the platform massif's
+   only other door (pair (5,42) seals its edges), and
+   (1,9)'s matching stairs drop into the south band.
+3. **Tile 5 is a one-way texture, not a wall.** The
+   south band was "sealed" by three separate wrong
+   reads — B2's alcove plug (its second push is
+   genuinely refused, destination tile 5), the west
+   platform's (1,6) -> (1,7) refusal (pair (5,32)),
+   and gate rows — while the real path ran through
+   two tile-21 stairs cells and the gate the B1
+   switch opens. Pair-collision forbids (5,32),
+   (5,42), (5,65), (5,33); stairs (21) pair with
+   everything, which is exactly how the floors stack.
+
+The drop itself: B4 pushed east from stance (21,15)
+onto (23,15); the fall and the dungeon warp process
+when the PLAYER steps onto the hole cell after it —
+the player lands on 2F at (22,16) with BOULDER3
+visible at (23,16), pushed west x14 onto switch 2
+(9,16) [event 1343]. Exit via gate 2's north row,
+ladder (25,14) -> 3F (27,15), the east column,
+ladder (26,8) -> 2F pocket, door (29,7) -> Route 23
+(14,31) — the door warp needed an off-and-back-on
+step. **Moltres (2F (11,5)) was never engaged** —
+the route never enters its room or its sight; the
+whole VR traverse from the 3F landing ran with zero
+battles and money constant at 141,456 yen.
+
+**Indigo Plateau.** North edge from (18,32), lobby
+entered — and `heal_at_pokecenter` FAILS there: its
+standard-layout assumption does not fit the Plateau
+lobby. The nurse (sprite at (7,5)) is talked to
+across her counter from (7,7); healed manually,
+party full HP/PP (Hydro Pump back to 5). New chain
+head: probe165/indigo.state, sha256 54a0d6c5…f47 —
+Indigo Plateau (9,6), Blastoise 67 / Arcanine 48 /
+Voltorb 16 / Gloom 24 / Lapras 15 / Pidgey 3, money
+141,456 yen, dex 28, badges 8, bag 20 stacks (Master
+Ball never thrown; the prep stock untouched: Super
+Potion x6, Revive x2, Full Heal x2). The leg ends
+here by design: the League is the next leg, gated
+on Vlad's team and item decisions.
+
+**Port.** route22_prep, mansion_grind, route22_rival,
+route23_passage and victory_road (plus _ride_menu,
+_battle_enemy, _exit_building and the VR machinery)
+are in run_real.py; the manual lobby heal is encoded
+as driven, with the heal_at_pokecenter failure noted
+in the docstring. Suite 174/174 (10 new tests:
+pokered switch-coord parses for VR2F/VR3F, push-table
+chain checks, fence pins). Cold replay (probe166, from probe162/viridian.state
+through the ported functions only): prep spend exact
+(8,400 yen); grind True (Blastoise 66 in 71 fights /
+1 trip, Arcanine 48 in 104 fights / 10 trips, 0
+blackouts); the rival fight won identically (event
+1318 set, money 138,911 yen exact, party untouched) —
+but the ported verdict first read the event flag
+inside the fight and raced the post-battle script
+that sets it during the exit scene; the verdict now
+reads after the scene ride. Route 23 passage True,
+endpoint exact. Victory Road traversed and healed to
+a state field-identical to the probe chain head —
+after the same class of race in the heal verification
+(the nurse restores member by member) was fixed with
+a settle-retry verify; the re-run returns True and
+lands at Indigo Plateau (9,6), money 141,456 yen.
+Two read-too-early races, both in verification reads,
+both fixed in the port; no gameplay logic changed.

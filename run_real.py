@@ -11492,6 +11492,1102 @@ def viridian_gym(emu: PyBoyEmulator, ex: Executor) -> bool:
         and all(m.hp == m.max_hp for m in st.party)
 
 
+# ---------------------------------------------------------------------
+# The road to Indigo (probe165, 2026-11-12/13): Vlad's Silph
+# playbook for the Route 22 rival - grind first, then re-fight -
+# then Route 23 and Victory Road in one unbroken visit, ending
+# healed at Indigo Plateau. The League itself is a separate leg
+# (Vlad's team/item calls gate it).
+#
+# Fences (Vlad's, hard): no catches (wilds fled; the Master Ball
+# is never thrown), no TM teaching, no stat items, no party
+# swaps or evolution projects; Moltres and Articuno are never
+# engaged (the Victory Road route stays south/east of the
+# Moltres room and never enters its sight). In-game purchases:
+# the probe164 prep stock only (Super Potion x6, Revive x2,
+# Full Heal x2 at Fuchsia, 8,400 yen), reported to the yen.
+
+SP_GYARADOS = 0x16
+SP_GROWLITHE = 0x21
+SP_ALAKAZAM = 0x95
+SP_VENUSAUR = 0x9A
+SP_BLASTOISE = 0x1C
+SP_ARCANINE = 0x14
+SP_ODDISH = 0xB9
+
+MOVE_HYDRO_PUMP = 56
+MOVE_WATER_GUN = 55
+MOVE_BUBBLE = 145
+MOVE_BITE = 44
+MOVE_EMBER = 52
+MOVE_SLEEP_POWDER = 79
+
+EV_BEAT_RIVAL2_R22 = 1318
+EV_RIVAL2_WANTS = 1319
+EV_VR1_BOULDER = 2327
+EV_VR2_SWITCH1 = 1336
+EV_VR2_SWITCH2 = 1343
+EV_VR3_HOLE = 1638
+
+ITEM_HELIX_FOSSIL = 0x2A
+ITEM_SILPH_SCOPE = 0x48
+ITEM_SUPER_POTION = 0x13
+ITEM_REVIVE = 0x35
+ITEM_FULL_HEAL = 0x34
+
+FUCHSIA_MART_LIST = [0x02, 0x03, ITEM_SUPER_POTION, ITEM_REVIVE,
+                     ITEM_FULL_HEAL, 0x1F]  # ULTRA, GREAT, SP, REV, FH, SREPEL
+
+
+def _exit_building(emu: PyBoyEmulator, ex: Executor,
+                   map_id: int) -> bool:
+    """Walk out of a building via its known door mats
+    (probe164a; standard Pokecenter/mart south doors)."""
+    for door in ((3, 7), (4, 7), (7, 11), (8, 11)):
+        try:
+            ex._walk_to(map_id, door)
+        except StuckError:
+            continue
+        for _ in range(6):
+            emu.press("down")
+            _explore_settle(emu)
+            if emu.read_state().map_id != map_id:
+                return True
+    return emu.read_state().map_id != map_id
+
+
+def _battle_enemy(emu: PyBoyEmulator):
+    """(species, hp, max_hp, level) of the enemy in battle,
+    read from WRAM (probe164a)."""
+    mem = emu.pb.memory
+    sp = mem[ADDR_ENEMY_SPECIES]
+    hp = (mem[0xCFE6] << 8) | mem[0xCFE7]
+    mx = (mem[0xD007] << 8) | mem[0xD008]
+    lv = mem[0xD006]
+    return sp, hp, mx, lv
+
+
+def _ride_menu(emu: PyBoyEmulator) -> str:
+    """Ride battle text/menus to the next main-menu decision,
+    DECLINING the trainer-battle shift prompt (the S26 driver
+    fix from probe164a): when the enemy's mon faints the game
+    asks 'Will VLAD change POKEMON?'; A presses answer YES and
+    open the party list, where A re-selects the active mon
+    forever. One B at that screen cancels the shift cleanly.
+    A 0-HP battle mon at the same cursor is instead the faint
+    screen, which _ride_to_battle_menu's picker handles."""
+    mem = emu.pb.memory
+    for _ in range(400):
+        st = emu.read_state()
+        if not st.in_battle:
+            return "over"
+        if mem[ADDR_MENU_TOP_Y] == 1:
+            bhp = (mem[ADDR_BATTLE_MON_HP] << 8) | \
+                mem[ADDR_BATTLE_MON_HP + 1]
+            if bhp == 0:
+                if _ride_to_battle_menu(emu) == "over":
+                    return "over"
+                continue
+            _press10(emu, "b")
+            emu.tick(45)
+            continue
+        if _battle_menu_sig(emu) == (14, 0, 9):
+            return "menu"
+        if st.in_dialog:
+            _press10(emu, "a")
+            emu.tick(20)
+            continue
+        emu.tick(25)
+    return "menu" if emu.read_state().in_battle else "over"
+
+
+def _mon_of(emu: PyBoyEmulator, species_id: int):
+    for i, m in enumerate(emu.read_state().party):
+        if m.species_id == species_id:
+            return i, m
+    return None, None
+
+
+def route22_prep(emu: PyBoyEmulator, ex: Executor):
+    """The S26 road prep (probe164a): at Viridian, deposit the
+    S.S. TICKET / HELIX FOSSIL / SILPH SCOPE (bag room), FLY to
+    Fuchsia, buy Super Potion x6 + Revive x2 + Full Heal x2
+    (8,400 yen - the only purchase of the road legs), FLY back.
+    Returns the total spend, or None on failure."""
+    world = ex.world
+    pc = world.map_id("ViridianPokecenter")
+    mart = world.map_id("FuchsiaMart")
+    money0 = emu.read_state().money
+    if not _ride_or_cross(emu, ex, pc):
+        return None
+    for item in (ITEM_SS_TICKET, ITEM_HELIX_FOSSIL,
+                 ITEM_SILPH_SCOPE):
+        if _bag_count(emu, item) >= 1:
+            if not deposit_item(emu, ex, pc, item):
+                return None
+    if len(_bag_items(emu)) != 17:
+        return None
+    if not _exit_building(emu, ex, pc):
+        return None
+    if not fly_to(emu, ex, "FUCHSIA CITY"):
+        return None
+    if not _ride_or_cross(emu, ex, mart):
+        return None
+    for item, want in ((ITEM_SUPER_POTION, 6), (ITEM_REVIVE, 2),
+                       (ITEM_FULL_HEAL, 2)):
+        idx = FUCHSIA_MART_LIST.index(item)
+        got = buy_mart_item(emu, ex, mart, idx, item, want)
+        if got < want:
+            return None
+    if not _exit_building(emu, ex, mart):
+        return None
+    if not fly_to(emu, ex, "VIRIDIAN CITY"):
+        return None
+    return money0 - emu.read_state().money
+
+
+# --- the grind (probe165a): Pokemon Mansion 1F, lead-and-solo ---
+
+def _enter_mansion(emu: PyBoyEmulator, ex: Executor) -> bool:
+    world = ex.world
+    cin = world.map_id("CinnabarIsland")
+    m1 = world.map_id("PokemonMansion1F")
+    if emu.read_state().map_id == m1:
+        return True
+    if emu.read_state().map_id != cin:
+        return False
+    _surf_walk_to(emu, ex, cin, (6, 3))
+    return emu.read_state().map_id == m1
+
+
+def _exit_mansion(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """The mansion's street door is the WEST room's south mats
+    (4-7,27) - entry lands at (5,27) and one step down exits
+    to Cinnabar (6,4). (26,27) is the 1F strip's east door,
+    reachable only via the B1F fall route."""
+    world = ex.world
+    m1 = world.map_id("PokemonMansion1F")
+    cin = world.map_id("CinnabarIsland")
+    if emu.read_state().map_id != m1:
+        return emu.read_state().map_id == cin
+    _walk_fighting(emu, ex, m1, (5, 27), attempts=25,
+                   flee_wild=True)
+    if emu.read_state().map_id == cin:
+        return True
+    _overlay_nav(emu, ex, m1, (5, 26),
+                 _mansion_overlay(emu, world, m1))
+    for _ in range(8):
+        if emu.read_state().map_id == cin:
+            return True
+        emu.press("down")
+        _explore_settle(emu)
+    return emu.read_state().map_id == cin
+
+
+def _grind_heal_trip(emu: PyBoyEmulator, ex: Executor,
+                     species_id: int) -> bool:
+    """Mansion -> Cinnabar PC heal -> re-enter -> re-lead.
+    Free heals only: the bought stock is reserved for the
+    road run (the Silph pattern)."""
+    world = ex.world
+    pc = world.map_id("CinnabarPokecenter")
+    if not _exit_mansion(emu, ex):
+        return False
+    if not _ride_or_cross(emu, ex, pc):
+        return False
+    if not heal_at_pokecenter(emu, ex, pc):
+        return False
+    if emu.read_state().map_id == pc:
+        _exit_building(emu, ex, pc)
+    if emu.read_state().map_id == pc:
+        return False
+    if not party_lead(emu, species_id):
+        return False
+    return _enter_mansion(emu, ex)
+
+
+_GRIND_PACE_ENDS = [(2, 26), (9, 26)]
+
+
+def _grind_one(emu: PyBoyEmulator, ex: Executor,
+               species_id: int, target: int):
+    """Lead-and-solo grind of one species to `target` in the
+    Mansion 1F west room (row-26 pacing; Gen 1 pays a fainted
+    participant nothing). HP gate 55% / damaging-PP gate 10
+    trigger free PC heal trips instead of item spend. Grind
+    blackouts are recoverable and do NOT count toward any
+    rival stop rule. Returns (ok, fights, trips, blackouts)
+    (probe165a)."""
+    world = ex.world
+    m1 = world.map_id("PokemonMansion1F")
+    fights = 0
+    trips = 0
+    blackouts = 0
+    leg = 0
+    while True:
+        idx, mon = _mon_of(emu, species_id)
+        if mon is None:
+            return False, fights, trips, blackouts
+        if mon.level >= target:
+            break
+        if mon.hp == 0 or mon.hp < 0.55 * mon.max_hp \
+                or _damaging_pp(emu, idx) <= 10:
+            trips += 1
+            if not _grind_heal_trip(emu, ex, species_id):
+                return False, fights, trips, blackouts
+            continue
+        if emu.read_state().map_id != m1:
+            if not _enter_mansion(emu, ex):
+                return False, fights, trips, blackouts
+        dest = _GRIND_PACE_ENDS[leg % 2]
+        leg += 1
+        _ok, fought = _walk_fighting(emu, ex, m1, dest,
+                                     attempts=25)
+        fights += fought
+        emu.wait_free(max_rounds=8, stable_needed=2)
+        st = emu.read_state()
+        idx, mon = _mon_of(emu, species_id)
+        if all(m.hp == 0 for m in st.party):
+            blackouts += 1
+            # the game warps to the last PC, healed
+            for _ in range(20):
+                if emu.read_state().map_id != m1:
+                    break
+                emu.tick(30)
+            pc = world.map_id("CinnabarPokecenter")
+            if emu.read_state().map_id == pc:
+                _exit_building(emu, ex, pc)
+            if not party_lead(emu, species_id):
+                return False, fights, trips, blackouts
+            if not _enter_mansion(emu, ex):
+                return False, fights, trips, blackouts
+            continue
+    return True, fights, trips, blackouts
+
+
+def mansion_grind(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """The grind (probe165a): FLY to Cinnabar, enter the
+    Mansion (1F pool: Koffing/Ponyta/Growlithe/Grimer/
+    Weezing/Muk, ~610 avg solo XP - the richest unfought pool
+    reachable without passing the rival), lead-and-solo
+    BLASTOISE 62 -> 66 (bulk for the Gyarados Dragon Rage tax
+    and Alakazam's Psychic) and ARCANINE 39 -> 48 (its Bite
+    becomes the real Alakazam answer). The typed driver uses
+    the last damaging move with PP, so Hydro Pump's 5 PP
+    stay untouched. Entry: healed, anywhere Fly can leave
+    (the probe ran it from the Viridian prep checkpoint)."""
+    emu.wait_free(max_rounds=8, stable_needed=2)
+    if not fly_to(emu, ex, "CINNABAR ISLAND"):
+        return False
+    if not _enter_mansion(emu, ex):
+        return False
+    ok1 = _grind_one(emu, ex, SP_BLASTOISE, 66)
+    if not ok1[0]:
+        return False
+    if not party_lead(emu, SP_ARCANINE):
+        return False
+    ok2 = _grind_one(emu, ex, SP_ARCANINE, 48)
+    if not ok2[0]:
+        return False
+    print(f"grind done: blastoise={ok1} arcanine={ok2}",
+          flush=True)
+    return True
+
+
+# --- the Route 22 re-fight (probe165c) ---
+
+def _fight_route22_rival(emu: PyBoyEmulator,
+                         ex: Executor) -> bool:
+    """The winning Route 22 rival policy at the ground levels
+    (Blastoise 66 / Arcanine 48), per-enemy:
+    * Gyarados is BLASTOISE's fight: Hydro Pump cap 2 (fewer
+      turns = less flat-40 Dragon Rage tax), then Water Gun.
+    * Alakazam is ARCANINE's fight: it stays in and Bites
+      (~85-100 vs Alakazam's paper Defense). NEVER switch
+      Blastoise in - the S26 loss was a switch-turn Psychic
+      at 63 HP, then Arcanine died the same way.
+    * Growlithe: Arcanine Bite duty (switch at HP >= 100).
+    * Venusaur: Oddish Sleep Powder, then Ember (Arcanine)
+      or Water Gun on the sleeper.
+    * Elsewhere: Hydro Pump economy (cap 2 per big enemy, 5
+      total), Water Gun/Bubble for Blastoise, Bite for
+      Arcanine; the tail cascade is moveset-aware (the S26
+      watchdog fix) with a 30-turn no-progress watchdog.
+    Returns EVENT_BEAT_ROUTE22_RIVAL_2ND read from RAM."""
+    mem = emu.pb.memory
+    hydro_cap = {SP_GYARADOS: 2, SP_ALAKAZAM: 2,
+                 SP_VENUSAUR: 2}
+    hydro_used = {k: 0 for k in hydro_cap}
+    hydro_total = [0]
+    seen = [None]
+    oddish_spent = [False]
+    last_sig = [None]
+    stale = [0]
+    for _turn in range(90):
+        st = emu.read_state()
+        if not st.in_battle:
+            break
+        r = _ride_menu(emu)
+        if r == "over" or not emu.read_state().in_battle:
+            break
+        sp, hp, _mx, _lv = _battle_enemy(emu)
+        sig = (sp, hp,
+               sum(m.hp for m in emu.read_state().party))
+        if sig == last_sig[0]:
+            stale[0] += 1
+            if stale[0] >= 30:
+                break    # watchdog: no progress in 30 turns
+        else:
+            stale[0] = 0
+            last_sig[0] = sig
+        if sp != seen[0]:
+            seen[0] = sp
+        active = mem[ADDR_BATTLE_MON_SPECIES]
+        st = emu.read_state()
+        party = {m.species_id: m for m in st.party}
+        blast = party.get(SP_BLASTOISE)
+        arc = party.get(SP_ARCANINE)
+        # --- Gyarados: Blastoise's fight
+        if sp == SP_GYARADOS and active != SP_BLASTOISE \
+                and blast and blast.hp > 0:
+            idx = _party_index_of(emu, SP_BLASTOISE)
+            _battle_switch_to(emu, idx)
+            continue
+        # --- Venusaur sleep plan
+        if sp == SP_VENUSAUR and not oddish_spent[0]:
+            odd = party.get(SP_ODDISH)
+            if _enemy_asleep(emu):
+                if active == SP_ARCANINE:
+                    _battle_use_move(emu, MOVE_EMBER)
+                elif active == SP_BLASTOISE:
+                    _battle_use_move(emu, MOVE_WATER_GUN)
+                elif arc and arc.hp > 30:
+                    idx = _party_index_of(emu, SP_ARCANINE)
+                    _battle_switch_to(emu, idx)
+                elif blast and blast.hp > 0:
+                    idx = _party_index_of(emu, SP_BLASTOISE)
+                    _battle_switch_to(emu, idx)
+                else:
+                    _battle_use_move(emu, 15)
+                continue
+            if active == SP_ARCANINE:
+                if odd and odd.hp > 0:
+                    idx = _party_index_of(emu, SP_ODDISH)
+                    _battle_switch_to(emu, idx)
+                else:
+                    idx = _party_index_of(emu, SP_BLASTOISE)
+                    _battle_switch_to(emu, idx)
+                continue
+            if active != SP_ODDISH and odd and odd.hp > 0:
+                idx = _party_index_of(emu, SP_ODDISH)
+                _battle_switch_to(emu, idx)
+                continue
+            if active == SP_ODDISH:
+                ok = _battle_use_move(emu, MOVE_SLEEP_POWDER)
+                if not ok:
+                    oddish_spent[0] = True
+                continue
+            oddish_spent[0] = True
+        # --- per-active policy
+        if active == SP_BLASTOISE:
+            if sp == SP_GROWLITHE and arc and arc.hp >= 100:
+                idx = _party_index_of(emu, SP_ARCANINE)
+                _battle_switch_to(emu, idx)
+                continue
+            if sp in hydro_cap \
+                    and hydro_used[sp] < hydro_cap[sp] \
+                    and hydro_total[0] < 5 \
+                    and blast and blast.pp[0] > 0:
+                ok = _battle_use_move(emu, MOVE_HYDRO_PUMP)
+                hydro_used[sp] += 1
+                hydro_total[0] += 1
+                continue
+            bi = _party_index_of(emu, SP_BLASTOISE)
+            mv = MOVE_WATER_GUN \
+                if emu.read_state().party[bi].pp[3] > 0 \
+                else MOVE_BUBBLE
+            _battle_use_move(emu, mv)
+            continue
+        if active == SP_ARCANINE:
+            if sp == SP_VENUSAUR:
+                _battle_use_move(emu, MOVE_EMBER)
+            else:
+                # Alakazam included: stay in and Bite.
+                _battle_use_move(emu, MOVE_BITE)
+            continue
+        # --- Alakazam with a tail mon active: get a lead in
+        if sp == SP_ALAKAZAM:
+            if arc and arc.hp > 60:
+                idx = _party_index_of(emu, SP_ARCANINE)
+                if _battle_switch_to(emu, idx):
+                    continue
+            if blast and blast.hp > 0:
+                idx = _party_index_of(emu, SP_BLASTOISE)
+                if _battle_switch_to(emu, idx):
+                    continue
+        mon = next((m for m in emu.read_state().party
+                    if m.species_id == active), None)
+        if mon is not None:
+            dmg = [mv for mv in mon.moves
+                   if mv not in (39, 45, 46, 77, 78, 103,
+                                 148)]
+            mv = dmg[-1] if dmg else mon.moves[0]
+            _battle_use_move(emu, mv)
+        else:
+            emu.tick(30)
+    return _event_flag(emu, EV_BEAT_RIVAL2_R22)
+
+
+def route22_rival(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """The re-fight (probe165c): from the Mansion after the
+    grind - exit, heal at the Cinnabar PC, re-lead Blastoise,
+    FLY to Viridian, cross to Route 22 and fight the rival at
+    the trigger (29,5). Won on attempt 1 at the new levels in
+    the probe (Gyarados took zero damage-dealt; Alakazam
+    answered by Arcanine's Bite; Venusaur slept first try).
+    Stop rule (Vlad's, Silph precedent): two blackouts to the
+    rival AT THESE LEVELS end the leg - the caller owns the
+    retry decision; this function makes one attempt and
+    reports the RAM event flag honestly."""
+    emu.wait_free(max_rounds=8, stable_needed=2)
+    world = ex.world
+    pc = world.map_id("CinnabarPokecenter")
+    r22 = world.map_id("Route22")
+    if emu.read_state().map_id == \
+            world.map_id("PokemonMansion1F"):
+        if not _exit_mansion(emu, ex):
+            return False
+    if not _ride_or_cross(emu, ex, pc):
+        return False
+    if not heal_at_pokecenter(emu, ex, pc):
+        return False
+    if emu.read_state().map_id == pc:
+        _exit_building(emu, ex, pc)
+    if not party_lead(emu, SP_BLASTOISE):
+        return False
+    if not fly_to(emu, ex, "VIRIDIAN CITY"):
+        return False
+    if not _ride_or_cross(emu, ex, r22):
+        return False
+    _walk_fighting(emu, ex, r22, (29, 5), attempts=40,
+                   flee_wild=True)
+    for _ in range(400):
+        st = emu.read_state()
+        if st.in_battle:
+            break
+        if st.in_dialog:
+            _press10(emu, "a")
+        emu.tick(25)
+    if not emu.read_state().in_battle:
+        return False
+    _fight_route22_rival(emu, ex)
+    # ride the exit scene out
+    for _ in range(400):
+        st = emu.read_state()
+        if not st.in_dialog and not st.in_battle:
+            emu.tick(60)
+            if not emu.read_state().in_dialog:
+                break
+        if st.in_dialog:
+            _press10(emu, "a")
+        emu.tick(25)
+    # the beat-rival event is set by the post-battle map
+    # script DURING the exit scene, so the verdict is read
+    # only now (probe166's replay read it inside the fight
+    # and raced it: event True, verdict False)
+    return _event_flag(emu, EV_BEAT_RIVAL2_R22)
+
+
+# --- Route 23 (probe165d) ---
+
+_R23_GUARDS = [(8, 136), (8, 119), (12, 105), (10, 56),
+               (4, 35)]
+
+
+def _r23_ride_dialog(emu: PyBoyEmulator,
+                     max_rounds: int = 200) -> bool:
+    for _ in range(max_rounds):
+        st = emu.read_state()
+        if st.in_battle:
+            _drive_battle_typed(emu, flee_wild=True)
+            continue
+        if not st.in_dialog:
+            emu.tick(45)
+            if not emu.read_state().in_dialog:
+                return True
+            continue
+        _press10(emu, "a")
+        emu.tick(20)
+    return not emu.read_state().in_dialog
+
+
+def _r23_walk(emu: PyBoyEmulator, ex: Executor,
+              goal) -> bool:
+    """Walk toward a Route 23 cell; on a stall next to a
+    badge guard, talk to him (the badge check) and retry."""
+    r23 = ex.world.map_id("Route23")
+    for _attempt in range(14):
+        st = emu.read_state()
+        if st.map_id != r23:
+            return False
+        if (st.x, st.y) == goal:
+            return True
+        _walk_fighting(emu, ex, r23, goal, attempts=10,
+                       flee_wild=True)
+        st = emu.read_state()
+        if (st.x, st.y) == goal:
+            return True
+        if st.in_battle:
+            _drive_battle_typed(emu, flee_wild=True)
+            continue
+        talked = False
+        for gx, gy in _R23_GUARDS:
+            if abs(st.x - gx) + abs(st.y - gy) == 1:
+                _face_and_talk(emu, (gx, gy))
+                _r23_ride_dialog(emu)
+                talked = True
+                break
+        if not talked:
+            dx = goal[0] - st.x
+            dy = goal[1] - st.y
+            d = "down" if dy > 0 else "up" if dy < 0 else \
+                "right" if dx > 0 else "left"
+            emu.press(d)
+            _explore_settle(emu)
+            _r23_ride_dialog(emu)
+    st = emu.read_state()
+    return (st.x, st.y) == goal
+
+
+def route23_passage(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Route 23 in one visit (probe165d): heal at the
+    Viridian PC after the rival, cross Route 22 west, through
+    the Route 22 Gate, then Route 23's badge-guard corridor
+    (all 8 badges held) and the surf stretch (Lapras), ending
+    in front of the Victory Road door at (4,32). Entering
+    Route 23 resets Victory Road's boulder events, so after
+    this function the run goes through VR in one unbroken
+    visit - no flying out."""
+    emu.wait_free(max_rounds=8, stable_needed=2)
+    world = ex.world
+    pc = world.map_id("ViridianPokecenter")
+    r22 = world.map_id("Route22")
+    gate = world.map_id("Route22Gate")
+    r23 = world.map_id("Route23")
+    if not _ride_or_cross(emu, ex, pc):
+        return False
+    if not heal_at_pokecenter(emu, ex, pc):
+        return False
+    if emu.read_state().map_id == pc:
+        _exit_building(emu, ex, pc)
+    if not _ride_or_cross(emu, ex, r22):
+        return False
+    if emu.read_state().map_id != r23:
+        # west end of R22 -> gatehouse south door (8,5),
+        # stepped onto from (8,6)
+        _walk_fighting(emu, ex, r22, (8, 6), attempts=30,
+                       flee_wild=True)
+        for _ in range(10):
+            if emu.read_state().map_id in (gate, r23):
+                break
+            emu.press("up")
+            _explore_settle(emu)
+            _r23_ride_dialog(emu)
+        if emu.read_state().map_id == gate:
+            _walk_fighting(emu, ex, gate, (4, 1), attempts=20,
+                           flee_wild=True)
+            for _ in range(10):
+                if emu.read_state().map_id == r23:
+                    break
+                emu.press("up")
+                _explore_settle(emu)
+                _r23_ride_dialog(emu)
+    if emu.read_state().map_id != r23:
+        return False
+    for goal in [(8, 133), (8, 116), (10, 111), (12, 104)]:
+        if (emu.read_state().x, emu.read_state().y) == goal:
+            continue
+        if not _r23_walk(emu, ex, goal):
+            return False
+    # the swim: shore (12,103) -> north shore (11,70)
+    if not _surf_walk_to(emu, ex, r23, (11, 70)):
+        return False
+    for goal in [(10, 57), (8, 50), (7, 45), (3, 40),
+                 (4, 33), (4, 32)]:
+        if not _r23_walk(emu, ex, goal):
+            return False
+    st = emu.read_state()
+    return st.map_id == r23 and (st.x, st.y) == (4, 32)
+
+
+# --- Victory Road (probe165e + the probe165 endgame) ---
+
+_VR_BOULDER_OBJS = {}
+_VR_BOULDER_STARTS = {}
+
+
+def _vr_tables(world):
+    if not _VR_BOULDER_OBJS:
+        vr1 = world.map_id("VictoryRoad1F")
+        vr2 = world.map_id("VictoryRoad2F")
+        vr3 = world.map_id("VictoryRoad3F")
+        _VR_BOULDER_OBJS.update(
+            {vr1: (5, 6, 7), vr2: (11, 12, 13),
+             vr3: (7, 8, 9, 10)})
+        _VR_BOULDER_STARTS.update(
+            {vr1: {(5, 15), (14, 2), (2, 10)},
+             vr2: {(4, 14), (5, 5), (23, 16)},
+             vr3: {(22, 3), (13, 12), (24, 10), (22, 15)}})
+    return _VR_BOULDER_OBJS
+
+
+def _vr_clear_battle(emu: PyBoyEmulator):
+    if emu.read_state().in_battle:
+        _drive_battle_typed(emu, flee_wild=True)
+        emu.wait_free(max_rounds=8, stable_needed=2)
+
+
+def _vr_thaw(emu: PyBoyEmulator):
+    """Unstick a frozen player: after some interruptions the
+    facing/animation state eats step inputs until a turn
+    cycle passes."""
+    for d in ("down", "left", "up"):
+        emu.press(d)
+        _explore_settle(emu)
+
+
+def _vr_walk(emu: PyBoyEmulator, ex: Executor, map_id: int,
+             goal, blocked=frozenset(), tries: int = 8) -> bool:
+    """_surf_walk_to with battle clears and retries. The
+    floor's boulder sprites are always blocked (solid, and
+    they never move on their own); trainers are NOT blocked
+    - the geometry avoids their sights, and where a fight is
+    planned the walker paths through the trainer's cell,
+    which he vacates when he engages (probe165e)."""
+    _vr_tables(ex.world)
+    for _ in range(tries):
+        st = emu.read_state()
+        if st.map_id != map_id:
+            return False
+        if (st.x, st.y) == goal:
+            return True
+        sprites = frozenset(
+            _boulder_cell(emu, k)
+            for k in _VR_BOULDER_OBJS.get(map_id, ()))
+        sprites = frozenset(c for c in sprites
+                            if c[0] >= 0
+                            and c != (st.x, st.y))
+        before = (st.x, st.y)
+        _surf_walk_to(emu, ex, map_id, goal,
+                      blocked0=blocked | sprites)
+        st2 = emu.read_state()
+        if (st2.x, st2.y) == before and not st2.in_battle:
+            _vr_thaw(emu)
+        _vr_clear_battle(emu)
+        st = emu.read_state()
+        if st.map_id != map_id:
+            return False
+        if (st.x, st.y) == goal:
+            return True
+    st = emu.read_state()
+    return st.map_id == map_id and (st.x, st.y) == goal
+
+
+def _vr_step_to(emu: PyBoyEmulator, ex: Executor, map_id: int,
+                cell) -> bool:
+    """Step onto an ADJACENT cell, verifying the exact
+    landing. For gate crossings and stairs the static graph
+    cannot see. Non-directional thaw (B presses) only: a
+    directional thaw can walk the player backwards out of a
+    door (probe165e)."""
+    for _try in range(12):
+        st = emu.read_state()
+        if st.map_id != map_id:
+            return False
+        if (st.x, st.y) == cell:
+            return True
+        dx, dy = cell[0] - st.x, cell[1] - st.y
+        if abs(dx) + abs(dy) != 1:
+            return False
+        d = {(0, -1): "up", (0, 1): "down",
+             (-1, 0): "left", (1, 0): "right"}[(dx, dy)]
+        _surf_step(emu, d)
+        if emu.read_state().in_battle:
+            _vr_clear_battle(emu)
+        if _try in (3, 7):
+            emu.press("b")
+            _explore_settle(emu)
+            emu.tick(30)
+    st = emu.read_state()
+    return st.map_id == map_id and (st.x, st.y) == cell
+
+
+def _vr_steps(emu: PyBoyEmulator, ex: Executor, map_id: int,
+              cells) -> bool:
+    for cell in cells:
+        if not _vr_step_to(emu, ex, map_id, cell):
+            return False
+    return True
+
+
+def _vr_find_boulder(emu: PyBoyEmulator, cell):
+    """Sprite index of the boulder currently at `cell`,
+    scanning sprite RAM (probe165e)."""
+    for k in range(1, 16):
+        if _boulder_cell(emu, k) == cell:
+            return k
+    return None
+
+
+def _vr_push(emu: PyBoyEmulator, ex: Executor, map_id: int,
+             cell, direction: str, expect,
+             blocked_extra=frozenset(),
+             walk_stance: bool = True) -> bool:
+    """One push of the boulder at `cell` in `direction`; it
+    must land exactly on `expect` (RAM-verified). Two engine
+    contacts per push; if the player followed the previous
+    push into this stance, the tried-push flag ignores the
+    contacts, so shuffle out and back first (probe165e)."""
+    world = ex.world
+    k = _vr_find_boulder(emu, cell)
+    if k is None:
+        return False
+    dx, dy = {"up": (0, -1), "down": (0, 1),
+              "left": (-1, 0), "right": (1, 0)}[direction]
+    stance = (cell[0] - dx, cell[1] - dy)
+    blocked = frozenset({cell}) | blocked_extra
+    start_cell = (emu.read_state().x, emu.read_state().y)
+    if walk_stance:
+        if not _vr_walk(emu, ex, map_id, stance,
+                        blocked=blocked):
+            return False
+    st = emu.read_state()
+    if (st.x, st.y) != stance:
+        return False
+    if start_cell == stance:
+        gm = world.maps[map_id]
+        warps = frozenset((wp.x, wp.y) for wp in gm.warps)
+        for d2, (ox, oy) in {"left": (-1, 0),
+                             "right": (1, 0),
+                             "up": (0, -1),
+                             "down": (0, 1)}.items():
+            if d2 == direction:
+                continue
+            tgt = (stance[0] + ox, stance[1] + oy)
+            if tgt == cell or tgt in warps:
+                continue
+            if not gm.tile_walkable(*tgt):
+                continue
+            _surf_step(emu, d2)
+            st = emu.read_state()
+            if (st.x, st.y) != tgt:
+                continue
+            back = {"left": "right", "right": "left",
+                    "up": "down", "down": "up"}[d2]
+            _surf_step(emu, back)
+            st = emu.read_state()
+            if (st.x, st.y) == stance:
+                break
+        st = emu.read_state()
+        if (st.x, st.y) != stance:
+            return False
+    if not _activate_strength(emu):
+        return False
+    for _try in range(4):
+        emu.press(direction)
+        _explore_settle(emu)
+        _vr_clear_battle(emu)
+        if _boulder_cell(emu, k) == expect:
+            return True
+    return False
+
+
+def _vr_push_retry(emu: PyBoyEmulator, ex: Executor,
+                   map_id: int, cell, direction: str,
+                   expect) -> bool:
+    """_vr_push with one retry: a failed stance shuffle
+    leaves the boulder unmoved, and the second call lands
+    it (the 3F row-1 leapfrog hiccup, probe165)."""
+    if _vr_push(emu, ex, map_id, cell, direction, expect):
+        return True
+    return _vr_push(emu, ex, map_id, cell, direction, expect)
+
+
+_VR1_PUSHES = [
+    ((5, 15), "down", (5, 16)),
+    ((5, 16), "right", (6, 16)),
+    ((6, 16), "right", (7, 16)),
+    ((7, 16), "right", (8, 16)),
+    ((8, 16), "up", (8, 15)),       # door-mat stance, special
+    ((8, 15), "right", (9, 15)),
+    ((9, 15), "up", (9, 14)),
+    ((9, 14), "right", (10, 14)),
+    ((10, 14), "right", (11, 14)),
+    ((11, 14), "right", (12, 14)),
+    ((12, 14), "right", (13, 14)),
+    ((13, 14), "right", (14, 14)),
+    ((14, 14), "right", (15, 14)),
+    ((15, 14), "right", (16, 14)),
+    ((16, 14), "up", (16, 13)),
+    ((16, 13), "up", (16, 12)),
+    ((16, 12), "right", (17, 12)),
+    ((17, 12), "down", (17, 13)),   # the switch cell
+]
+
+_VR2_SWITCH1_PUSHES = [
+    ((4, 14), "down", (4, 15)),
+    ((4, 15), "left", (3, 15)),
+    ((3, 15), "down", (3, 16)),
+    ((3, 16), "left", (2, 16)),
+    ((2, 16), "left", (1, 16)),     # the switch cell
+]
+
+# 3F: BOULDER B1 rides the top band west, drops into the
+# NW room and east onto the switch (3,5) - dbmapcoord
+# stores (y,x), so the script's "3,5" is cell (3,5), the
+# t45 floor by the (2,0) warp room. The gate it opens
+# (block (3,5) -> $1d) is the west platform's door.
+_VR3_SWITCH_PUSHES = (
+    [((22, 3), "up", (22, 2)), ((22, 2), "up", (22, 1))]
+    + [((x, 1), "left", (x - 1, 1)) for x in range(22, 6, -1)]
+    + [((6, 1), "down", (6, 2)), ((6, 2), "left", (5, 2)),
+       ((5, 2), "left", (4, 2)), ((4, 2), "left", (3, 2)),
+       ((3, 2), "left", (2, 2)), ((2, 2), "down", (2, 3)),
+       ((2, 3), "down", (2, 4)), ((2, 4), "down", (2, 5)),
+       ((2, 5), "right", (3, 5))])
+
+# From the switch room stance (2,5) to the switch room
+# itself: NW room -> top band -> column 22 -> row 6 ->
+# the (17,5) stairs (tile 21 is the massif's only door;
+# pair (5,42) seals every other edge) -> row 4 -> the
+# (9,9)/(9,10) pocket.
+_VR3_TO_SWITCHROOM = (
+    [(2, 4), (2, 3), (2, 2), (3, 2), (4, 2), (5, 2), (6, 2),
+     (6, 1)]
+    + [(x, 1) for x in range(7, 23)]
+    + [(22, y) for y in range(2, 7)]
+    + [(x, 6) for x in range(21, 16, -1)]
+    + [(17, 5), (17, 4)]
+    + [(x, 4) for x in range(16, 9, -1)]
+    + [(10, y) for y in range(5, 10)]
+    + [(9, 9), (9, 10)])
+
+# Through the opened gate, down the west platform stairs
+# (1,9), into the south band, along row 16 to the hole
+# stance (21,15).
+_VR3_TO_STANCE = (
+    [(8, 10), (7, 10), (6, 10), (5, 10), (5, 9), (5, 8),
+     (4, 8), (3, 8), (2, 8), (1, 8), (1, 9), (1, 10),
+     (1, 11), (1, 12), (1, 13), (1, 14), (1, 15), (2, 15),
+     (2, 16)]
+    + [(x, 16) for x in range(3, 22)]
+    + [(21, 15)])
+
+
+def victory_road(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """Victory Road + Indigo Plateau (probe165e, with the
+    endgame routing corrected live in probe165):
+    1F boulder onto switch (17,13) [event 2327], gate, ladder.
+    2F boulder onto switch 1 (1,16) [event 1336], gate 1, the
+    long loop to the (23,7) ladder.
+    3F: B1 (22,3) rides the top band to the NW-room switch
+    (3,5); the gate opens the west platform; the (1,9) stairs
+    drop into the south band; B4 is pushed east onto the
+    hole (23,15) [event 1638] and the player drops to 2F
+    (22,16), where the fallen boulder (BOULDER3, shown by
+    the hole script) is pushed west x14 onto switch 2
+    (9,16) [event 1343]; gate 2 -> ladder (25,14) -> 3F east
+    -> ladder (26,8) -> 2F NE pocket -> exit (29,7) -> R23
+    (14,31) -> north edge -> Indigo Plateau -> lobby heal.
+    Moltres (2F (11,5)) is never approached: the route stays
+    on rows 7+ and east/south of its room, and no step enters
+    its sight. Entry: Route 23 (4,32), in front of the VR
+    door (route23_passage's exit). Exit: Indigo Plateau,
+    party fully healed. Boulder positions and gate blocks
+    reset on every map entry and Route 23 entry resets the
+    cycle, so the whole road runs in one unbroken visit."""
+    emu.wait_free(max_rounds=8, stable_needed=2)
+    world = ex.world
+    vr1 = world.map_id("VictoryRoad1F")
+    vr2 = world.map_id("VictoryRoad2F")
+    vr3 = world.map_id("VictoryRoad3F")
+    r23 = world.map_id("Route23")
+    _vr_tables(world)
+    # enter VR 1F from the R23 doorstep
+    if emu.read_state().map_id != vr1:
+        for _ in range(8):
+            if emu.read_state().map_id == vr1:
+                break
+            emu.press("up")
+            _explore_settle(emu)
+    if emu.read_state().map_id != vr1:
+        return False
+    # --- 1F: boulder switch, gate, ladder up
+    for i, (cell, d, expect) in enumerate(_VR1_PUSHES):
+        if expect == (8, 15):
+            # door-mat stance: (7,17), then step east onto
+            # the mat (8,17) - the door warp does not fire
+            # on a sideways step
+            if not _vr_walk(emu, ex, vr1, (7, 17),
+                            blocked=frozenset({(8, 16)})):
+                return False
+            _surf_step(emu, "right")
+            st = emu.read_state()
+            if (st.x, st.y) != (8, 17):
+                return False
+            if not _vr_push(emu, ex, vr1, cell, d, expect,
+                            walk_stance=False):
+                return False
+        elif not _vr_push_retry(emu, ex, vr1, cell, d,
+                                expect):
+            return False
+    if not _event_flag(emu, EV_VR1_BOULDER):
+        return False
+    if not _vr_walk(emu, ex, vr1, (7, 12)):
+        return False
+    if not _vr_steps(emu, ex, vr1, [(8, 12), (9, 12),
+                                    (10, 12)]):
+        return False
+    for goal in [(12, 12), (12, 6), (7, 8), (2, 3), (2, 1)]:
+        if not _vr_walk(emu, ex, vr1, goal):
+            return False
+    for _ in range(6):
+        if emu.read_state().map_id == vr2:
+            break
+        emu.press("left")
+        _explore_settle(emu)
+        _vr_clear_battle(emu)
+    if emu.read_state().map_id != vr2:
+        return False
+    # --- 2F switch 1, gate 1, loop to the 3F ladder
+    for cell, d, expect in _VR2_SWITCH1_PUSHES:
+        if not _vr_push_retry(emu, ex, vr2, cell, d, expect):
+            return False
+    if not _event_flag(emu, EV_VR2_SWITCH1):
+        return False
+    if not _vr_walk(emu, ex, vr2, (5, 8)):
+        return False
+    if not _vr_steps(emu, ex, vr2, [(6, 8), (7, 8), (8, 8)]):
+        return False
+    if not _vr_walk(emu, ex, vr2, (23, 8), tries=12):
+        return False
+    for _ in range(6):
+        if emu.read_state().map_id == vr3:
+            break
+        emu.press("up")
+        _explore_settle(emu)
+        _vr_clear_battle(emu)
+    if emu.read_state().map_id != vr3:
+        return False
+    # --- 3F: B1 to the switch, gate, stairs, south band
+    for cell, d, expect in _VR3_SWITCH_PUSHES:
+        if not _vr_push_retry(emu, ex, vr3, cell, d, expect):
+            return False
+    if not _vr_steps(emu, ex, vr3, _VR3_TO_SWITCHROOM):
+        return False
+    if not _vr_steps(emu, ex, vr3, _VR3_TO_STANCE):
+        return False
+    # --- the hole drop: B4 east onto (23,15), then step on
+    # after it (the fall + dungeon warp process on the
+    # player's own step onto the hole cell)
+    k = _vr_find_boulder(emu, (22, 15))
+    if k is None:
+        return False
+    for _press in range(2):
+        emu.press("right")
+        _explore_settle(emu)
+        _vr_clear_battle(emu)
+        if emu.read_state().map_id == vr2:
+            break
+    st = emu.read_state()
+    if st.map_id != vr2 or (st.x, st.y) != (22, 16):
+        return False
+    if not _event_flag(emu, EV_VR3_HOLE):
+        return False
+    if _vr_find_boulder(emu, (23, 16)) is None:
+        return False    # the fallen boulder must be shown
+    # --- 2F switch 2: the fallen boulder west x14
+    for x in range(23, 9, -1):
+        if not _vr_push_retry(emu, ex, vr2, (x, 16), "left",
+                              (x - 1, 16)):
+            return False
+    if not _event_flag(emu, EV_VR2_SWITCH2):
+        return False
+    # --- exit: gate 2, ladders, the NE pocket door
+    if not _vr_steps(emu, ex, vr2,
+                     [(x, 16) for x in range(11, 22)]
+                     + [(21, 15), (21, 14), (22, 14),
+                        (23, 14), (24, 14)]):
+        return False
+    _vr_step_to(emu, ex, vr2, (25, 14))   # ladder warp
+    st = emu.read_state()
+    if st.map_id != vr3 or (st.x, st.y) != (27, 15):
+        return False
+    if not _vr_steps(emu, ex, vr3,
+                     [(27, y) for y in range(14, 8, -1)]
+                     + [(26, 9)]):
+        return False
+    _vr_step_to(emu, ex, vr3, (26, 8))    # ladder warp
+    st = emu.read_state()
+    if st.map_id != vr2 or (st.x, st.y) != (27, 7):
+        return False
+    if not _vr_step_to(emu, ex, vr2, (28, 7)):
+        return False
+    _vr_step_to(emu, ex, vr2, (29, 7))    # exit warp
+    if emu.read_state().map_id == vr2:
+        # the door warp can need an off-and-back-on step
+        _vr_step_to(emu, ex, vr2, (28, 7))
+        _vr_step_to(emu, ex, vr2, (29, 7))
+        emu.tick(120)
+        emu.wait_free(max_rounds=8, stable_needed=2)
+    if emu.read_state().map_id != r23:
+        return False
+    # --- Indigo Plateau: north edge, lobby, heal
+    indigo = world.map_id("IndigoPlateau")
+    lobby = world.map_id("IndigoPlateauLobby")
+    ok, _ = _walk_fighting(emu, ex, r23, (18, 32),
+                           attempts=25, flee_wild=True)
+    if not _ride_or_cross(emu, ex, indigo):
+        return False
+    if not _ride_or_cross(emu, ex, lobby):
+        return False
+    # heal_at_pokecenter's standard-layout assumption fails
+    # in the Plateau lobby; the nurse (7,5) is talked to
+    # across her counter from (7,7) (probe165, live-verified).
+    if not _vr_steps(emu, ex, lobby, [(7, 10), (7, 9),
+                                      (7, 8), (7, 7)]):
+        return False
+    emu.press("up")
+    emu.tick(30)
+    emu.press("a")
+    emu.tick(120)
+    for _ in range(30):
+        emu.wait_free(max_rounds=4, stable_needed=2)
+        lead = emu.read_state().party[0]
+        if lead.hp == lead.max_hp:
+            break
+        emu.press("a")
+        emu.tick(90)
+    # the heal animation restores the party member by
+    # member; verify on a settle-retry loop, not one read
+    # (probe166's replay raced this too: the state left
+    # behind was fully healed, the single read was not)
+    for _ in range(30):
+        emu.wait_free(max_rounds=4, stable_needed=2)
+        emu.tick(60)
+        st = emu.read_state()
+        if all(m.hp == m.max_hp for m in st.party):
+            break
+    st = emu.read_state()
+    if any(m.hp != m.max_hp for m in st.party):
+        return False
+    if emu.read_state().map_id == lobby:
+        _exit_building(emu, ex, lobby)
+    st = emu.read_state()
+    return st.map_id == indigo and all(
+        m.hp == m.max_hp for m in st.party)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--rom", required=True, help="path to a Pokemon Red ROM")

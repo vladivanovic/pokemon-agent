@@ -960,3 +960,123 @@ class TestViridianLeg(unittest.TestCase):
         self.assertNotIn("VictoryRoad", src)
         self.assertIn("ITEM_GOOD_ROD", src)
         self.assertIn("deposit_item", src)
+
+
+class TestRoadToIndigo(unittest.TestCase):
+    """probe165: the road to Indigo - the Mansion grind
+    (Silph playbook), the Route 22 re-fight, Route 23 and
+    Victory Road to the Plateau heal. Data pins from
+    pokered + the live probe165 runs (docs S27)."""
+
+    def _pokered(self, *parts):
+        from pathlib import Path
+        p = (Path(rr.__file__).resolve().parent.parent
+             / "pokered").joinpath(*parts)
+        if not p.exists():
+            self.skipTest("pokered tree not present")
+        return p.read_text()
+
+    def test_road_functions_wired(self):
+        for fn in (rr.route22_prep, rr.mansion_grind,
+                   rr.route22_rival, rr.route23_passage,
+                   rr.victory_road, rr._fight_route22_rival,
+                   rr._grind_one, rr._vr_push, rr._vr_walk,
+                   rr._vr_step_to, rr._ride_menu,
+                   rr._battle_enemy, rr._exit_building):
+            self.assertTrue(callable(fn))
+
+    def test_road_constants(self):
+        self.assertEqual(rr.EV_BEAT_RIVAL2_R22, 1318)
+        self.assertEqual(rr.EV_VR1_BOULDER, 2327)
+        self.assertEqual(rr.EV_VR2_SWITCH1, 1336)
+        self.assertEqual(rr.EV_VR2_SWITCH2, 1343)
+        self.assertEqual(rr.EV_VR3_HOLE, 1638)
+        self.assertEqual(rr.FUCHSIA_MART_LIST,
+                         [0x02, 0x03, 0x13, 0x35, 0x34,
+                          0x1F])
+
+    def test_vr_switch_tables_end_on_switches(self):
+        self.assertEqual(rr._VR1_PUSHES[-1][2], (17, 13))
+        self.assertEqual(rr._VR2_SWITCH1_PUSHES[-1][2],
+                         (1, 16))
+        self.assertEqual(rr._VR3_SWITCH_PUSHES[-1][2],
+                         (3, 5))
+        self.assertEqual(rr._VR3_TO_STANCE[-1], (21, 15))
+        self.assertEqual(rr._VR3_TO_SWITCHROOM[-1],
+                         (9, 10))
+        self.assertEqual(rr._VR3_TO_STANCE[0], (8, 10))
+
+    def test_push_tables_chain(self):
+        # every push starts where the previous one landed
+        for table in (rr._VR1_PUSHES,
+                      rr._VR2_SWITCH1_PUSHES,
+                      rr._VR3_SWITCH_PUSHES):
+            for prev, nxt in zip(table, table[1:]):
+                self.assertEqual(prev[2], nxt[0])
+
+    def test_step_tables_are_adjacent_chains(self):
+        for table in (rr._VR3_TO_SWITCHROOM,
+                      rr._VR3_TO_STANCE):
+            for a, b in zip(table, table[1:]):
+                self.assertEqual(
+                    abs(a[0] - b[0]) + abs(a[1] - b[1]), 1)
+
+    def _switch_coords(self, script, marker):
+        asm = self._pokered("scripts", script)
+        block = asm.split(marker, 1)[1].split("db -1", 1)[0]
+        out = []
+        for line in block.splitlines():
+            line = line.strip()
+            if line.startswith("dbmapcoord"):
+                nums = line.split("dbmapcoord", 1)[1]
+                x, y = [t.strip() for t in
+                        nums.split(";")[0].split(",")]
+                out.append((int(x), int(y)))
+        return out
+
+    def test_vr2_switch_coords_match_pokered(self):
+        self.assertEqual(
+            self._switch_coords("VictoryRoad2F.asm",
+                                ".SwitchCoords:"),
+            [(1, 16), (9, 16)])
+
+    def test_vr3_switch_hole_coords_match_pokered(self):
+        self.assertEqual(
+            self._switch_coords("VictoryRoad3F.asm",
+                                ".SwitchOrHoleCoords:"),
+            [(3, 5), (23, 15)])
+
+    def test_grind_targets(self):
+        import inspect
+        src = inspect.getsource(rr.mansion_grind)
+        self.assertIn("SP_BLASTOISE, 66", src)
+        self.assertIn("SP_ARCANINE, 48", src)
+
+    def test_rival_policy_pins(self):
+        # Alakazam is Arcanine's fight (the S26 lesson);
+        # the shift prompt is declined via _ride_menu.
+        import inspect
+        src = inspect.getsource(rr._fight_route22_rival)
+        self.assertIn("SP_ALAKAZAM", src)
+        self.assertIn("MOVE_BITE", src)
+        self.assertIn("MOVE_SLEEP_POWDER", src)
+        self.assertIn("_ride_menu", src)
+
+    def test_road_fences(self):
+        import inspect
+        # Vlad's fences, pinned in the source: no ball is
+        # ever thrown on the road legs, no TM is taught,
+        # and Moltres is named as never approached.
+        for fn in (rr.mansion_grind, rr.route22_rival,
+                   rr.route23_passage, rr.victory_road):
+            src = inspect.getsource(fn)
+            self.assertNotIn("_throw_ball", src)
+            self.assertNotIn("teach_", src)
+            self.assertNotIn("ITEM_MASTER_BALL", src)
+        src = inspect.getsource(rr.victory_road)
+        self.assertIn("Moltres", src)
+        # the only purchase in the road legs is the prep
+        src = inspect.getsource(rr.route22_prep)
+        self.assertIn("ITEM_SUPER_POTION, 6", src)
+        self.assertIn("ITEM_REVIVE, 2", src)
+        self.assertIn("ITEM_FULL_HEAL, 2", src)
