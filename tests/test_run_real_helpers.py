@@ -1310,3 +1310,92 @@ class TestLeagueLeg(unittest.TestCase):
         src = inspect.getsource(rr.elite_four)
         self.assertIn("Hall of Fame", src)
         self.assertIn("Pallet", src)
+
+
+class BattleFakeEmu:
+    """Fake emu for the probe168 battle helpers: bytearray
+    memory + a party of SimpleNamespace mons with moves/pp."""
+
+    def __init__(self, moves, pp, disabled=0):
+        self.memory = bytearray(0x10000)
+        self.pb = SimpleNamespace(memory=self.memory)
+        self.memory[rr.ADDR_PLAYER_DISABLED_MOVE] = disabled
+        self._party = [SimpleNamespace(species_id=0x9C,
+                                       moves=list(moves),
+                                       pp=list(pp))]
+
+    def read_state(self):
+        return SimpleNamespace(party=list(self._party))
+
+
+class TestPickBattleMove(unittest.TestCase):
+    # Blastoise's chain moveset: Hydro Pump 56, Tail Whip 39
+    # (status), Bubble 145, Water Gun 55.
+    MOVES = [56, 39, 145, 55]
+
+    def test_no_disable_picks_last_damaging(self):
+        emu = BattleFakeEmu(self.MOVES, [5, 30, 30, 25])
+        self.assertEqual(rr._pick_battle_move(emu, 0), 55)
+
+    def test_disabled_move_is_skipped(self):
+        # The probe168 Muk stall: Disable locked Water Gun,
+        # the driver's usual pick.
+        emu = BattleFakeEmu(self.MOVES, [5, 30, 30, 25],
+                            disabled=55)
+        self.assertEqual(rr._pick_battle_move(emu, 0), 145)
+
+    def test_disabled_and_dry_falls_back(self):
+        emu = BattleFakeEmu(self.MOVES, [5, 30, 0, 25],
+                            disabled=55)
+        self.assertEqual(rr._pick_battle_move(emu, 0), 56)
+
+    def test_all_locked_or_dry_returns_none(self):
+        emu = BattleFakeEmu(self.MOVES, [0, 30, 0, 25],
+                            disabled=55)
+        self.assertIsNone(rr._pick_battle_move(emu, 0))
+
+
+class TestLearnPromptState(unittest.TestCase):
+    def classify(self, text, top_y=3, max_item=0):
+        emu = BattleFakeEmu([55], [25])
+        emu.memory[rr.ADDR_MENU_TOP_Y] = top_y
+        emu.memory[rr.ADDR_MAX_MENU_ITEM] = max_item
+        orig = rr._screen_text
+        rr._screen_text = lambda e: text
+        try:
+            return rr._learn_prompt_state(emu)
+        finally:
+            rr._screen_text = orig
+
+    def test_learn_prompt_is_decline(self):
+        self.assertEqual(
+            self.classify("VENONAT is trying to learn STUN",
+                          max_item=1),
+            "decline")
+
+    def test_make_room_variant_is_decline(self):
+        self.assertEqual(
+            self.classify("But it can only make room by",
+                          max_item=1),
+            "decline")
+
+    def test_abandon_box_is_confirm(self):
+        self.assertEqual(
+            self.classify("Abandon learning the move?",
+                          max_item=1),
+            "confirm_abandon")
+
+    def test_forget_list_is_cancel(self):
+        self.assertEqual(
+            self.classify("Which move should be forgotten?",
+                          top_y=8, max_item=3),
+            "cancel_forget")
+
+    def test_evolution_is_flagged(self):
+        self.assertEqual(
+            self.classify("What? VENONAT is evolving!"),
+            "evolving")
+
+    def test_plain_battle_is_none(self):
+        self.assertIsNone(
+            self.classify("Wild KOFFING appeared!"))

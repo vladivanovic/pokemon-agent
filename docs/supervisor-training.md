@@ -2663,3 +2663,218 @@ mid-battle item path, declined three times and not
 re-offered. The main storyline — eight badges, the
 Elite Four, the Champion, the Hall of Fame — is
 COMPLETE.
+
+## 29. Post-game leg 1 (probe168, 2026-11-13 + resumed 2026-11-17): the dex audit, two failed Safari hunts, and the sweep that took the dex from 28 to 65
+
+Vlad's call after the League: keep going — Pokédex
+completion and the Safari leftovers. This leg was
+INTERRUPTED: the coordinator process was killed by a
+runtime interruption on 2026-11-13 at ~16:31 JST,
+mid-sweep, and never reported. The leg was resumed on
+2026-11-17 from its own on-disk artifacts — the audit
+ledger, the hunt log, and `work.state` (verified from
+RAM at the resume: Celadon Mansion roof, ¥112,355,
+dex 29) — not restarted. What follows is the full
+account of both halves.
+
+### The audit (Phase 1, pre-interruption)
+
+`agent/dex_audit.py` (ported this leg from the probe's
+`audit_data.py`; its output is byte-identical to the
+probe's `ledger.json`) compiles every species'
+reachability from pokered sources — encounter tables,
+rod groups, prizes, trades, gifts — and closes over
+level/item evolutions (trade evolutions deliberately
+do not propagate). Verdict for a solo Red cartridge
+with this run's one-way choices already spent
+(Squirtle starter, Helix fossil, Hitmonlee):
+**ceiling 124** = 123 obtainable + 1 of the 3
+choice-locked Eeveelutions. The 25 unobtainable:
+11 Blue exclusives (incl. the Pinsir/Magmar lines'
+bases), 4 trade evolutions counted as evolutions,
+the Kabuto line, Hitmonchan, Mew, and the 6 unchosen
+starter-line species. Anomalies: none — every
+unobtainable species has a stated reason. The full
+ledger lives in the goal workspace
+(`hidden_files/dex-ledger.json`).
+
+### Safari hunt 1 (pre-interruption, 6 entries, ¥3,000) — CLOSED, failed
+
+West WAS reached (the §28 "unreachable" note is
+superseded). 40 encounters logged. **Tauros: 4
+sightings, all fled. Scyther: 4 sightings, all fled.
+Neither caught.** The bait A/B experiment completed:
+**unbaited 11/23 caught vs baited 5/17 — unbaited
+wins**; the target arm was set to U for the rest of
+the programme. One new species fell out of the hunt:
+Nidorina (dex 28→29). Per-target detail: each of the
+8 target sightings took exactly 1 ball before the
+mon fled (1 of Tauros's and 1 of Scyther's were
+baited-arm; the rest unbaited).
+
+### The sweep (resumed 2026-11-17) — dex 29 → 65
+
+In chain order, each step RAM-verified with a named
+checkpoint state in probe168:
+
+- **Celadon (s2-celadon):** Eevee collected from the
+  mansion roof (dex 30) — collected, NOT evolved; the
+  either/or is Vlad's. Gloom→Vileplume and a boxed
+  Exeggcute→Exeggutor by Leaf Stone; Slowpoke from
+  the Celadon pond (Good Rod).
+- **North loop (s2b-karp → s3-north):** the ¥500
+  Magikarp bought; Mt. Moon yielded Zubat, Geodude,
+  Clefairy and the 1F Moon Stone ball; Cerulean Gym
+  water (Super Rod group 3) yielded Goldeen and
+  Psyduck; the Pewter Museum back room gave the Old
+  Amber; Route 3 gave Jigglypuff; Viridian Forest
+  gave Caterpie and Metapod.
+- **Cinnabar (s4a-omanyte → s4b-cinnabar):** Helix
+  Fossil revived to Omanyte, Old Amber revived to
+  Aerodactyl; the south-beach Super Rod stance
+  (10,13) produced Poliwag (Good Rod), Staryu,
+  Horsea and Shellder; Water Stones closed Starmie
+  and Cloyster.
+- **The grind (s5-grind):** switch-training at the
+  Pokémon Mansion under the prompt-aware driver —
+  Butterfree, Gyarados, Pidgeotto, Poliwhirl,
+  Poliwrath (the third Water Stone), Kakuna,
+  Beedrill, Raticate, Fearow, Electrode, Dugtrio,
+  Dragonair, Dodrio, Venomoth, and Nidoking by Moon
+  Stone. Final dex **65**.
+
+Spends, to the yen. Leg start ¥125,855.
+Pre-interruption: hunt 1 fees ¥3,000 + stones
+(2 Leaf + 3 Water @ ¥2,100) ¥10,500 = ¥13,500
+(balance at resume ¥112,355 ✓). This window: Poké
+Balls ¥4,000 ×3 (Cerulean restocks), Magikarp ¥500,
+trainer income +¥275, hunt 2 fees ¥2,500 (see
+below). **Final money ¥97,630** — every figure
+reconciles against the stage dumps.
+
+### Safari hunt 2 (2026-11-17, 6 more entries authorised by Vlad) — CLOSED, failed
+
+Policy per the authorisation and the hunt-1 verdict:
+unbaited ball-only throws, rocks holstered, owned
+dupes fled, stop early only if BOTH targets fell.
+84 encounters logged. **Scyther: 4 sightings, 37
+balls thrown (1 + 12 + 12 + 12 — three encounters
+ran to the per-encounter ball cap), all fled.
+Tauros: 0 sightings. Neither caught.** The budget
+is spent; a further authorisation is Vlad's call.
+Two honest complications: (1) entry 5 was cut short
+by a service restart on the VM — its partial
+encounters are in `hunt2_log.json`, but its ¥500 fee
+died with the process, so the surviving chain paid
+5 fees (¥2,500) for 6 entry sessions; no seventh
+session was run to "make it up". (2) Across both
+hunts the combined target record is Tauros 4
+sightings / 4 balls and Scyther 8 sightings / 41
+balls, zero catches — at a 4.3% encounter rate and
+Gen 1 Safari flee mechanics, these two are a
+long-tail grind, and the ledger notes Scyther has
+an alternative source: Game Corner prize, 5,500
+coins.
+
+### What the sweep taught (all live-verified)
+
+- **The nickname screen is a trap.** Fossil revival
+  (any GivePokemon) asks "give a nickname?" AFTER the
+  box write; A-mashing answers YES and lands on the
+  nickname keyboard, which is not a dialog — every
+  movement executor then spins forever. Answer NO
+  with B presses until the dialog clears. The same
+  root cause explained the pre-interruption "missing
+  Eevee" mystery: `_GivePokemon` sets the dex bit
+  BEFORE the box write lands, so a dex-only
+  completion check snapshots mid-gift.
+- **Evolution B-cancel.** The guarded advance's
+  faint-B (skip the "hurt by poison" text) keeps
+  landing while `menu_top_y` is stale at 12 through
+  the EndOfBattle evolution window — and B there
+  CANCELS the evolution. The grind variant presses B
+  only while the enemy is alive. Two grinds first
+  "succeeded" with zero evolutions before this was
+  understood; their checkpoints were poisoned and
+  deleted.
+- **The learn prompt is a state, not a text.** It
+  fires inside the battle-end sequence; once the
+  YES/NO box replaces the prompt text, a text watcher
+  is blind and the next A forgets slot 0 (the §28
+  Sleep Powder pattern, repeated on Venonat's Lv30
+  Stun Spore before the fix). The shipped classifier
+  (`_learn_prompt_state` in run_real, ported this
+  leg) reads screen text + menu bytes and names four
+  states — decline / confirm-abandon (declining is
+  TWO menus) / cancel-forget / evolving — and every
+  advance step in the grind checks it before pressing
+  anything. Venonat's Lv30 audit then passed with
+  Tackle intact.
+- **Learnset audits are engine-exact.** One learnset
+  check per level-up, by the pre-evolution form, at
+  exactly the final level gained (multi-level gains
+  skip intermediate levels permanently — Pidgey lost
+  its Lv5 Sand-Attack this way); an evolution at
+  level L triggers a second check by the new form at
+  exactly L (Gyarados learned Bite on evolving).
+- **Disable can lock the driver's favourite move.**
+  A wild Muk disabled Water Gun — `_last_damaging_move`'s
+  pick — and the finish loop waited forever at the
+  move list. `_pick_battle_move` (ported) excludes
+  `wPlayerDisabledMove` (0xD06D). Two sibling stalls
+  fell out of the same grind: the Gen 1 battle-menu
+  cursor PERSISTS across turns (steer it back to
+  FIGHT instead of pressing A onto ITEM), and a stray
+  A can open the bag mid-battle (B out; Oak's "not
+  the time" text loops on A forever).
+- Mart inventories differ: Cinnabar sells no Poké
+  Balls. Encounter deserts are real (MtMoonB1F's
+  ladder room ~1 battle/600 paced steps vs ~19/300
+  on the main floor). The executor's planner can
+  spin at 99% CPU on some building exits — kill and
+  reroute beats waiting.
+
+### Port + state
+
+Ported into the repo this leg: `agent/dex_audit.py`
+(ledger builder, output verified identical),
+`_pick_battle_move` / `_disabled_move_id` /
+`_learn_prompt_state` in run_real.py, and 14 tests
+(suite 223 → **237, all green**). The probe-side
+machinery that did not generalise (the learned-graph
+`live_nav`, the mansion DFS router, `pace_catch`,
+the PC box-rotation helpers) stays in probe168 with
+this section as its documentation.
+
+**Final chain head: `probe168/s6-hunt2-e6.state`,
+sha256 f2d0554204eda9f1fab5299e9478e4cf87089982a762c7aade1ff2fa58c9d840**
+— Fuchsia Pokécenter, dex 65, money ¥97,630, badges
+8. Eevee sits unevolved in box 3. Unspent as ordered:
+Master Ball, Rare Candy, HP Up, Carbos; no TMs
+taught; no new Safari entries beyond the two
+authorised budgets.
+
+### Left for leg 2 (58 obtainable + the Eevee choice)
+
+Easy: Pidgeot (L36 grind), Ekans, Mankey→Primeape,
+Abra, Machop, Tentacool→Tentacruel, Gastly, Drowzee,
+Onix, Cubone, the Mansion commons (Koffing, Ponyta,
+Grimer), Krabby (Cerulean group 3), the three
+in-game trades (Farfetch'd, Mr. Mime, Jynx —
+counterpart species owned or trivially re-caught),
+Omastar (L40), and ONE of Clefable/Nidoqueen (one
+Moon Stone remains). Grindy: Dragonite (L55),
+Rapidash, Haunter. Location blocks: Cerulean Cave
+(Arbok, Raichu, Golbat, Kadabra, Magneton, Hypno,
+Ditto, Wigglytuff, Marowak, Rhydon), Seafoam wilds
+(Golduck, Slowbro, Seel, Dewgong, Seadra — the
+islands' wilds are not fenced, only Articuno is),
+Power Plant (Pikachu, Magnemite, Electabuzz, and
+the Zapdos static — deferred, not fenced).
+Gated behind Vlad's decisions: the Eeveelution;
+Porygon (9,999 coins) and Scyther's prize
+alternative (5,500 coins); the second Moon Stone
+for whichever of Clefable/Nidoqueen loses the first;
+any further Safari entries for Tauros/Scyther; and
+the fenced three — Articuno, Moltres, Mewtwo —
+which stay unengaged unless Vlad says otherwise.

@@ -12848,6 +12848,71 @@ def _last_damaging_move(emu: PyBoyEmulator, idx: int,
     return pick
 
 
+# wPlayerDisabledMove (pokered ram/wram.asm, sym 00:d06d): the
+# move id locked by Disable, 0 when none. Set by the enemy's
+# Disable on the move the player mon used last.
+ADDR_PLAYER_DISABLED_MOVE = 0xD06D
+
+
+def _disabled_move_id(emu: PyBoyEmulator) -> int:
+    return emu.pb.memory[ADDR_PLAYER_DISABLED_MOVE]
+
+
+def _pick_battle_move(emu: PyBoyEmulator, idx: int):
+    """_last_damaging_move with the Disable lock honoured.
+
+    probe168's Mansion grind stalled for whole 120s caps
+    because a wild Muk's Disable locked Water Gun - exactly
+    the move _last_damaging_move picks for Blastoise - and
+    the driver kept waiting at the move list for a main-menu
+    signature that never came. Returns the same last-wins
+    damaging move with PP, skipping the disabled id; None
+    when every damaging move is dry or locked."""
+    mon = emu.read_state().party[idx]
+    disabled = _disabled_move_id(emu)
+    pick = None
+    for mv, pp in zip(mon.moves, mon.pp):
+        if mv in _MOVE_INFO and pp > 0 and mv != disabled:
+            pick = mv
+    return pick
+
+
+def _learn_prompt_state(emu: PyBoyEmulator):
+    """Classify a pending move-learn / evolution prompt from
+    STATE (screen text + menu bytes), or None.
+
+    probe168 generalised the sec.28 lesson: the learn prompt
+    fires inside the battle-end sequence, and once its YES/NO
+    box replaces the prompt text a text-only watcher goes
+    blind - the next blind A accepts YES and forgets slot 0
+    (how Gloom lost Sleep Powder). The signatures come from
+    pokered engine/pokemon/learn_move.asm: the TryingToLearn
+    text ("trying to" / "make room") with wMaxMenuItem == 1;
+    the follow-up "Abandon learning ...?" box, also max == 1
+    (declining is a TWO-menu sequence: NO, then YES-abandon);
+    the forget list is its own menu, wTopMenuItemY == 8 with
+    max == wNumMovesMinusOne == 3; evolution text contains
+    "evolving".
+
+    Returns "decline" (answer NO at the learn YES/NO),
+    "confirm_abandon" (answer YES at the abandon box),
+    "cancel_forget" (B out of the forget list), "evolving"
+    (A only - never B), or None."""
+    mem = emu.pb.memory
+    text = _norm_text(_screen_text(emu))
+    max_item = mem[ADDR_MAX_MENU_ITEM]
+    if ("trying to" in text or "make room" in text) \
+            and max_item == 1:
+        return "decline"
+    if "Abandon learning" in text and max_item == 1:
+        return "confirm_abandon"
+    if mem[ADDR_MENU_TOP_Y] == 8 and max_item == 3:
+        return "cancel_forget"
+    if "evolving" in text:
+        return "evolving"
+    return None
+
+
 def _guarded_advance(emu: PyBoyEmulator, sp: int, plan,
                      log, tag: str, rounds: int = 160) -> str:
     """_advance_battle's logic with a tripwire: the moment
