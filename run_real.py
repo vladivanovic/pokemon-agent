@@ -1356,7 +1356,13 @@ def _catch_current(emu: PyBoyEmulator) -> bool:
                 return False
             if mem[ADDR_MENU_TOP_Y] == 14 and not st.in_dialog:
                 break                # broke free; menu is live
-            if st.in_dialog or mem[ADDR_MENU_TOP_Y] not in (12, 14):
+            if mem[ADDR_MENU_TOP_Y] == 4:
+                # probe171: a throw can leave the ITEM
+                # list open (top_y 4); A is ignored there,
+                # one B closes it to the battle menu
+                _raw(emu, "b", hold=4, settle=22)
+                emu.tick(60)
+            elif st.in_dialog or mem[ADDR_MENU_TOP_Y] not in (12, 14):
                 press_a()
             else:
                 emu.tick(30)
@@ -10764,7 +10770,13 @@ def _throw_ball_ordered(emu: PyBoyEmulator, ball_id: int,
             emu.tick(30)
             if mem[ADDR_MENU_TOP_Y] == 14:
                 return "broke"
-        if st.in_dialog or mem[ADDR_MENU_TOP_Y] not in (12, 14):
+        if mem[ADDR_MENU_TOP_Y] == 4:
+            # probe171: a throw can leave the ITEM list
+            # open (top_y 4); A is ignored there, one B
+            # closes it to the battle menu
+            _press10(emu, "b")
+            emu.tick(60)
+        elif st.in_dialog or mem[ADDR_MENU_TOP_Y] not in (12, 14):
             _press10(emu, "a")
         emu.tick(25)
     return "broke" if emu.read_state().in_battle else "over"
@@ -15206,14 +15218,19 @@ def _throw_ball_careful(emu, ball_id):
 
 def _catch_current_careful(emu, ball_id, max_balls=25):
     """Catch the mon in front of us with throw_ball_careful
-    + the standard post-throw ride (press A through text /
-    the dex page; stop when the battle menu is back)."""
+    + the post-throw ride. The ride's shape is probe171's
+    diagnosis (leg 4, the Tangela hunts): after a careful
+    throw the battle ITEM list STAYS OPEN (menu top_y 4,
+    cursor resting on the thrown ball, a dialog pending)
+    while the throw resolves, and A presses there are
+    ignored - a ride that only presses A times out and
+    the catch reads as 'got away', so the hunt flees a
+    live battle having spent exactly one ball. One B
+    press closes the list back to the battle menu. And
+    in_dialog reads True at the settled battle menu, so
+    'menu live' is proven by _advance_battle's cursor
+    wiggle, never by the dialog flag."""
     mem = emu.pb.memory
-
-    def press_a():
-        _raw(emu, "a", hold=4, settle=22)
-        emu.tick(30)
-
     before = _stored_count(emu)
     for _attempt in range(max_balls):
         if _bag_count(emu, ball_id) == 0:
@@ -15223,22 +15240,30 @@ def _catch_current_careful(emu, ball_id, max_balls=25):
             return False
         if r == "over":
             return _stored_count(emu) > before
-        for _ride in range(240):
+        for _ride in range(120):
             if _stored_count(emu) > before:
                 return _catch_epilogue(emu, before + 1)
             st = emu.read_state()
             if not st.in_battle:
                 return _stored_count(emu) > before
-            if mem[ADDR_MENU_TOP_Y] == 14 and not st.in_dialog:
-                break                # broke free
-            if st.in_dialog or mem[ADDR_MENU_TOP_Y] \
-                    not in (12, 14):
-                press_a()
-            else:
-                emu.tick(30)
+            if mem[ADDR_MENU_TOP_Y] == 4:
+                # the leftover bag list: B closes it
+                _press10(emu, "b")
+                emu.tick(60)
+                continue
+            if _advance_battle(emu) == "menu":
+                break                # broke free, menu live
         else:
             return False
     return _stored_count(emu) > before
+
+
+# Pacing directions between two adjacent hunt cells.
+# probe171: _hunt_paired referenced this constant but it
+# was never ported from probe169's catch_lib (a NameError
+# on first use) - defined here now.
+_PACE_DIRS = {(0, -1): "up", (0, 1): "down",
+              (-1, 0): "left", (1, 0): "right"}
 
 
 def _hunt_paired(emu, ex, cell_a, cell_b, targets, ball_id,

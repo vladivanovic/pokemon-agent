@@ -1480,3 +1480,17 @@ class TestLeagueGuardSwitch(unittest.TestCase):
             self._snap(), "lance", rr.SP_GYARADOS,
             ("move", 56))
         self.assertEqual(act, ("move", 56))
+
+
+class TestHuntPairedPaceDirs(unittest.TestCase):
+    """probe171 regression: _hunt_paired referenced
+    _PACE_DIRS, which the SS30 port never brought over
+    from probe169's catch_lib - a NameError on first
+    use. The constant must cover exactly the four unit
+    deltas between adjacent hunt cells."""
+
+    def test_pace_dirs_cover_unit_deltas(self):
+        self.assertEqual(
+            rr._PACE_DIRS,
+            {(0, -1): "up", (0, 1): "down",
+             (-1, 0): "left", (1, 0): "right"})

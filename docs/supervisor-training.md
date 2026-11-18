@@ -3380,3 +3380,154 @@ exactly one, caught this leg, so a second Slowbro
 from Seafoam B2F makes the trade free). Fenced
 unless Vlad says otherwise: ARTICUNO, MOLTRES,
 MEWTWO.
+
+## 32. Post-game leg 4 (probe171, 2026-11-18): the free four, the Cut/Flash pair restored, and the throw that left the bag open — dex 112 → 116
+
+Vlad's kickoff: "Kick off leg 4 — free four + re-catch
+the Cut/Flash pair". Scope A was the four species
+obtainable from owned stock or a plain wild catch;
+scope B undid §31's quiet loss — Gloom (the Cut user)
+and Voltorb (the Flash user) had vanished during the
+leg 1/2 box reorganization, leaving the chain with no
+Cut and no Flash. Vlad's kickoff explicitly authorised
+the two HM re-teaches (the named exception to the
+no-HM-teach fence, these species/moves only).
+
+**The free four.** All three boxed grinds ran on the
+Mansion switch-grind with DECLINE-all replacements and
+per-level audits; every evolution was RAM-verified and
+the specimen deposited back to its home box.
+
+- MUK: Grimer L30 (box 9) → L38. Final moves
+  [Pound, Disable, Poison Gas, Minimize], filed box 9.
+- KINGLER: Krabby L15 (box 9) → L28. Final moves
+  [Bubble, Leer, ViceGrip, Guillotine], filed box 9.
+- SEAKING: Goldeen L15 (box 3) → L33. Final moves
+  [Peck, Tail Whip, Supersonic, Horn Attack], filed
+  box 3. (The first Goldeen attempt hit the grind
+  driver's prompt-abort after 107 fights; the
+  flee-and-retry shell finished it.)
+- TANGELA: wild, Route 21. The route's only grass is
+  a 6×6 island patch at x 8–13, y 4–9 (north end);
+  the working landing is surf to (10,10) then one step
+  up onto the grass at (10,9). Caught L30
+  [Constrict, Bind, Absorb], 3 Ultra Balls in the
+  successful hunt, filed box 3 at close-out.
+
+Blastoise, the grind fighter, went 93 → 96 across the
+leg. Dex asserted at each step: 112 → 113 → 114 →
+115 → 116.
+
+**The bag-list wedge (the leg's real find).** The
+first Tangela hunts failed in a way that looked like
+legendary bad luck: every Tangela "got away" after
+exactly one ball, however many balls the catch was
+allowed. Instrumented throws (probe171/dbg_throw*)
+isolated it: after a ball is selected in the battle
+ITEM list, the list menu STAYS OPEN (wMenuBoxTopY=4,
+cursor resting on the thrown ball, a dialog pending)
+while the throw resolves. The post-throw ride in
+_catch_current_careful only presses A in that state,
+the game ignores A there, the ride times out, and the
+catch reports failure — the hunt then flees a live
+battle. One B press closes the list back to the
+battle menu (verified live). Two companion findings:
+in_dialog reads True even at the settled battle menu,
+so "menu live" can only be proven by _advance_battle's
+cursor-wiggle test, never by the dialog flag; and the
+party-list cursor is ADDR_MENU_ITEM alone (in that
+menu ADDR_MENU_SCROLL holds the party count, not a
+scroll offset — a summed getter reads garbage, which
+broke the first Flash-test steer). The fix is ported:
+_catch_current_careful's ride now B-closes a leftover
+list (top_y 4) and proves the menu with
+_advance_battle, and the same B-close branch was added
+to the _catch_any and _throw_ball_ordered rides, which
+share the throw-through-the-bag mechanism. With the
+fix, Tangela took 2 balls in the verification run
+(breakout, B-close, catch). The wedge also explains
+past legs' ball spend on commons — attempts were
+silently costing one ball + a flee each. Separately,
+_hunt_paired referenced _PACE_DIRS, which the §30
+port never brought over from probe169's catch_lib (a
+NameError on first use); the constant is now defined
+in run_real.py with a regression test. Suite 242/242.
+
+**The Cut/Flash restore.** HM01 and HM05 were both
+found in PC item storage (×1 each; HM05 had sat there
+since the storyline's Fly leg) and withdrawn in S1.
+Compatibility was verified from pokered base_stats
+before teaching, per the verify-first rule: ODDISH's
+tmhm list ends in CUT, VOLTORB's in FLASH.
+
+- ODDISH: caught fresh on Route 24 grass, L12,
+  [Absorb] — both remaining Great Balls spent across
+  the hunt. Cut taught into the free slot:
+  [Absorb, Cut]. NOTHING was replaced. Functional
+  test: the executor cut Cerulean's east tree
+  (32,13) and the party's arrival on Route 9 was
+  RAM-verified (media: s4-tree-before/after.png).
+- VOLTORB: caught fresh on Route 10 grass at the
+  proven (8,7) patch, L16, [Tackle, Screech] — 1
+  Ultra Ball. (The first S5 run hunted with the
+  Great Ball stack S4 had just emptied; every throw
+  failed instantly on the missing item. The script
+  now asserts its hunt ball exists.) Flash taught
+  into the free slot: [Tackle, Screech, Flash].
+  NOTHING was replaced. Functional test: Rock
+  Tunnel 1F frame brightness 67.79 (dark) → 134.02
+  after using Flash from Voltorb's party sub-menu
+  (sub-menu index 0 — the engine puts field moves
+  first; the normalised screen text hides the cursor
+  glyph, so selection was verified by consequence,
+  media: s5-tunnel-dark/lit.png).
+
+HMs are not consumed: HM01 and HM05 are both still
+in the bag at leg end. Neither utility specimen was
+ground further. Oddish/Voltorb are already dex-owned
+species, so the count did not move for them.
+
+**Money trail.** Start ¥2,011. One purchase all leg:
+Ultra Balls topped up to 6 at Fuchsia Mart in S1,
+−¥1,200 → ¥811, where it stayed. No sales, no E4
+re-run (§31's attrition lesson respected). Ball
+consumption in the persistent line: Ultra 6 → 2
+(3 on the Tangela hunt, 1 on Voltorb), Great 2 → 0
+(both on Oddish).
+
+**Close-out state.** Healed at Fuchsia, Tangela
+filed, census taken (SRAM scan + WRAM mirror for the
+current box): 92 boxed across 12 boxes + 5 in party.
+The current box at leg end is box 3 (Seaking and
+Tangela there; Muk/Kingler box 9; the chain's only
+Slowbro still unique in box 4 — the second Slowbro
+was NOT caught, per the Lickitung fence). Two
+standing-behaviour notes: heal_at_pokecenter leaves
+by the exit mat, so PC work after a heal must
+re-enter first; and s5-flash-lit.state boots with
+the START menu open, so a following fly_to needs the
+menus closed first (its START press otherwise
+toggles the menu shut and its waits fail).
+
+FINAL leg-4 chain head: probe171/s6-final.state,
+sha256
+b7e897a7ee03ddc10061bbd240774dbc8ee4dfccb5d86a56e909d29c43f39239
+— Fuchsia Pokécenter, dex 116, ¥811, badges 8.
+Party: Lapras 58 [Sing, Ice Beam, Surf, Strength],
+Blastoise 96, Pidgeot 36 [Gust, Fly, Quick Attack,
+Whirlwind], Oddish 12 [Absorb, Cut], Voltorb 16
+[Tackle, Screech, Flash] — the utility pair rides
+with the party again, all healed.
+
+Dex 116 / 124. Remaining (leg 5) is exactly the
+gated eight: LICKITUNG (Route 18 Gate trade for a
+Slowbro — Vlad's separate call; the trade is only
+free once a second Slowbro exists, and catching one
+is bundled with that call), TAUROS and SCYTHER
+(Safari — two budgets already spent, fresh
+authorisation needed; Scyther alternatively 5,500
+Game Corner coins), PORYGON (9,999 Game Corner
+coins), ZAPDOS (deferred, not fenced — a go-ahead
+un-parks it; its Power Plant room was again not
+entered this leg), and the fenced three: ARTICUNO,
+MOLTRES, MEWTWO.
