@@ -14744,5 +14744,652 @@ def main() -> int:
     return 0
 
 
+# ---------- post-game leg 2 (probe169): trades, careful
+# catching, bounded fleeing, surf boarding, press walking
+# ----------
+# Machinery proven live across the easy block + Cerulean
+# Cave (dex 65 -> 98). Lessons baked in:
+# * CHECK BOX HEADROOM BEFORE ANY HUNT: a full current
+#   box silently refuses every catch ("The POKeMON BOX
+#   is full!"), consumes no ball, and masquerades as
+#   break-outs. _stored_count counts party + current
+#   box only.
+# * The enemy species byte is STALE during battle
+#   intros; _hunt_paired double-reads it with a tick gap.
+# * The careful thrower re-reads the bag scroll+item
+#   cursor twice before pressing A and verifies the ball
+#   count actually dropped; deep bags (Ultra at index
+#   12+) make its worst case minutes long - slim the bag
+#   at a PC before long hunts.
+# * The typed driver's flee can churn for minutes
+#   against cave mons; _flee_manual is fully bounded.
+# * Surf boarding is gated by TilePairCollisionsWater
+#   (pokered): in the CAVERN tileset, standing on tile
+#   $05 facing $14 water REFUSES ("No SURFing on X
+#   here!"). Cerulean Cave 1F's only boardable entrance
+#   cell is (25,9) (tile $15, facing down). The harness
+#   field_surf macro also completes without taking in
+#   the cave; _board_surf drives the party menu by the
+#   cursor bytes instead.
+# * Cerulean Cave B1F connects ONLY to 1F (0,6); the
+#   route is a ladder loop: surf 1F to the west floor,
+#   (3,11) up to 2F, west across 2F, (1,3) down onto
+#   1F's $20 platform (the direct floor route is walled
+#   by the CAVERN $20/$05 land pair-collision), (0,7)
+#   then up onto (0,6). Mewtwo's chamber (B1F (27,13))
+#   stays fenced: pace B1F at x <= 22.
+# * The planner and the mansion DFS both refuse some
+#   shore/platform regions the engine walks fine;
+#   _press_walk BFS-walks the raw compiled grid with
+#   verified single steps. _step_warp tolerates battles
+#   eating a warp step.
+# * NPC trade dialogs render SLOWLY; _do_trade polls
+#   the screen text until stable before answering.
+
+_SPECIES_NAMES_169 = {
+    1: 'RHYDON',
+    2: 'KANGASKHAN',
+    3: 'NIDORAN_M',
+    4: 'CLEFAIRY',
+    5: 'SPEAROW',
+    6: 'VOLTORB',
+    7: 'NIDOKING',
+    8: 'SLOWBRO',
+    9: 'IVYSAUR',
+    10: 'EXEGGUTOR',
+    11: 'LICKITUNG',
+    12: 'EXEGGCUTE',
+    13: 'GRIMER',
+    14: 'GENGAR',
+    15: 'NIDORAN_F',
+    16: 'NIDOQUEEN',
+    17: 'CUBONE',
+    18: 'RHYHORN',
+    19: 'LAPRAS',
+    20: 'ARCANINE',
+    21: 'MEW',
+    22: 'GYARADOS',
+    23: 'SHELLDER',
+    24: 'TENTACOOL',
+    25: 'GASTLY',
+    26: 'SCYTHER',
+    27: 'STARYU',
+    28: 'BLASTOISE',
+    29: 'PINSIR',
+    30: 'TANGELA',
+    33: 'GROWLITHE',
+    34: 'ONIX',
+    35: 'FEAROW',
+    36: 'PIDGEY',
+    37: 'SLOWPOKE',
+    38: 'KADABRA',
+    39: 'GRAVELER',
+    40: 'CHANSEY',
+    41: 'MACHOKE',
+    42: 'MR_MIME',
+    43: 'HITMONLEE',
+    44: 'HITMONCHAN',
+    45: 'ARBOK',
+    46: 'PARASECT',
+    47: 'PSYDUCK',
+    48: 'DROWZEE',
+    49: 'GOLEM',
+    51: 'MAGMAR',
+    53: 'ELECTABUZZ',
+    54: 'MAGNETON',
+    55: 'KOFFING',
+    57: 'MANKEY',
+    58: 'SEEL',
+    59: 'DIGLETT',
+    60: 'TAUROS',
+    64: 'FARFETCHD',
+    65: 'VENONAT',
+    66: 'DRAGONITE',
+    70: 'DODUO',
+    71: 'POLIWAG',
+    72: 'JYNX',
+    73: 'MOLTRES',
+    74: 'ARTICUNO',
+    75: 'ZAPDOS',
+    76: 'DITTO',
+    77: 'MEOWTH',
+    78: 'KRABBY',
+    82: 'VULPIX',
+    83: 'NINETALES',
+    84: 'PIKACHU',
+    85: 'RAICHU',
+    88: 'DRATINI',
+    89: 'DRAGONAIR',
+    90: 'KABUTO',
+    91: 'KABUTOPS',
+    92: 'HORSEA',
+    93: 'SEADRA',
+    96: 'SANDSHREW',
+    97: 'SANDSLASH',
+    98: 'OMANYTE',
+    99: 'OMASTAR',
+    100: 'JIGGLYPUFF',
+    101: 'WIGGLYTUFF',
+    102: 'EEVEE',
+    103: 'FLAREON',
+    104: 'JOLTEON',
+    105: 'VAPOREON',
+    106: 'MACHOP',
+    107: 'ZUBAT',
+    108: 'EKANS',
+    109: 'PARAS',
+    110: 'POLIWHIRL',
+    111: 'POLIWRATH',
+    112: 'WEEDLE',
+    113: 'KAKUNA',
+    114: 'BEEDRILL',
+    116: 'DODRIO',
+    117: 'PRIMEAPE',
+    118: 'DUGTRIO',
+    119: 'VENOMOTH',
+    120: 'DEWGONG',
+    123: 'CATERPIE',
+    124: 'METAPOD',
+    125: 'BUTTERFREE',
+    126: 'MACHAMP',
+    128: 'GOLDUCK',
+    129: 'HYPNO',
+    130: 'GOLBAT',
+    131: 'MEWTWO',
+    132: 'SNORLAX',
+    133: 'MAGIKARP',
+    136: 'MUK',
+    138: 'KINGLER',
+    139: 'CLOYSTER',
+    141: 'ELECTRODE',
+    142: 'CLEFABLE',
+    143: 'WEEZING',
+    144: 'PERSIAN',
+    145: 'MAROWAK',
+    147: 'HAUNTER',
+    148: 'ABRA',
+    149: 'ALAKAZAM',
+    150: 'PIDGEOTTO',
+    151: 'PIDGEOT',
+    152: 'STARMIE',
+    153: 'BULBASAUR',
+    154: 'VENUSAUR',
+    155: 'TENTACRUEL',
+    157: 'GOLDEEN',
+    158: 'SEAKING',
+    163: 'PONYTA',
+    164: 'RAPIDASH',
+    165: 'RATTATA',
+    166: 'RATICATE',
+    167: 'NIDORINO',
+    168: 'NIDORINA',
+    169: 'GEODUDE',
+    170: 'PORYGON',
+    171: 'AERODACTYL',
+    173: 'MAGNEMITE',
+    176: 'CHARMANDER',
+    177: 'SQUIRTLE',
+    178: 'CHARMELEON',
+    179: 'WARTORTLE',
+    180: 'CHARIZARD',
+    185: 'ODDISH',
+    186: 'GLOOM',
+    187: 'VILEPLUME',
+    188: 'BELLSPROUT',
+    189: 'WEEPINBELL',
+    190: 'VICTREEBEL',
+}
+
+
+def _specimen_count(emu, sp):
+    n = sum(1 for m in emu.read_state().party
+            if m.species_id == sp)
+    n += sum(1 for s in _box_species(emu) if s == sp)
+    return n
+
+
+def _npc_cells(emu, gmap):
+    """Live NPC sprite cells on the current map (player
+    excluded), via _boulder_cell."""
+    st = emu.read_state()
+    here = (st.x, st.y)
+    cells = set()
+    for k in range(1, 16):
+        c = _boulder_cell(emu, k)
+        if c != here and gmap.in_bounds(*c) \
+                and gmap.tile_walkable(*c):
+            cells.add(c)
+    return cells
+
+
+def _do_trade(emu, ex, map_id, give_id, want_id, world):
+    """NPC trade inside the current map: talk to each NPC
+    until one opens a trade dialog; answer YES to every
+    yes/no, pick the give-species from the party list.
+    Success = a want_id specimen exists afterwards."""
+    ID2NAME = _SPECIES_NAMES_169
+    gmap = world.maps[map_id]
+    D4 = {"up": (0, -1), "down": (0, 1), "left": (-1, 0),
+          "right": (1, 0)}
+    OPP = {"up": "down", "down": "up", "left": "right",
+           "right": "left"}
+    mem = emu.pb.memory
+
+    def screen():
+        return _norm_text(_screen_text(emu))
+
+    def party_index(sid):
+        st = emu.read_state()
+        for i, m in enumerate(st.party):
+            if m.species_id == sid and m.level > 0:
+                return i
+        return None
+
+    def party_list_up():
+        st = emu.read_state()
+        names = [ID2NAME.get(m.species_id, "")
+                 for m in st.party if m.level > 0]
+        flat = screen()
+        return sum(1 for n in names if n and n in flat) >= 2
+
+    for npc in sorted(_npc_cells(emu, gmap)):
+        stood = False
+        for d, (dx, dy) in D4.items():
+            cell = (npc[0] + dx, npc[1] + dy)
+            if not gmap.tile_walkable(*cell):
+                continue
+            ok, _ = _walk_fighting(emu, ex, map_id, cell,
+                                      attempts=20)
+            st = emu.read_state()
+            if (st.x, st.y) == cell:
+                emu.press(OPP[d])
+                emu.tick(20)
+                stood = True
+                break
+        if not stood:
+            continue
+        emu.press("a")
+        emu.tick(40)
+        if not emu.read_state().in_dialog:
+            continue
+        print(f"trade: dialog with NPC at {npc}", flush=True)
+
+        def settle(max_ticks=360):
+            prev = None
+            spent = 0
+            while spent < max_ticks:
+                emu.tick(30)
+                spent += 30
+                cur = screen()
+                if cur == prev and cur.strip(" ·"):
+                    return cur
+                prev = cur
+            return prev
+
+        idle = 0
+        for _round in range(120):
+            if _specimen_count(emu, want_id) > 0:
+                for _ in range(40):
+                    if not emu.read_state().in_dialog:
+                        break
+                    emu.press("a")
+                    emu.tick(60)
+                return True
+            flat = settle()
+            if "YES" in flat and "NO" in flat:
+                idle = 0
+                _steer_menu(emu,
+                               lambda: mem[ADDR_MENU_ITEM], 0)
+                emu.press("a")
+                emu.tick(60)
+                continue
+            idx = party_index(give_id)
+            if idx is not None and party_list_up():
+                idle = 0
+                cur = lambda: mem[ADDR_MENU_SCROLL] + \
+                    mem[ADDR_MENU_ITEM]
+                _steer_menu(emu, cur, idx)
+                emu.press("a")
+                emu.tick(90)
+                continue
+            if emu.read_state().in_dialog:
+                idle = 0
+                emu.press("a")
+                emu.tick(60)
+                continue
+            idle += 1
+            if idle >= 8:
+                break
+        print(f"trade: NPC at {npc} did not trade", flush=True)
+    return _specimen_count(emu, want_id) > 0
+
+
+def _flee_manual(emu, tries=14):
+    """Bounded flee: advance to the battle menu, steer to
+    RUN (bottom-right), confirm, verify the battle ended.
+    The typed driver's flee can churn forever against
+    some cave mons (sleep / Softboiled stalls); every loop
+    here is capped."""
+    mem = emu.pb.memory
+    for _ in range(tries):
+        if not emu.read_state().in_battle:
+            return True
+        if _advance_battle(emu) != "menu":
+            continue
+        _steer_byte(emu, lambda: mem[ADDR_MENU_ITEM], 1)
+        for _ in range(6):
+            if mem[ADDR_MENU_COL] != 9:
+                break
+            _raw(emu, "right", hold=4, settle=22)
+            emu.tick(30)
+        _press10(emu, "a")
+        for _ in range(120):
+            if not emu.read_state().in_battle:
+                return True
+            emu.tick(20)
+    return not emu.read_state().in_battle
+
+
+def _throw_ball_careful(emu, ball_id):
+    """One throw whose bag navigation is stability-checked.
+
+    run_real._throw_ball scrolls the bag reading
+    scroll+item once per step; in a long bag (Ultra Ball at
+    index 15 of 18 in the cave) the bytes alias mid-scroll
+    and A lands on a neighbouring item (a potion, HM03's
+    scolding text) - the ride then reports 'broke' with no
+    ball consumed and the battle state desyncs. This
+    version only presses A when the cursor reads the target
+    index twice, 25 ticks apart, and verifies the ball
+    count actually dropped afterwards; a wrong selection
+    is backed out with B and retried.
+    Returns 'thrown' / 'over' (battle ended) / 'failed'.
+    """
+    mem = emu.pb.memory
+    idx = _bag_index(emu, ball_id)
+    if idx is None:
+        return "failed"
+    before = _bag_count(emu, ball_id)
+    if _advance_battle(emu) != "menu":
+        return "over" if not emu.read_state().in_battle \
+            else "failed"
+    for _attempt in range(4):
+        _steer_byte(emu, lambda: mem[ADDR_MENU_ITEM], 1)
+        for _ in range(14):
+            if mem[ADDR_MENU_COL] == 9:
+                break
+            _raw(emu, "left", hold=4, settle=22)
+            emu.tick(30)
+        _raw(emu, "a", hold=4, settle=22)
+        emu.tick(90)
+        thrown = False
+        for _ in range(80):
+            st = emu.read_state()
+            if not st.in_battle:
+                return "over"
+            if _bag_count(emu, ball_id) < before:
+                return "thrown"
+            cur1 = mem[ADDR_MENU_SCROLL] + mem[ADDR_MENU_ITEM]
+            emu.tick(25)
+            cur2 = mem[ADDR_MENU_SCROLL] + mem[ADDR_MENU_ITEM]
+            if cur1 != cur2:
+                continue
+            if cur2 == idx:
+                _raw(emu, "a", hold=4, settle=22)
+                emu.tick(90)
+                thrown = True
+                break
+            _raw(emu, "down" if cur2 < idx else "up",
+                    hold=4, settle=22)
+            emu.tick(35)
+        if thrown:
+            for _ in range(60):
+                if _bag_count(emu, ball_id) < before:
+                    return "thrown"
+                if not emu.read_state().in_battle:
+                    return "over"
+                emu.tick(20)
+        # wrong item or no selection: back out to the
+        # battle menu and retry the whole sequence
+        for _ in range(6):
+            _raw(emu, "b", hold=4, settle=22)
+            emu.tick(40)
+            if mem[ADDR_MENU_TOP_Y] == 14:
+                break
+    return "failed"
+
+
+def _catch_current_careful(emu, ball_id, max_balls=25):
+    """Catch the mon in front of us with throw_ball_careful
+    + the standard post-throw ride (press A through text /
+    the dex page; stop when the battle menu is back)."""
+    mem = emu.pb.memory
+
+    def press_a():
+        _raw(emu, "a", hold=4, settle=22)
+        emu.tick(30)
+
+    before = _stored_count(emu)
+    for _attempt in range(max_balls):
+        if _bag_count(emu, ball_id) == 0:
+            return False
+        r = _throw_ball_careful(emu, ball_id)
+        if r == "failed":
+            return False
+        if r == "over":
+            return _stored_count(emu) > before
+        for _ride in range(240):
+            if _stored_count(emu) > before:
+                return _catch_epilogue(emu, before + 1)
+            st = emu.read_state()
+            if not st.in_battle:
+                return _stored_count(emu) > before
+            if mem[ADDR_MENU_TOP_Y] == 14 and not st.in_dialog:
+                break                # broke free
+            if st.in_dialog or mem[ADDR_MENU_TOP_Y] \
+                    not in (12, 14):
+                press_a()
+            else:
+                emu.tick(30)
+        else:
+            return False
+    return _stored_count(emu) > before
+
+
+def _hunt_paired(emu, ex, cell_a, cell_b, targets, ball_id,
+                max_encounters=400, max_steps=30000, log=print,
+                shot_fn=None):
+    """Pace between two adjacent cells with position
+    verification and walk-back recovery (hunt() drifts).
+    Same target/ball policy as hunt()."""
+    mem = emu.pb.memory
+    caught = {}
+    encounters = 0
+    steps = 0
+    d_ab = (cell_b[0] - cell_a[0], cell_b[1] - cell_a[1])
+    d_ba = (-d_ab[0], -d_ab[1])
+    while encounters < max_encounters and steps < max_steps:
+        missing = {sp: want - _specimen_count(emu, sp)
+                   for sp, want in targets.items()}
+        missing = {sp: n for sp, n in missing.items() if n > 0}
+        if not missing:
+            break
+        st = emu.read_state()
+        if st.in_battle:
+            encounters += 1
+            for _ in range(200):
+                if mem[ADDR_ENEMY_SPECIES] != 0 and \
+                        mem[ADDR_ENEMY_MAX_HP] != 0:
+                    break
+                emu.tick(10)
+            sp = mem[ADDR_ENEMY_SPECIES]
+            nm = _SPECIES_NAMES_169.get(sp, hex(sp))
+            if sp in missing:
+                log(f"  enc {encounters}: TARGET {nm} "
+                    f"(need {missing[sp]})")
+                if shot_fn:
+                    shot_fn(nm)
+                if _catch_current_careful(emu, ball_id):
+                    caught[sp] = caught.get(sp, 0) + 1
+                    log(f"  CAUGHT {nm} "
+                        f"({_specimen_count(emu, sp)} held)")
+                    # the catch epilogue can leave the menu
+                    # stack desynced (the stone-evo lesson);
+                    # normalize before the next battle
+                    _close_menus(emu)
+                    emu.wait_free(max_rounds=8, stable_needed=2)
+                else:
+                    log(f"  {nm} got away")
+                    # a failed throw sequence can leave a
+                    # desynced live battle; flee it cleanly
+                    if emu.read_state().in_battle:
+                        _flee_manual(emu)
+            else:
+                _flee_manual(emu)
+            continue
+        pos = (st.x, st.y)
+        if pos == cell_a:
+            emu.press(_PACE_DIRS[d_ab])
+        elif pos == cell_b:
+            emu.press(_PACE_DIRS[d_ba])
+        else:
+            # drifted: walk back to cell_a (fleeing en route)
+            _walk_fighting(emu, ex, st.map_id, cell_a,
+                              attempts=10, flee_wild=True)
+            emu.press(_PACE_DIRS[d_ab])
+        _explore_settle(emu)
+        steps += 1
+        if steps % 1000 == 0:
+            log(f"  hunt steps={steps} enc={encounters} "
+                f"caught={ {_SPECIES_NAMES_169.get(k, hex(k)): v for k, v in caught.items()} }")
+    return caught
+
+
+def _board_surf(emu, direction):
+    """Board Surf via the party menu, steered by the menu
+    cursor bytes (the harness field_surf macro completed
+    its sequence in Cerulean Cave 1F without the Surf
+    taking - this manual path was verified live at the
+    (24,6) shore: START -> POKEMON -> carrier -> SURF ->
+    ride the YES prompt; success is the RAM surf byte)."""
+    carrier = _surf_carrier(emu)
+    if carrier is None:
+        return False
+    idx, sub = carrier
+    mem = emu.pb.memory
+    emu.press(direction)
+    emu.tick(10)
+    if mem[ADDR_TILE_IN_FRONT] not in (0x14, 0x32, 0x48):
+        return False
+    emu.press("start")
+    emu.tick(60)
+    if not _steer_byte(emu, lambda: mem[ADDR_MENU_ITEM],
+                          1):                # POKEMON
+        _close_menus(emu)
+        return False
+    _press10(emu, "a")
+    emu.tick(90)
+    if not _steer_byte(emu, lambda: mem[ADDR_MENU_ITEM],
+                          idx):              # the carrier
+        _close_menus(emu)
+        return False
+    _press10(emu, "a")
+    emu.tick(90)
+    if not _steer_byte(emu, lambda: mem[ADDR_MENU_ITEM],
+                          sub):              # SURF
+        _close_menus(emu)
+        return False
+    _press10(emu, "a")
+    for _ in range(120):
+        if surfing(emu):
+            break
+        if emu.read_state().in_dialog:
+            _press10(emu, "a")
+        emu.tick(20)
+    _explore_settle(emu)
+    return surfing(emu)
+
+
+def _press_walk(emu, world, map_id, goal, forbid=frozenset(),
+               max_rounds=40):
+    """Walk to `goal` on one map by single verified presses
+    along a BFS path over the compiled walkable grid. The
+    planner and the mansion DFS both refuse some shore /
+    platform regions the engine walks fine (Cerulean Cave
+    1F's west component); this walker trusts the grid +
+    RAM position only. Battles are fled (bounded) and the
+    path re-planned from wherever we ended up."""
+    from collections import deque
+    gm = world.maps[map_id]
+    DIRS = {(0, -1): "up", (0, 1): "down", (-1, 0): "left",
+            (1, 0): "right"}
+
+    def bfs(start):
+        if start == goal:
+            return []
+        prev = {start: None}
+        dq = deque([start])
+        while dq:
+            x, y = dq.popleft()
+            for (dx, dy), dn in DIRS.items():
+                n = (x + dx, y + dy)
+                if n in prev or n in forbid:
+                    continue
+                if not (0 <= n[0] < gm.w and 0 <= n[1] < gm.h):
+                    continue
+                if not gm.walkable(*n):
+                    continue
+                prev[n] = ((x, y), dn)
+                if n == goal:
+                    path = []
+                    cur = n
+                    while prev[cur] is not None:
+                        cur, dn2 = prev[cur][0], prev[cur][1]
+                        path.append(dn2)
+                    return list(reversed(path))
+                dq.append(n)
+        return None
+
+    for _round in range(max_rounds):
+        st = emu.read_state()
+        if st.map_id != map_id:
+            return False
+        pos = (st.x, st.y)
+        if pos == goal:
+            return True
+        path = bfs(pos)
+        if path is None:
+            return False
+        for dn in path:
+            emu.press(dn)
+            _explore_settle(emu)
+            st = emu.read_state()
+            if st.in_battle:
+                _flee_manual(emu)
+                break
+            if st.map_id != map_id:
+                return False
+        # loop re-plans from the current position
+    st = emu.read_state()
+    return st.map_id == map_id and (st.x, st.y) == goal
+
+
+def _step_warp(emu, direction, want_map, tries=8):
+    """Step onto a warp tile, tolerating battles that eat
+    the step: press, settle, flee if a battle started,
+    retry until the map changes."""
+    for _ in range(tries):
+        emu.press(direction)
+        _explore_settle(emu)
+        st = emu.read_state()
+        if st.map_id == want_map:
+            return True
+        if st.in_battle:
+            _flee_manual(emu)
+    return emu.read_state().map_id == want_map
+
+
+
+
 if __name__ == "__main__":
     sys.exit(main())

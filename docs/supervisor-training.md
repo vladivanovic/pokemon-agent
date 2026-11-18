@@ -2878,3 +2878,225 @@ for whichever of Clefable/Nidoqueen loses the first;
 any further Safari entries for Tauros/Scyther; and
 the fenced three — Articuno, Moltres, Mewtwo —
 which stay unengaged unless Vlad says otherwise.
+
+## 30. Post-game leg 2 (probe169, 2026-11-18): the easy block, the Moon Stone pair, Jolteon by Vlad's call, and Cerulean Cave — dex 65 → 98
+
+Vlad's call (2026-11-18): "Kick off leg 2 — the easy
+block + Cerulean Cave". Scope was exactly the "Easy"
+list and the "Cerulean Cave" block of
+`leg2-remaining.md`; the Grindy list, Seafoam, the
+Power Plant, Game Corner prizes, Safari entries and
+all TMs stayed out of scope, and the fenced birds +
+Mewtwo stayed unengaged. Mid-leg Vlad settled the
+Eevee either/or himself — "Jolteon — Thunder Stone
+it" — and that one evolution was folded in. Chain:
+`probe168/s6-hunt2-e6.state` (dex 65, ¥97,630) →
+`probe169/s9-ditto.state` (sha256 131cd7f2…c71f,
+dex 98, ¥645, on Cerulean Cave B1F). Every catch,
+evolution and trade below was verified in RAM; saves
+were taken per stage and never overwritten.
+
+### The easy block (S0–S8): dex 65 → 87
+
+Prep (S0): current box moved 3 → 9 (box 3 was full);
+Ultra Balls ×30 + Greats topped to 20 for ¥46,800.
+
+- KRABBY (S1) — Cerulean City's outdoor pond stance is
+  unreachable by the compiled navigation (the grid
+  marks the shore unwalkable and the DFS dies on the
+  (9,14)→(9,16) ledge slide), so it was fished from
+  the Cerulean GYM pool instead (Super Rod group 3 —
+  same pool, probe168 precedent). First cast.
+- ABRA ×2 (S1) — Route 24 grass pair. One is trade
+  fuel, one stays (the chain rule: never trade the
+  last specimen of a chain with unregistered members).
+- MANKEY (S2a) — Route 5's grass is sealed inside
+  one-way ledge enclosures the navigation cannot
+  enter; Route 6's Red table is slot-identical
+  (pokered-verified), so Mankey came from Route 6.
+- MR. MIME (S2c) — Route 2 house, TRADE_FOR_MARCEL,
+  gave 1 Abra. The trade driver (`_do_trade`) polls
+  the screen text until stable — trade dialogs render
+  over ~240 ticks and acting early desyncs the flow.
+- EKANS + POLIWHIRL (S4a) — Route 10 grass / Super
+  Rod group 5. Poliwhirl was already registered in
+  leg 1; this specimen was the Jynx fuel.
+- MACHOP + ONIX (S4b) — Rock Tunnel 1F. Onix, the
+  block's 4.3% long tail, arrived at encounter 33 of
+  the same pacing session as Machop (enc 7). Not
+  parked.
+- FARFETCH'D (S3) — Vermilion house, gave a Spearow
+  caught on Route 11 (Spearow was already registered;
+  pure fuel). DROWZEE from the same Route 11 pair.
+- JYNX (S4b) — Cerulean house, TRADE_FOR_LOLA, gave
+  the Route 10 Poliwhirl.
+- GASTLY + CUBONE (S5) — Pokémon Tower. **The Silph
+  Scope was sitting in PC item storage**: without it
+  the Tower ghosts stay unidentified "GHOST" and one
+  throw call steered onto HM03/Oak's scolding text
+  and burned all 15 Great Balls. Withdraw the scope
+  before any Tower work. Restock before the Tower:
+  ¥33,000 at Fuchsia.
+- TENTACOOL (S6) — Route 21 surf (100% Tentacool
+  water). Docking back into Cinnabar uses the west
+  water strip, not the planner.
+- PONYTA / KOFFING / GRIMER (S7a) — Pokémon Mansion
+  1F entrance corridor pair (8,26)/(9,26); Weezing
+  and Muk were fled (Grindy list, out of scope).
+- Grinds (S7b/c, `switch_grind_one`, standing
+  DECLINE on every move replacement, per-level
+  moveset audits all clean): PIDGEOTTO 18→36
+  PIDGEOT (125 fights), MANKEY 28 PRIMEAPE (76),
+  TENTACOOL 30 TENTACRUEL (111), OMANYTE 40 OMASTAR
+  (129). The grinder requires the pupil to LEAD the
+  party; calling it from inside a PC fails silently.
+
+### The Moon Stone pair (S2c + S8): both evolutions done
+
+**The brief's "one MOON_STONE remains in the bag"
+was wrong** — verified absent from both the bag and
+PC item storage at leg start. Both stones used were
+uncollected world pickups, checked against pokered
+event flags: Route 2 at (13,54), flag idx 25 (picked
+up S2c), and Rocket Hideout B2F at (1,11), flag idx
+125 (S8a; the B2F arrow floor defeats `_dfs` and
+`_walk_fighting` — `explore_nav` is arrow-aware and
+walked it cleanly). Route 2's stone → CLEFABLE;
+the Hideout stone → NIDOQUEEN. (The third stone,
+Mt. Moon 1F idx 104, was leg 1's Nidoking stone.)
+Save immediately after one-shot pickups and
+evolutions, BEFORE the heal/exit steps — a heal
+assert cost two runs this leg.
+
+### Jolteon (S10): Vlad's mid-leg decision
+
+Eevee (box 3) → JOLTEON. Thunder Stone verified
+from pokered before travelling: CeladonMart4FClerk
+sells it, price ¥2,100 (`bcd3 2100`). Funds were
+¥395 after the cave restock, so the stone was
+funded by selling re-buyable vendor stock (1× FULL
+RESTORE ¥1,500 + 1× MAX POTION ¥1,250 at Cerulean
+Mart — the sell flow is the buy flow mirrored:
+menuY 1, steer to SELL, bag index, quantity/confirm,
+verify on the money delta). The fenced items were
+never sold. Stone bought, Eevee withdrawn from
+box 3, evolved, dex 89 → 90, screenshot taken, and
+the party restored exactly (Jolteon filed in
+box 10). Vaporeon/Flareon are now final as
+unobtainable-by-choice.
+
+### Cerulean Cave (S9–S16): dex 87 → 98, all ten
+
+Encounter tables compiled from pokered per floor.
+Entry is hand-driven — planner rides to
+CeruleanCave1F spin forever from every origin (the
+surf/portal leg): fly Cerulean → Route 24 → walk
+(4,31) → surf the river down → the pond channel to
+(6,12) → disembark (5,12) → door at (4,11).
+
+- 1F: GOLBAT (enc 1), HYPNO, MAGNETON, ARBOK,
+  KADABRA (no Teleport escape), RAICHU.
+- 2F: RHYDON, MAROWAK, WIGGLYTUFF.
+- B1F: DITTO. **Mewtwo was never engaged** — B1F
+  work stayed on the west side (pacing pairs at
+  x ≤ 22; the static sprite at (27,13) was never
+  approached or interacted with).
+
+The "Magneton curse": after Golbat filled the last
+slot of box 9 (20/20), every catch was refused with
+"The POKéMON BOX is full!" — no ball consumed, the
+post-throw ride misread the refusal as "broke free",
+and hours of desync theories followed (menu scroll
+aliasing, stale species bytes — the stale-byte read
+WAS real and is now double-read in `_hunt_paired`).
+**Check box headroom before any hunt; a full box
+fails silently.** Box switched to the empty box 10
+and the curse lifted. Also from this floor: the
+enemy species byte is stale during battle intros.
+
+Surf inside the cave is pair-collision gated
+(pokered `TilePairCollisionsWater`): in the CAVERN
+tileset, standing on tile $05 facing $14 water is
+refused ("No SURFing on LAPRAS here!") — the whole
+north shore of 1F is $05. The only boardable
+entrance-side cell is (25,9) ($15, facing down); the
+harness `field_surf` macro also completes without
+taking in the cave, so `_board_surf` drives the
+party menu by its cursor bytes. B1F connects ONLY
+to 1F (0,6), and the direct floor route to it is
+walled by the CAVERN $20/$05 land pair-collision;
+the working route is a ladder loop — surf to 1F's
+west floor (landing (11,13)), (3,11) up to 2F, west
+across 2F, (1,3) down onto 1F's $20 platform, (0,7),
+up onto (0,6). The planner and the mansion DFS both
+refuse these shore/platform regions; `_press_walk`
+BFS-walks the raw compiled grid with verified
+single steps, and `_step_warp` tolerates battles
+eating a warp step.
+
+The cave's ball economy drove two restock detours.
+The 1F Nugget (5,0) sold for ¥5,000; surplus Revives
+and Super Potions went too (S11: +¥10,850, Ultras
+topped to 27 for ¥10,800). The 11-ball Rhydon fight
+left the party with three faints (the next hunt
+then hung in a battle the catch driver couldn't
+advance) — heal trips are cheap insurance (S12).
+For the endgame the bag was slimmed at the PC
+(S13: heals/rods/coin case deposited; the deposited
+MAX POTIONs and FULL HEALs were later withdrawn and
+sold in S15a, +¥5,550 → 5 more Ultras for ¥6,000),
+because the careful thrower's worst case grows with
+bag depth (Ultra at index 12 made single throws
+take minutes). The typed driver's flee can also
+churn for minutes against cave mons; `_flee_manual`
+is fully bounded and replaced it in `_hunt_paired`.
+
+DITTO (rate 35, the cave's lowest) took five
+encounters across four runs. The Sing detour was a
+dead end twice over: the FIGHT move menu remembers
+its cursor in BOTH axes (it opened on the bottom
+row from Lapras's last-used move, so "Sing" was
+Ice Beam until the column was steered too), and a
+transformed Ditto can Sing back. The plain catch —
+Blastoise leading, careful thrower, no switching —
+took one ball in the spy debug and one attempt in
+the real run (enc 8). Lesson: debug the thrower
+against the actual target before inventing tactics.
+
+### Spends (to the yen)
+
+Start ¥97,630 → end ¥645. Purchases ¥116,700:
+S0 balls ¥46,800; S5 restock ¥33,000; S9 restock
+¥18,000; Thunder Stone ¥2,100; S11 Ultra top-up
+¥10,800; S15a Ultra top-up ¥6,000. Sales income
+¥19,150: FULL RESTORE ¥1,500 + MAX POTION ¥1,250
+(S10); Nugget ¥5,000 + 5× REVIVE ¥3,750 + 6× SUPER
+POTION ¥2,100 (S11); 3× MAX POTION ¥3,750 + 6×
+FULL HEAL ¥1,800 (S15a). Trainer winnings observed
+in RAM during travel: +¥565. Ledger balances
+exactly. Final balls: Ultra 5, Great 3, Poké 0
+(deposited), Master Ball 1 — never thrown. Rare
+Candy / HP Up / Carbos unspent, still in the bag.
+In PC item storage at leg end: COIN CASE, SUPER
+ROD, GOOD ROD, POKE BALL ×3 (deposited S13).
+
+### Port and what remains
+
+Ported into `run_real.py` (suite 237/237 green):
+`_specimen_count`, `_npc_cells`, `_do_trade`,
+`_flee_manual`, `_throw_ball_careful`,
+`_catch_current_careful`, `_hunt_paired`,
+`_board_surf`, `_press_walk`, `_step_warp`,
+`_SPECIES_NAMES_169`, with the cave-route and
+box-headroom lessons in the section header.
+
+Dex 98 / 124. Remaining (leg 3): the Grindy list
+(Dragonite L55, Rapidash, Haunter, Weezing /
+Machoke / Graveler), Seafoam wilds (Golduck,
+Slowbro, Seel, Dewgong, Seadra — Articuno still
+fenced), Power Plant (Pikachu, Magnemite,
+Electabuzz; Zapdos deferred, not fenced), and the
+decision-gated items (Porygon / Scyther prizes,
+further Safari entries for Tauros/Scyther). The
+fenced three — Articuno, Moltres, Mewtwo — stay
+unengaged unless Vlad says otherwise.
