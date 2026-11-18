@@ -3100,3 +3100,283 @@ decision-gated items (Porygon / Scyther prizes,
 further Safari entries for Tauros/Scyther). The
 fenced three — Articuno, Moltres, Mewtwo — stay
 unengaged unless Vlad says otherwise.
+
+## 31. Post-game leg 3 (probe170, 2026-11-18): the grindy set, Seafoam, the Power Plant — dex 98 → 112, and the funding saga that nearly ate the leg
+
+Vlad's call (2026-11-18): "Kick off leg 3 — grindy
+set + Seafoam + Power Plant wilds". Scope was
+exactly the Grindy section + Seafoam wilds + Power
+Plant wilds of `leg2-remaining.md`. Articuno stayed
+fenced (Seafoam B4F never entered), Zapdos stayed
+out of scope (deferred, not fenced — never
+approached or interacted with), Mewtwo and Moltres
+unengaged, no Safari entries, no Game Corner, no TM
+teaching, Rare Candy / HP Up / Carbos unspent,
+Master Ball still never thrown. Chain:
+`probe169/s9-ditto.state` (dex 98, ¥645, Cerulean
+Cave B1F) → `probe170/s5-done.state` (sha256
+8e3ab527…c94f39dffc0bb0, dex 112, ¥2,011, Fuchsia
+City). Every catch and evolution below was verified
+in RAM; saves were taken per stage and never
+overwritten.
+
+### S0 — out of the cave, box prep
+
+The B1F exit rode the s15a ladder/surf route (the
+Max Revive at (18,1) was collected on the way out —
+it funds S1; the Ultra Ball at (16,9) was skipped:
+its south ledge pocket's return crossing defeats
+the tile-BFS walker, v1 died at (9,7)). Clefable
+was deposited and the current box switched 10 → 4
+(empty) so the leg's catches and deposits had
+headroom (§30's full-box lesson applied up front).
+
+### S1 — funding: the Elite Four money tap that wouldn't
+
+The leg started with ¥645 against a restock that
+needed ~¥30k of balls and care. The classic Gen 1
+money tap — an Elite Four re-run — turned into the
+leg's longest fight, because the stock gauntlet
+driver had a real defect: `_league_menu_move`
+hardcodes switch fallbacks that never check the
+target is alive (lance: Blastoise vs Gyarados →
+"Lapras if alive else Snorlax"; champion and bruno
+have the same shape). With the fallback fainted,
+the party list refuses the switch, the
+accidental-list cancel fires, and the fight
+re-decides the identical switch until the turn cap
+— S1 died at Bruno on exactly this loop, and S1c
+died at Lance on its twin. §28's win had simply
+never had the fallback fainted at those moments.
+
+The fix (ported, see below): `_league_guard_switch`
+validates every menu-path switch decision in
+`_league_decide` — a non-viable target is replaced
+by the best living non-active mon via `_league_pick`,
+or by the active mon's strongest PP'd damaging move.
+
+With the guard in, the runs went deep but the
+Champion kept winning the war of attrition (the
+corridor-care chain can only Revive + top up between
+rooms; there is no mid-battle item path, by the
+player's standing choice). The run log, honestly:
+
+- S1 (unguarded): died at Bruno, switch loop.
+  Nothing saved. S1b: died in a mart approach.
+- S1c → S1e (bootstrap, ¥145 after selling the cave
+  Max Revive +¥2,500 and buying Revive ×2 −¥3,000):
+  Lorelei→Lance paid ¥23,364 gross; Champion
+  blackout halved ¥23,509 → **¥11,754 banked**.
+- S1f (care basket −¥10,000: Revive ×4, Super
+  Potion ×4, Full Heal ×2): payouts again ¥23,364;
+  Champion blackout → **¥12,559 banked**.
+- S1g (side branch: Full Restore ×3 from the Indigo
+  lobby's own mart — its list is ULTRA_BALL,
+  GREAT_BALL, FULL_RESTORE, MAX_POTION, FULL_HEAL,
+  REVIVE, MAX_REPEL, clerk at (0,5) behind the (1,5)
+  counter, standard stand (2,5)): payouts ¥23,364;
+  Champion blackout → ¥13,461 (a side branch, not an
+  ancestor of the final head).
+- S1h (canonical line, Full Restore ×4): Lorelei
+  and Bruno banked (¥11,845), then the Agatha fight
+  ABORTED on a party-menu open failure with the
+  battle live (Gengar vs a sleeping, confused
+  Lapras at 52/245) — saved mid-battle.
+- S1j resumed that exact battle with a hand-mirrored
+  elite_four loop tail (the stock loop can only
+  start from the lobby): Agatha and Lance beaten
+  (¥23,923), Champion blackout number five →
+  **¥11,961 banked**.
+
+Five Champion blackouts against §28's single win
+settled it: the gauntlet is a coin flip weighted by
+attrition, and each cycle's halving eats the gross.
+Funding closed lean instead (S2).
+
+### S2 — the lean restock
+
+Sell the 34 Poké Balls, buy Ultra Balls to 14 and
+Great Balls to 10 at Fuchsia Mart: ¥11,961 → ¥361,
+which the hunts then lived within (below). Two
+mart lessons: the SELL quantity selector lives in
+the menuY-4 list row ("POKé BALL ×01 ¥100"), not at
+menuY 8 — the first sell_many waited for a stage
+that never comes, its blind A-ride wandered into
+BUY and spent ¥11,000 in-memory; the process died
+on its assert before any save, so the accident had
+zero persistent effect. The fixed sell_qty steers
+the quantity with UP taps inside the list row,
+verifies the ×34 readout on screen, confirms once,
+and rides only dialog text.
+
+### S3 — the grindy set (Mansion switch-grind)
+
+Pupils switch-trained at Pokémon Mansion 1F
+(Blastoise the fighter, prompt-aware driver,
+DECLINE every move replacement, per-level moveset
+audits — all audits passed):
+
+- HAUNTER — Gastly L20→25 (box 9), 21 fights after
+  one wedged attempt was fled. Dex 99.
+- WEEZING — Koffing L30→35, 53 fights. Dex 100.
+- MACHOKE — Machop L15→28, 54 fights. Dex 101.
+- RAPIDASH — Ponyta L34→40, 82 fights. Dex 102.
+- GRAVELER — Geodude L8→25 (box 3), 41 fights.
+  Dex 103.
+- DRAGONITE — Dragonair L30→55 (box 1), in level
+  bands (35/40/43/46/49/52/55) with a save per band:
+  67+95+65+76+94+99+112 ≈ 608 fights. Dex 104.
+  (Machoke / Graveler / Haunter stop at the
+  mid-stage by design — their finals are
+  trade-locked.)
+
+The grind machinery had its own wedge:
+`_finish_fight` (probe168/sweep_lib.py) steers the
+battle menu back to FIGHT with `_steer_byte` on the
+COLUMN byte — but _steer_byte presses up/down,
+which toggles the ROW byte, so from the
+post-switch PKMN cell (0,15) the two steers fight
+forever and the fight dies on its 120 s cap (a
+Mansion Grimer's Disable on the chosen move is the
+other trigger: the loop re-selects the disabled
+move's row and eats the "disabled!" text forever).
+The durable pattern is flee-and-retry: when a grind
+attempt aborts mid-battle, flee the wedged battle
+(B out to the main menu, then `_run_away`) and
+re-enter the grind fresh — every pupil completed
+within two attempts of any wedge. The column steer
+itself is fixed in sweep_lib (left/right presses).
+Blastoise went L84 → L93 across the leg's fighting.
+
+Mid-band-45 the S3d process was killed externally
+(no traceback; VM memory pressure) — the banded
+saves bounded the loss to three levels and S3d2
+resumed from the band-40 save.
+
+### S4 — Seafoam wilds (Articuno fenced, B4F never entered)
+
+Travel is the grand tour's proven legs
+(probe160a2): exit Fuchsia PC → `surf_to` Route 19
+→ `surf_to` Route 20 → `_surf_walk_to` the west
+door (48,5) → 1F landing (4,17). Hand-rolled
+beelines all wedged on a swimmer's spot-dialog at
+Route 20 (15,5) — in_dialog set, no battle, no
+movement; surf_to's surf_path routing simply does
+not hit it. Catches were Sing-assisted (Lapras
+leads; one Sing attempt per target encounter via
+`_use_move_at_menu`, then the careful thrower) to
+fit the ball budget:
+
+- SEEL L30 — 1F pace cells (5,8)/(6,8), Great
+  Balls (2 spent on the floor). Dex 105.
+- GOLDUCK L38 — 1F, the table's last slot; Ultra
+  ×2. Dex 106.
+- DEWGONG L38 + SEADRA L37 — B1F (4,12)/(5,12) via
+  the (7,5) ladder; Great ×5 for the pair.
+  Dex 107, 108.
+- SLOWBRO — B2F (3,3)/(4,3) via the B1F (4,2)
+  ladder; Great ×1. Dex 109.
+
+Exit reversed the ladders and surf_to'd home.
+
+### S5 — Power Plant wilds (Zapdos untouched)
+
+Route prep produced the leg's worst discovery:
+**Gloom and Voltorb are lost.** The Cerulean east
+exit is blocked by the Cut tree at (32,13) (tile
+0x55, measured live), and the team's only Cut user
+was Gloom. A full census — the in-game PC withdraw
+lists for all twelve boxes, plus the party — has
+neither Gloom nor Voltorb anywhere. They were in
+the party at leg 1's start (probe168/held.json:
+Gloom L24, Voltorb L16) and were lost during leg
+1/2's heavy box reorganization; the Pokédex owned
+flags are unaffected (both species still count in
+the 112), but the specimens — and with them the
+team's only Cut and Flash users — are gone. No
+fence was crossed to replace them (teaching an HM
+to a new mon is a permanent-decision class the leg
+was not authorised to spend).
+
+The plant was therefore reached the long way:
+Fly Lavender → ride Route 10 south segment →
+Rock Tunnel in reverse (dark — `_walk_tile_leg`
+ladder chain (37,17)→(23,11)→(5,3)→(33,25)→exit
+(15,3), the ported traverse's own legs without its
+Flash/Repel gates) → Route 10 north segment →
+`_surf_walk_to` from the bank at (13,28) down the
+river (the channel is x=16–17; surf_path covers
+the whole leg, (13,28)→door = 105 steps) → the
+plant door (6,39). The hunts paced at (12,28)/
+(13,28) in the south-central room; Zapdos's room
+was never entered and its sprite never approached;
+no item ball was touched:
+
+- MAGNEMITE + PIKACHU — the 2 remaining Great
+  Balls could not carry two species (and a
+  ball-less Sing attempt per encounter made the
+  Great hunt crawl at ~90 s/encounter), so the
+  commons were hunted with Ultra Balls directly:
+  ×6 for the pair. Dex 110, 111.
+- ELECTABUZZ — Ultra ×1 (asleep). Dex 112.
+
+The S5b process was killed by a service restart
+mid-hunt; the hunts were restarted from the
+plant-entry save (S5c/S5d) with no loss beyond
+time.
+
+### Money trail (to the yen)
+
+¥645 start → Max Revive sale +2,500 → Revive ×2
+−3,000 → ¥145 → E4 payouts +23,364, Champion
+blackout → ¥11,754 → care basket −10,000 → ¥1,754
+→ E4 payouts +23,364, Champion blackout → ¥12,559
+→ Full Restore ×4 −12,000 → ¥559 → Lorelei + Bruno
++11,286 → ¥11,845 → resumed Agatha + Lance
++12,078 → ¥23,923 → Champion blackout → ¥11,961 →
+Poké Ball ×34 sale +3,400 → ¥15,361 → Ultra ×9
+−10,800 → ¥4,561 → Great ×7 −4,200 → ¥361 →
+trainer winnings on the S4/S5 travel legs +1,650 →
+**¥2,011 final**. Balls: Ultra 5 +9 −2 (Golduck)
+−6 (plant commons) −1 (Electabuzz) = ×5; Great
+3 +7 −2 (Seel) −5 (B1F pair) −1 (Slowbro) = ×2.
+Final party: Lapras 58, Blastoise 93, Pidgeot 36,
+Seel 30, Golduck 38, Dewgong 38 (Seadra, Slowbro,
+Pikachu, Magnemite, Electabuzz and the evolved
+pupils are in box 4; Dragonite in box 4).
+
+### Port and what remains
+
+Ported into `run_real.py` (suite 241/241 green,
++4 tests): `_league_guard_switch` — validates
+menu-path switch targets in `_league_decide`
+(substitutes `_league_pick`'s best living
+non-active mon, else attacks with the strongest
+PP'd damaging move). Probe-side fixes kept with
+the probe libs: sweep_lib's battle-menu column
+steer (left/right), the flee-and-retry grind
+wrapper, the Sing-assisted catch wrapper, the
+reverse Rock Tunnel ladder chain. One tooling
+caveat for future legs: the probe-side .state SRAM
+box scanner (probe170/scan_boxes.py, MBC-register
+poking) reads bank-3 boxes ≥10 as empty — the
+in-game PC enumeration is the authoritative census
+(it found box 10 intact when the scanner showed
+zero).
+
+Dex 112 / 124. Remaining (leg 4): twelve
+obtainable species. Free to take: MUK (Grimer
+L38 grind — a Grimer L30 sits in box 9; also a
+1.2% Mansion 1F wild), KINGLER (Krabby L28 grind,
+box 9), SEAKING (Goldeen L33 grind, box 3),
+TANGELA (Route 21 grass, 5.1% — a wild catch, not
+a trade). Vlad-gated: TAUROS and SCYTHER (Safari
+entries need fresh authorisation; Scyther
+alternatively 5,500 Game Corner coins), PORYGON
+(9,999 coins), ZAPDOS (deferred, not fenced — a
+go-ahead would un-park it), and LICKITUNG (Route
+18 Gate trade, gives a SLOWBRO — the chain holds
+exactly one, caught this leg, so a second Slowbro
+from Seafoam B2F makes the trade free). Fenced
+unless Vlad says otherwise: ARTICUNO, MOLTRES,
+MEWTWO.

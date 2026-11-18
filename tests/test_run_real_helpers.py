@@ -1399,3 +1399,84 @@ class TestLearnPromptState(unittest.TestCase):
     def test_plain_battle_is_none(self):
         self.assertIsNone(
             self.classify("Wild KOFFING appeared!"))
+
+
+class _StubMon:
+    def __init__(self, species_id, hp, moves=(), pp=()):
+        self.species_id = species_id
+        self.hp = hp
+        self.max_hp = hp
+        self.moves = list(moves)
+        self.pp = list(pp)
+
+
+class _StubSnap:
+    """Mirrors _LeagueSnap's alive/mon interface."""
+
+    def __init__(self, party, active_id, enemy_sp):
+        self.party = party
+        self.active = next(
+            (m for m in party if m.species_id == active_id),
+            None)
+        self.enemy = (enemy_sp, 100, 100, 60)
+
+    def alive(self, species):
+        m = self.mon(species)
+        return m is not None and m.hp > 0
+
+    def mon(self, species):
+        return next(
+            (m for m in self.party
+             if m.species_id == species), None)
+
+
+class TestLeagueGuardSwitch(unittest.TestCase):
+    """probe170: _league_menu_move has hardcoded switch
+    fallbacks (lance Blastoise vs Gyarados -> Lapras if
+    alive else Snorlax) that never check the fallback is
+    alive; with it fainted the party list refuses and
+    the fight loops to the turn cap."""
+
+    def _snap(self, arcanine_hp=180):
+        party = [
+            _StubMon(rr.SP_BLASTOISE, 25,
+                     moves=[56, 39, 145, 55],
+                     pp=[5, 30, 30, 25]),
+            _StubMon(rr.SP_LAPRAS, 0),
+            _StubMon(rr.SP_SNORLAX, 0),
+            _StubMon(rr.SP_ARCANINE, arcanine_hp),
+        ]
+        return _StubSnap(party, rr.SP_BLASTOISE,
+                         rr.SP_GYARADOS)
+
+    def test_fainted_fallback_substituted(self):
+        act = rr._league_guard_switch(
+            self._snap(), "lance", rr.SP_GYARADOS,
+            ("switch", rr.SP_SNORLAX))
+        self.assertEqual(act, ("switch", rr.SP_ARCANINE))
+
+    def test_no_living_substitute_attacks(self):
+        act = rr._league_guard_switch(
+            self._snap(arcanine_hp=0), "lance",
+            rr.SP_GYARADOS, ("switch", rr.SP_SNORLAX))
+        # strongest PP'd damaging move: Hydro Pump (120)
+        self.assertEqual(act, ("move", 56))
+
+    def test_viable_target_passes_through(self):
+        party = [
+            _StubMon(rr.SP_BLASTOISE, 25,
+                     moves=[56], pp=[5]),
+            _StubMon(rr.SP_LAPRAS, 100),
+        ]
+        snap = _StubSnap(party, rr.SP_BLASTOISE,
+                         rr.SP_GYARADOS)
+        act = rr._league_guard_switch(
+            snap, "lance", rr.SP_GYARADOS,
+            ("switch", rr.SP_LAPRAS))
+        self.assertEqual(act, ("switch", rr.SP_LAPRAS))
+
+    def test_move_action_passes_through(self):
+        act = rr._league_guard_switch(
+            self._snap(), "lance", rr.SP_GYARADOS,
+            ("move", 56))
+        self.assertEqual(act, ("move", 56))

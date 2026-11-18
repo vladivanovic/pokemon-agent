@@ -13858,6 +13858,50 @@ def _league_pick(snap: _LeagueSnap, prefs):
     return None
 
 
+def _league_guard_switch(snap: _LeagueSnap, fight: str,
+                         esp: int, act):
+    """Validate a menu-path switch decision (probe170).
+
+    Several _league_menu_move branches hardcode a fallback
+    target without checking it is alive (lance: Blastoise
+    vs Gyarados -> Lapras if alive else SP_SNORLAX;
+    champion: -> Arcanine if alive else SP_SNORLAX; bruno:
+    -> SP_SNORLAX outright). With the fallback fainted,
+    the party list refuses the switch, the accidental-
+    list cancel fires, and the fight re-decides the same
+    switch until the turn cap - the leg-3 funding runs
+    died exactly there (Bruno, then Lance). Substitute
+    the best living non-active mon via _league_pick, or
+    attack with the strongest PP'd damaging move."""
+    if act[0] != "switch":
+        return act
+    a = snap.active
+    tgt = act[1]
+    tm = snap.mon(tgt) if tgt is not None else None
+    if tm is not None and tm.hp > 0 and \
+            (a is None or tgt != a.species_id):
+        return act
+    sub = _league_pick(snap, _league_prefs(fight, esp))
+    if sub is not None and sub != tgt:
+        _plog(f"switch-guard: target {tgt} not viable "
+              f"-> switch {sub}")
+        return ("switch", sub)
+    if a is not None and a.moves:
+        cands = [(_LEAGUE_MOVE_POWER.get(m, 0), m)
+                 for m in a.moves
+                 if _LEAGUE_MOVE_POWER.get(m, 0) > 0
+                 and _league_pp_of(a, m) > 0]
+        if cands:
+            cands.sort(reverse=True)
+            _plog(f"switch-guard: target {tgt} not viable "
+                  f"-> attack {cands[0][1]}")
+            return ("move", cands[0][1])
+        _plog(f"switch-guard: target {tgt} not viable "
+              f"-> attack {a.moves[0]}")
+        return ("move", a.moves[0])
+    return act
+
+
 def _league_decide(snap: _LeagueSnap, kind: str):
     fs = _LEAGUE_FS
     fight = fs.fight
@@ -13925,6 +13969,7 @@ def _league_decide(snap: _LeagueSnap, kind: str):
         fs.rest_sleep_until = fs.turn + 2
     if mv[0] == "move" and mv[1] == MOVE_STUN_SPORE:
         fs.spore_used = True
+    mv = _league_guard_switch(snap, fight, esp, mv)
     return mv
 
 
