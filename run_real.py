@@ -491,7 +491,12 @@ def heal_at_pokecenter(emu: PyBoyEmulator, ex: Executor,
     the counter, and verify from RAM that HP and PP are fully
     restored before leaving by the exit mat. Proven at the Cerulean
     center (probe49/52) and again at Vermilion (probe99). Assumes the
-    player is already inside the center."""
+    player is already inside the center. NOTE: leaving by the exit
+    mat is part of the contract - the player ends OUTSIDE the
+    center (probe172 at Fuchsia: on the doorstep at (19,28)), so a
+    caller doing PC work must re-enter afterwards (or do the PC
+    work first); the PC openers' intra-map walks all fail from
+    the doorstep."""
     try:
         ex._walk_to(pc_map, (3, 3))
     except StuckError:
@@ -817,6 +822,8 @@ ADDR_POKEDEX_OWNED = 0xD2F7
 # is banked in; box 1 is current until someone uses a PC).
 ADDR_BOX_COUNT = 0xDA80        # wBoxCount
 ADDR_BOX_SPECIES = 0xDA81      # wBoxSpecies, 0xFF-terminated
+ADDR_CURRENT_BOX_NUM = 0xD5A0  # wCurrentBoxNum (bit 7 set
+                               # while a box change pends)
 
 ADDR_MENU_TOP_Y = 0xCC24
 ADDR_MENU_ITEM = 0xCC26
@@ -890,6 +897,96 @@ def _stored_count(emu: PyBoyEmulator) -> int:
     a full party the engine sends the catch straight to the box
     (item_effects.asm SendNewMonToBox) and the party never grows."""
     return len(emu.read_state().party) + _box_count(emu)
+
+
+def _current_box_num(emu: PyBoyEmulator) -> int:
+    """1-based number of the current PC box."""
+    return (emu.pb.memory[ADDR_CURRENT_BOX_NUM] & 0x7F) + 1
+
+
+def _parse_box_data(read, base: int) -> list:
+    """Parse one PC box at `base` through a byte reader
+    `read(addr)`. Box layout: count byte, species list, then
+    33-byte box_mon structs from base+22 (level +3, moves
+    +8..11, OT id +12..13, exp +14..16, DVs +27..28)."""
+    count = read(base)
+    out = []
+    for i in range(count):
+        sp = read(base + 1 + i)
+        s = base + 22 + i * 33
+        out.append({
+            "slot": i,
+            "species": sp,
+            "name": _SPECIES_NAMES_169.get(sp, hex(sp)),
+            "level": read(s + 3),
+            "moves": [read(s + 8 + j) for j in range(4)],
+            "ot_id": (read(s + 12) << 8) | read(s + 13),
+            "exp": (read(s + 14) << 16)
+                   | (read(s + 15) << 8) | read(s + 16),
+            "dvs": [read(s + 27), read(s + 28)],
+        })
+    return out
+
+
+def _box_census(emu: PyBoyEmulator) -> dict:
+    """Authoritative census of all 12 PC boxes:
+    {box_no: [mon, ...]} with live data (probe172's
+    census_lib, ported).
+
+    Gen 1 keeps the CURRENT box live in WRAM (wBoxData at
+    ADDR_BOX_COUNT) and the other eleven only in SRAM
+    (banks 2/3, 0xA000 + idx*0x462). A box can only change
+    while it is current, and changes flush to SRAM on
+    box-switch/save - so SRAM is authoritative for every
+    box EXCEPT the current one, whose SRAM slot can lag
+    WRAM (probe172 S0: leg 4's box-3 filings, Seaking and
+    Tangela included, were live in WRAM while SRAM box 3
+    still read empty). The current box is read from WRAM,
+    the rest from SRAM."""
+    mem = emu.pb.memory
+    cur = _current_box_num(emu)
+    census = {cur: _parse_box_data(lambda a: mem[a],
+                                   ADDR_BOX_COUNT)}
+    mem[0x0000] = 0x0A
+    try:
+        for bank, rng, off in ((2, range(6), 1),
+                               (3, range(6), 7)):
+            for i in rng:
+                boxno = i + off
+                if boxno == cur:
+                    continue
+                mem[0x4000] = bank
+                base = 0xA000 + i * 0x462
+                census[boxno] = _parse_box_data(
+                    lambda a: mem[a], base)
+    finally:
+        mem[0x4000] = 0
+    return census
+
+
+def _box_find_species(census: dict, species_id: int) -> list:
+    """Every census entry of a species, tagged with its box."""
+    return [{"box": boxno, **m}
+            for boxno, mons in census.items()
+            for m in mons if m["species"] == species_id]
+
+
+def _party_needs_heal(emu: PyBoyEmulator) -> bool:
+    """True if any party mon is below full HP (raw WRAM:
+    wPartyCount 0xD163, 44-byte party structs at 0xD16B,
+    HP +1..2, max HP +34..35). probe172's descend gate: a
+    back-to-back heal_at_pokecenter call starts wherever
+    the first heal's exit path left the player and fails,
+    so a caller that has just healed should skip the
+    second heal when nobody is hurt."""
+    mem = emu.pb.memory
+    for i in range(mem[0xD163]):
+        base = 0xD16B + 44 * i
+        hp = mem[base + 1] << 8 | mem[base + 2]
+        mx = mem[base + 34] << 8 | mem[base + 35]
+        if hp < mx:
+            return True
+    return False
 
 
 def _ranked_move_fn(emu: PyBoyEmulator):
@@ -15118,6 +15215,138 @@ def _do_trade(emu, ex, map_id, give_id, want_id, world):
             if idle >= 8:
                 break
         print(f"trade: NPC at {npc} did not trade", flush=True)
+    return _specimen_count(emu, want_id) > 0
+
+
+def _do_trade_live(emu, ex, map_id, give_id, want_id, world,
+                   attempts=30):
+    """NPC trade with a WALKING trader (probe172, leg 5:
+    the Route 18 Gate 2F youngster, the Slowbro->Lickitung
+    trade - the last NPC trade in Red).
+
+    _do_trade snapshots _npc_cells once and talks to the
+    snapshot cell; a trader on a WALK pattern has moved by
+    the time the player arrives, so every attempt talks to
+    air and the helper reports failure with the dialog
+    never opened. This variant re-reads the NPC's CURRENT
+    cell on every attempt, stands adjacent, re-reads again,
+    faces the live cell, and only then talks. The dialog
+    ride is _do_trade's own logic (answer YES to the
+    yes/no, pick the give-species from the party list).
+    Success = a want_id specimen exists afterwards."""
+    gmap = world.maps[map_id]
+    mem = emu.pb.memory
+    D4 = {"up": (0, -1), "down": (0, 1), "left": (-1, 0),
+          "right": (1, 0)}
+
+    def screen():
+        return _norm_text(_screen_text(emu))
+
+    def party_index(sid):
+        st = emu.read_state()
+        for i, m in enumerate(st.party):
+            if m.species_id == sid and m.level > 0:
+                return i
+        return None
+
+    def party_list_up():
+        names = [_SPECIES_NAMES_169.get(m.species_id, "")
+                 for m in emu.read_state().party
+                 if m.level > 0]
+        flat = screen()
+        return sum(1 for n in names if n and n in flat) >= 2
+
+    def ride_dialog(rounds=120):
+        def settle(max_ticks=360):
+            prev = None
+            spent = 0
+            while spent < max_ticks:
+                emu.tick(30)
+                spent += 30
+                cur = screen()
+                if cur == prev and cur.strip(" ·"):
+                    return cur
+                prev = cur
+            return prev
+
+        idle = 0
+        for _round in range(rounds):
+            if _specimen_count(emu, want_id) > 0:
+                for _ in range(40):
+                    if not emu.read_state().in_dialog:
+                        break
+                    emu.press("a")
+                    emu.tick(60)
+                return True
+            flat = settle()
+            if "YES" in flat and "NO" in flat:
+                idle = 0
+                _steer_menu(emu,
+                            lambda: mem[ADDR_MENU_ITEM], 0)
+                emu.press("a")
+                emu.tick(60)
+                continue
+            idx = party_index(give_id)
+            if idx is not None and party_list_up():
+                idle = 0
+                cur = lambda: mem[ADDR_MENU_SCROLL] + \
+                    mem[ADDR_MENU_ITEM]
+                _steer_menu(emu, cur, idx)
+                emu.press("a")
+                emu.tick(90)
+                continue
+            if emu.read_state().in_dialog:
+                idle = 0
+                emu.press("a")
+                emu.tick(60)
+                continue
+            idle += 1
+            if idle >= 8:
+                break
+        return _specimen_count(emu, want_id) > 0
+
+    for attempt in range(attempts):
+        if _specimen_count(emu, want_id) > 0:
+            return True
+        cells = _npc_cells(emu, gmap)
+        if not cells:
+            emu.tick(60)
+            continue
+        npc = next(iter(cells))
+        stood = False
+        for d, (dx, dy) in D4.items():
+            cell = (npc[0] + dx, npc[1] + dy)
+            if not gmap.tile_walkable(*cell):
+                continue
+            _walk_fighting(emu, ex, map_id, cell, attempts=6)
+            st = emu.read_state()
+            if (st.x, st.y) != cell:
+                continue
+            cells2 = _npc_cells(emu, gmap)
+            if not cells2:
+                continue
+            npc2 = next(iter(cells2))
+            delta = (npc2[0] - cell[0], npc2[1] - cell[1])
+            face = next((k for k, v in D4.items()
+                         if v == delta), None)
+            if face is None:
+                continue
+            emu.press(face)      # turn toward him (adjacent)
+            emu.tick(20)
+            emu.press("a")
+            emu.tick(40)
+            if emu.read_state().in_dialog:
+                print(f"trade-live: dialog with NPC at "
+                      f"{npc2} (attempt {attempt})",
+                      flush=True)
+                stood = True
+                break
+        if not stood:
+            continue
+        if ride_dialog():
+            return True
+        print(f"trade-live: attempt {attempt} dialog ended "
+              f"without a trade", flush=True)
     return _specimen_count(emu, want_id) > 0
 
 

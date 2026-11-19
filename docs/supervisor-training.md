@@ -3531,3 +3531,157 @@ coins), ZAPDOS (deferred, not fenced — a go-ahead
 un-parks it; its Power Plant room was again not
 entered this leg), and the fenced three: ARTICUNO,
 MOLTRES, MEWTWO.
+
+## 33. Post-game leg 5 (probe172, 2026-11-19): the Lickitung trade — a second Slowbro, a walking trader, and the census that proved the first one never moved — dex 116 → 117
+
+Vlad's kickoff (widget tap, 2026-11-19): "Kick off
+the Lickitung trade — catch a second Slowbro first
+so Slowbro stays owned". The leg's whole point is
+the ordering: the chain's only Slowbro specimen sat
+in box 4, and trading it would have un-owned the
+species. Catch a spare, trade the spare, prove the
+original never moved.
+
+**The trade, verified from pokered first.**
+data/events/trades.asm: `npctrade SLOWBRO,
+LICKITUNG, TRADE_DIALOGSET_CASUAL, "MARC"` — used
+in ROUTE_18_GATE_2F. The NPC is a YOUNGSTER at
+(4,2), WALK LEFT_RIGHT — the only NPC on 2F (that
+walk pattern matters below). Internal species IDs
+are NOT dex numbers: SLOWBRO is 0x08, LICKITUNG
+0x0B (the first census script keyed on 0x6C and
+found "no Slowbro" — 0x6C is EKANS).
+
+**S0 census.** A full-storage census was built
+first (probe172/census_lib, now ported as
+_box_census): the current box is read from WRAM
+(wBoxData 0xDA80), the other eleven from SRAM
+(banks 2/3) — SRAM's copy of the current box can
+lag, and did: SRAM box 3 read empty while WRAM
+held leg 4's Seaking/Tangela filings. Ground
+truth at leg start: 92 boxed + 5 party = 97
+stored, dex 116, ¥811, Ultra Balls ×2 in the bag.
+The original Slowbro, exactly one specimen: box 4
+slot 3, L37, moves [29, 45, 55, 110], OT 25522,
+exp 50653, DVs [72, 115]. That fingerprint is the
+leg's close-out proof target.
+
+**The catch.** Seafoam Islands B2F (Red table):
+slot 9 is SLOWBRO L37 at 3/256 ≈ 1.17% of
+encounters; catch rate 75. The descent to the B2F
+north pocket reuses leg 3's chain with one
+correction — entry is by the EAST door only. The
+west cove is sealed from the sea (a boulder wall
+at x=43; eastward presses at rows 2–13 all
+refused, the only gap is the y=14 south channel,
+and north from the channel into the cove is
+refused too), so the island is entered from the
+south channel to the east door warp (58,9), and
+B2F's north pocket is reached only via the B1F
+center room ladder (4,2). The first hunt (S1) saw
+three Slowbro in 43 encounters but spent both
+Ultra Balls on the first sighting and was
+discarded at the pre-hunt state; the kept line
+re-hunted from there.
+
+Restock, within the brief's funding rule (sell
+re-buyable non-fence vendor stock only): PC item
+storage held NO Poké Balls — _pc_count reads 0 in
+RAM; the leg-2 record of ×3 was stale. Fuchsia
+Mart does not stock Poké Balls at all (its list:
+Ultra Ball, Great Ball, Super Potion, Revive,
+Full Heal, Super Repel). So: sold the bag REVIVE
+×1 (+¥750 — re-buyable at that same mart) and
+bought GREAT BALL ×2 (−¥1,200, list index 1).
+Money ¥811 → ¥1,561 → ¥361. The successful hunt:
+encounter 52, Slowbro L37, Sing landed (enemy
+status byte 0x7, asleep at full HP 127/127);
+Ultra Ball #1 broke out, #2 caught. The two Great
+Balls were never thrown.
+
+**Seafoam exit lesson.** The east door dumps the
+player ON FOOT on the island's east beach at
+(58,10), and the sea east/southeast of the island
+is a separate surf-graph component with no route
+to Route 19's edge — surf_to(R19) fails there.
+The way home: board Surf south at (61,11)→(61,12),
+surf_to Cinnabar along the y=14 south channel
+(the graph connects (61,12) all the way west),
+then Fly to Fuchsia. (The beach's east edge at
+(62,10) is a 0x3A shore tile — not standable, not
+boardable; the south edge is the boarding side.)
+
+**The trade.** Fuchsia → Route 18 on rows ≤10
+(the Bird Keepers' sight lines are rows 11/13/15;
+no trainer battle was fought all leg) → gate east
+door (40,8) → 1F → stairs (6,8) → 2F. There,
+_do_trade FAILED: it snapshots _npc_cells once
+and talks to the snapshot cell, but the youngster
+walks his LEFT_RIGHT patrol — by the time the
+player stands adjacent, he has moved, and every
+attempt talks to air. The fix is ported as
+_do_trade_live: re-read the NPC's current cell on
+every attempt, stand adjacent, re-read, face the
+live cell, then talk; the dialog ride is
+_do_trade's own (YES to the yes/no, pick the
+give-species from the party list). It traded on
+the first dialog: the fresh Slowbro out, LICKITUNG
+"MARC" L37 in (OT 14261 — the NPC's, as a traded
+mon should be), dex 116 → 117 verified in RAM.
+Gate exit warps are direction-sensitive: stepping
+DOWN onto (7,4) from (7,3) does not fire it;
+stepping EAST onto it from (6,4) does.
+
+**Census proof (the point of the leg).** Final
+census against census_start.json: box 4 slot 3 is
+byte-identical — Slowbro L37, moves [29, 45, 55,
+110], OT 25522, exp 50653, DVs [72, 115]. The
+original was never in the party, never traded.
+Lickitung is filed in box 3 (the current box) slot
+17: L37, moves [23, 50, 111, 21], OT 14261, exp
+50653, DVs [52, 190]. Stored total 93 boxed + 5
+party. The deposit ran into §32's standing note
+the hard way: heal_at_pokecenter leaves by the
+exit mat (Fuchsia doorstep (19,28)), and every PC
+opener fails from there — re-enter first, then
+deposit. heal_at_pokecenter's docstring now says
+so explicitly.
+
+**Money trail.** Start ¥811. REVIVE sale +¥750 →
+¥1,561. GREAT BALL ×2 −¥1,200 → ¥361. Nothing
+else moved all leg (no trainer winnings, no other
+purchases); end ¥361. Balls: Ultra 2 → 0 (both on
+the catch), Great 0 → 2 (bought, unthrown, still
+in the bag).
+
+**Ports.** _box_census + _parse_box_data +
+_current_box_num + _box_find_species (the
+authoritative storage census), _party_needs_heal
+(the raw-WRAM hurt check — a back-to-back
+heal_at_pokecenter starts wherever the first
+heal's exit left the player and fails, so route
+code now heals only when someone is hurt),
+_do_trade_live (walking-NPC trades), and the
+heal_at_pokecenter docstring warning. Suite
+249/249 (was 242; +7 census/heal tests).
+
+FINAL leg-5 chain head: probe172/s2-final.state,
+sha256
+31b670f6ab96f589d1bb802e0b7cdaf36f119bb63af18d39b4079ec2846b520e
+— Fuchsia Pokécenter, dex 117, ¥361, badges 8.
+Party: Lapras 58, Blastoise 96, Pidgeot 36,
+Oddish 12 (Cut), Voltorb 16 (Flash), all healed;
+the fresh Slowbro traded away, Lickitung filed
+in box 3, the original Slowbro untouched in
+box 4.
+
+Dex 117 / 124. Remaining is seven, every one of
+them Vlad's separate call: TAUROS and SCYTHER
+(Safari Zone — two budgets/12 entries already
+spent in leg 1 with zero catches, so a fresh
+authorisation is needed; Scyther alternatively
+5,500 Game Corner coins), PORYGON (9,999 Game
+Corner coins), ZAPDOS (deferred, not fenced — a
+go-ahead un-parks it), and the fenced three:
+ARTICUNO (Seafoam B4F — transited B3F this leg,
+B4F never entered), MOLTRES, MEWTWO.

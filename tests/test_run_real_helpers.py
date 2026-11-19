@@ -1494,3 +1494,109 @@ class TestHuntPairedPaceDirs(unittest.TestCase):
             rr._PACE_DIRS,
             {(0, -1): "up", (0, 1): "down",
              (-1, 0): "left", (1, 0): "right"})
+
+
+def _write_box(mem, base, mons):
+    """Fabricate one PC box in a flat memory image. Each
+    mon: (species, level, moves, ot_id, exp, dvs)."""
+    mem[base] = len(mons)
+    for i, (sp, lvl, moves, ot, exp, dvs) in enumerate(mons):
+        mem[base + 1 + i] = sp
+        s = base + 22 + i * 33
+        mem[s + 3] = lvl
+        for j, mv in enumerate(moves):
+            mem[s + 8 + j] = mv
+        mem[s + 12] = ot >> 8
+        mem[s + 13] = ot & 0xFF
+        mem[s + 14] = (exp >> 16) & 0xFF
+        mem[s + 15] = (exp >> 8) & 0xFF
+        mem[s + 16] = exp & 0xFF
+        mem[s + 27] = dvs[0]
+        mem[s + 28] = dvs[1]
+
+
+class TestBoxCensus(unittest.TestCase):
+    """probe172 port: _box_census reads the CURRENT box
+    from WRAM and the other eleven from SRAM - the SRAM
+    copy of the current box can lag (leg 4's box-3 filings
+    were live in WRAM while SRAM box 3 read empty). The
+    flat fake memory cannot model bank switching, so the
+    SRAM window simply holds whatever was written at the
+    slot offsets; the routing (current from WRAM, box 1
+    from the bank-2 slot 0 offset) is what is pinned."""
+
+    def _emu(self):
+        emu = FakeEmu()
+        mem = emu.memory
+        # current box = 4 (stored value is 0-based)
+        mem[rr.ADDR_CURRENT_BOX_NUM] = 3
+        _write_box(mem, rr.ADDR_BOX_COUNT, [
+            (0x08, 37, [29, 45, 55, 110], 25522, 50653,
+             [72, 115])])
+        # SRAM bank-2 slot 0 = box 1
+        _write_box(mem, 0xA000, [
+            (0x0B, 37, [23, 50, 111, 21], 14261, 50653,
+             [52, 190])])
+        return emu
+
+    def test_current_box_comes_from_wram(self):
+        census = rr._box_census(self._emu())
+        self.assertEqual(sorted(census), list(range(1, 13)))
+        bro = census[4]
+        self.assertEqual(len(bro), 1)
+        self.assertEqual(bro[0]["species"], 0x08)
+        self.assertEqual(bro[0]["name"], "SLOWBRO")
+        self.assertEqual(bro[0]["level"], 37)
+        self.assertEqual(bro[0]["moves"], [29, 45, 55, 110])
+        self.assertEqual(bro[0]["ot_id"], 25522)
+        self.assertEqual(bro[0]["exp"], 50653)
+        self.assertEqual(bro[0]["dvs"], [72, 115])
+
+    def test_other_box_comes_from_sram(self):
+        census = rr._box_census(self._emu())
+        lick = census[1]
+        self.assertEqual(len(lick), 1)
+        self.assertEqual(lick[0]["species"], 0x0B)
+        self.assertEqual(lick[0]["ot_id"], 14261)
+
+    def test_find_species_tags_the_box(self):
+        census = rr._box_census(self._emu())
+        hits = rr._box_find_species(census, 0x08)
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0]["box"], 4)
+        self.assertEqual(rr._box_find_species(census, 0x7F),
+                         [])
+
+    def test_empty_box_parses_empty(self):
+        emu = FakeEmu()
+        emu.memory[rr.ADDR_CURRENT_BOX_NUM] = 0
+        census = rr._box_census(emu)
+        self.assertEqual(census[1], [])
+
+
+class TestPartyNeedsHeal(unittest.TestCase):
+    """probe172 port: the raw-WRAM hurt check that gates
+    a redundant heal_at_pokecenter call."""
+
+    def _emu(self, hps):
+        emu = FakeEmu()
+        mem = emu.memory
+        mem[0xD163] = len(hps)
+        for i, (hp, mx) in enumerate(hps):
+            base = 0xD16B + 44 * i
+            mem[base + 1] = hp >> 8
+            mem[base + 2] = hp & 0xFF
+            mem[base + 34] = mx >> 8
+            mem[base + 35] = mx & 0xFF
+        return emu
+
+    def test_full_party_needs_no_heal(self):
+        self.assertFalse(rr._party_needs_heal(
+            self._emu([(250, 250), (36, 36)])))
+
+    def test_one_hurt_mon_needs_heal(self):
+        self.assertTrue(rr._party_needs_heal(
+            self._emu([(250, 250), (12, 36)])))
+
+    def test_empty_party_needs_no_heal(self):
+        self.assertFalse(rr._party_needs_heal(self._emu([])))
