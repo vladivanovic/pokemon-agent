@@ -4354,3 +4354,187 @@ explicit revisit. Queued next project (Vlad,
 2026-11-18): revise the accumulated code into
 named, command-callable side quests — scope is
 his to set; do not start unprompted.
+
+## 39. Post-game leg 11 (probe178, 2026-11-22): THE FENCED THREE — Articuno, Moltres, Mewtwo — dex 121 → 124, THE CEILING
+
+Vlad's revisit, verbatim, in reply to the leg-10
+report: **"Go grab those remaining Pokemon!"** —
+plus, two minutes later, **"Can you record battling
+and catching them?"** The fence lifted for exactly
+the three named targets; the Master Ball fence
+stayed (the order named the Pokémon, not the ball —
+it has still never been thrown). Per target: the
+Zapdos discipline (checkpoint at the stance, Sing →
+bound-gated chip → Ultras, max 3 attempts from the
+checkpoint, every attempt documented), a frame
+recorder on every attempt (probe178/recorder.py:
+tick-wrapping sampler, PIL GIF), and the kept
+attempt's clip saved per legendary.
+
+**Funding first.** Start ¥2,160 / Ultra ×11 is not
+three catch-rate-3 fights. The planned single E4
+run first aborted twice inside Lorelei with zero
+payouts: **Snorlax crosses L55→56 mid-Lorelei and
+its HYPER BEAM learn prompt wedges the league
+ride** — after the decline, a YES/NO-class window
+(MAX=1) stays open and the ride's guard refuses
+blind A presses. De-fuse, at the coordinator layer
+(the league driver untouched): pre-level Snorlax
+55→56 at the Mansion with the prompt-aware grinder
+(Hyper Beam DECLINED, moveset audited unchanged);
+its learnset ends at 56, so no prompt can fire in
+the gauntlet. The run then won clean: ¥660 →
+**¥30,459** (+¥29,799 payouts), Lapras to L62.
+Restock: Ultra ×30 total, Revive ×2, Full Heal ×2,
+¥3,459 left. Money trail for the leg: 2,160 →
+−1,500 (one Revive, Indigo lobby) → 660 → +29,799
+(E4) → 30,459 → −27,000 (mart) → 3,459 → +2,000
+(a Victory Road trainer the storyline had never
+fought, met in transit) → **¥5,459** at the end.
+Balls: 30 → 24 (Articuno) → 22 (Moltres) → 19
+(Mewtwo).
+
+**Machinery traps (new, all paid for once):**
+- The Executor's planner rides (`ex._walk_to`,
+  `_ride_battling` to a non-adjacent map, the
+  journey BFS inside `world.journey`) can spin at
+  99% CPU indefinitely with this lineage's boot
+  states (the R23 passage from Fuchsia, the
+  Cerulean ride twice). Deterministic walkers
+  (`_walk_fighting`, `_surf_walk_to`, the VR
+  helpers, probe-side walk178/press_walk) did every
+  leg instead. `_ride_battling` still works for
+  short doorstep rides (Pokécenter entries).
+- The world model's warp tables are NOT the ROM's:
+  Seafoam's model warps are offset/wrong (e.g. a
+  phantom B1F (7,8)); the ROM `def_warp_events`
+  lists are engine truth and cross-check cleanly
+  against live landings. The model's `tiles`
+  (sampled bottom-left) also differ from the live
+  front tile at some shores (R24 (5,19): sample
+  $32, live $52 — boarding refused; (5,16) live
+  $32 — boarded).
+- Seafoam is a warp-web, not a ladder shaft:
+  one-way CAVERN pair-collision terraces
+  ($20/$41/$2A/$21 vs $05 on land, $14 vs $05 on
+  water) split every floor into pockets joined
+  only by ladder pairs and dungeon-warp holes
+  (1F (17,6)/(24,6), B1F (18,6)/(23,6), B2F
+  (19,6)/(22,6), B3F (3,16)/(6,16) — the hole
+  coords live in each floor's SCRIPT, not its
+  warp list). B4F has exactly three standable
+  boarding shores: (23,5) and (7,3) ($15 tiles)
+  and the stairs cell (7,11).
+- **`IsSurfingAllowed` (ROM)**: on Seafoam B4F,
+  boarding at the stairs coords (7,11) is refused
+  ("The current is too fast!") until BOTH B3F
+  boulder events are set (2512/2513). The
+  storyline's cascade had only done the 1F/B1F/
+  B2F pairs — B3F's two hole boulders were never
+  pushed. Leg 11 pushed them: boulder 1 left ×3
+  (corridor), boulder 2 straight down into
+  (3,16); boulder 4 north ×2 into the pocket to
+  open boulder 3's north stance, then boulder 3
+  down/left/left/down into (6,16). Both flags
+  verified in RAM before the approach.
+- Cerulean Cave B1F is reached by probe169-S14b's
+  hand route: 1F (25,9) board → surf west to
+  (11,14) → land (11,13) → press_walk to the
+  (3,11) ladder → 2F west → (1,3) down → walk the
+  $20/$18 platform tiles only → (0,7) → (0,6) →
+  B1F. (The direct floor route is walled by the
+  pair rule; 1F's west pocket opens to the
+  entrance room only in the surf graph's south,
+  and its north cluster is $20-floored.)
+- Mewtwo selection-failure lesson (ported fix):
+  when the faster enemy moves first and the
+  active mon faints before executing, the move
+  helper reports failure; the original driver
+  returned 'stuck' on the spot. See the port.
+
+**Articuno** (Seafoam B4F (6,1), stance (6,2),
+L50, Peck/Ice Beam). Travel: Fuchsia → surf_to
+R19/R20 → west door → the east shaft down
+(1F east → B1F (25,3) → hole (23,6) → B2F east →
+(25,3) → B3F (25,3) → (25,4) → B4F east (25,4)) →
+dock (23,5) into the east basin for the arrival
+state, then (after the boulders) the west basin
+via the stairs shore. **Caught attempt 1**: Sing
+(4 tries: PP 15→11), one Strength chip 165→109
+(worst-case crit bound 128 < 165), 6 Ultras,
+caught asleep at 109/165. Dex **122**. Clip:
+probe178/media/articuno-fight.gif (585 frames).
+
+**Moltres** (Victory Road 2F (11,5), stance
+(11,6), L50, Peck/Fire Spin). Travel: fly
+Viridian → R22 gate → R23 passage (badge
+corridor + the surf stretch) → VR 1F switch
+pushes → 2F switch 1 → gate 1 → east to (23,7)
+→ 3F top-band switch ride → drop (2,0) → 2F
+north room → stance. (The (5,5) boulder seals
+the west column at (5,3) if pushed north twice —
+a trap; the room is only entered via the 3F
+loop. The chamber's south cells (10,7)/(11,7)
+are pair-walled from row 8.) **Caught attempt
+1**: chips to 36/153 (a crit inside the proven
+bound: crit ≤146 < 153), wake, re-Sing, 2 Ultras,
+caught asleep at 36/153. Lapras 267→217. Dex
+**123**. Clip: moltres-fight.gif (341 frames).
+
+**Mewtwo** (Cerulean Cave B1F (27,13), stance
+(27,14), L70 — wild moveset Swift / Psychic /
+Barrier / Recover: the L1 Disable is replaced
+by Recover at L70 in the initial-moves build).
+Travel: VR exit via victory_road's second half
+(hole drop, switch 2, NE pocket door) → fly
+Cerulean → heal → the river entry (street →
+Route 24 west bank (5,16), the one live-$32
+shore → surf the river south → the west channel
+→ the (4,11) door) → S14b's ladder route to B1F
+→ _surf_walk_to across B1F to the platform.
+Attempts: the stage's fixed boot line wedged
+three times at the wake turn (Lapras, at ~91 HP
+after two Psychics, fainted to the wake-turn
+Psychic before its selected Sing could execute;
+the helper's failure then wedged the driver) —
+the ported sel_fails fix rides such turns out,
+and per-attempt boot-settle variation (the
+encounter RNG stream is frame-sensitive) gave
+fresh lines. **Caught attempt 2**: Sing t1,
+chip 239→188, wake, re-Sing (slp 7), chip
+188→140→89 across two sleeps (Recover-aware
+cap 2/sleep honoured), 3 Ultras, caught asleep
+at 89/239; Lapras ended 135/267, never fainted.
+Dex **124 — the solo-Red ceiling**. Clip:
+mewtwo-fight.gif (726 frames).
+
+**Port**: `catch_static_legendary` +
+`_chip_bounds_live` in run_real.py (the probe178
+driver, generalised from catch_zapdos, which
+stays byte-identical; the sel_fails ride-out is
+the one behavioural change, documented in the
+docstring). Tests: +3 (TestChipBoundsLive) —
+suite **268/268**.
+
+**Chain head: `probe178/s7-final.state`, sha256
+`b21f983cd1e6b165d86c34831aca40abe0bd9e5a9033453b62307d53c392f2fc`**
+— Cerulean City Pokécenter doorstep, healed,
+dex **124**, ¥5,459, Ultra ×19, Revive ×2, Full
+Heal ×2; party Lapras 62 / Blastoise 97 /
+Pidgeot 36 / Snorlax 56 / Arcanine 53 /
+Dragonite 55. The three legendaries sit
+together in box 6 (Mewtwo slot 0, Moltres slot
+1, Articuno slot 2; Zapdos remains in box 3).
+Census: 124 owned of the 124 solo-Red ceiling;
+the 27 structurally unobtainable species are
+listed in leg2-remaining.md for the record.
+
+Fences held to the end: Master Ball never
+thrown in the entire run; no TM teaches; Rare
+Candy / HP Up / Carbos unspent; no Safari or
+Game Corner this leg. **The post-game dex
+programme is COMPLETE: 124/124.** Queued next
+project (Vlad, 2026-11-18): revise the
+accumulated code into named, command-callable
+side quests — scope is his to set; do not start
+unprompted.

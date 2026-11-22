@@ -15920,6 +15920,27 @@ def _strength_bounds_live(emu, power=80):
                                crit=True))
 
 
+def _chip_bounds_live(emu, power, dfn_range):
+    """(noncrit_max, crit_max) like _strength_bounds_live
+    but with a caller-set enemy-Def sanity range (leg 11,
+    probe178: Mewtwo's live Def ~131-152 falls outside
+    the Zapdos-tuned 80-120 window, and Articuno/Moltres
+    sit at its edges). Out-of-range reads return a
+    never-attack bound."""
+    mem = emu.pb.memory
+    atk = (mem[ADDR_BATTLE_MON_SPECIES + 17] << 8) \
+        | mem[ADDR_BATTLE_MON_SPECIES + 18]
+    dfn = (mem[ADDR_ENEMY_SPECIES + 19] << 8) \
+        | mem[ADDR_ENEMY_SPECIES + 20]
+    if not (90 <= atk <= 200
+            and dfn_range[0] <= dfn <= dfn_range[1]):
+        return 0, 9999
+    lv = emu.read_state().party[0].level
+    return (_gen1_damage_bound(lv, power, atk, dfn),
+            _gen1_damage_bound(lv, power, atk, dfn,
+                               crit=True))
+
+
 def _fight_cursor(emu):
     """Steer the main battle menu cursor to FIGHT (menu
     item 0, col 9) so _use_move_at_menu's sig check
@@ -16092,6 +16113,178 @@ def catch_zapdos(emu, ex, log=print):
                 continue
         r = _throw_one_careful(emu, ultra, stored0)
         log(f"throw -> {r}")
+        if r == "caught":
+            return "caught"
+        if r == "over":
+            return "caught" if _stored_count(emu) > stored0 \
+                else "stuck"
+        if r == "failed":
+            return "stuck"
+    return "stuck"
+
+
+def catch_static_legendary(emu, ex, *, map_id, stance,
+                           face_dir, species, level,
+                           max_hp_range, dfn_range,
+                           recover_aware=False, recorder=None,
+                           log=print, max_turns=150):
+    """Generalised static-legendary catch (leg 11,
+    probe178): the catch_zapdos discipline parameterised
+    by species / map / stance / facing, with caller-set
+    enemy max-HP and Def sanity ranges for the intro
+    check and the chip bound, and a Recover-aware chip
+    policy (vs a Recover user, at most 2 chips per sleep
+    - the chip only buys throw odds inside that sleep).
+    Used for Articuno (Seafoam B4F (6,2), L50), Moltres
+    (Victory Road 2F (11,6), L50) and Mewtwo (Cerulean
+    Cave B1F (27,14), L70, recover_aware=True); all three
+    caught first-or-second attempt, dex 124. The MASTER
+    BALL is never referenced. Lapras (Sing + Strength)
+    must lead. A move-selection failure is NOT instantly
+    fatal: when the faster enemy moves first and the
+    active mon faints before executing, the selection
+    helper reports failure - the driver rides the turn
+    out and re-evaluates (the replacement comes in and
+    the fight continues throw-only); three consecutive
+    selection failures still return 'stuck'. The caller
+    owns the checkpoint: save a state at the stance;
+    on 'ko' / 'out_of_balls' / 'stuck' restore it and
+    retry (max 3 attempts per target). Returns 'caught'
+    / 'ko' / 'out_of_balls' / 'stuck' / 'failed'
+    (preconditions)."""
+    world = ex.world
+    ultra = 0x02
+    lapras = 0x13
+    st = emu.read_state()
+    if st.map_id != map_id or (st.x, st.y) != stance:
+        log(f"precondition: at {world.map_name(st.map_id)} "
+            f"({st.x},{st.y}), want "
+            f"{world.map_name(map_id)}{stance}")
+        return "failed"
+    lead = st.party[0] if st.party else None
+    if lead is None or lead.species_id != lapras or \
+            MOVE_SING not in lead.moves or \
+            MOVE_STRENGTH not in lead.moves:
+        log("precondition: Lapras (Sing+Strength) must lead")
+        return "failed"
+    if _bag_count(emu, ultra) == 0:
+        log("precondition: no Ultra Balls")
+        return "failed"
+    release_held_buttons(emu)
+    p1 = emu.read_state()
+    emu.tick(90)
+    p2 = emu.read_state()
+    if (p1.x, p1.y) != stance or (p2.x, p2.y) != stance \
+            or p2.in_battle:
+        log("precondition: stance drifted after release")
+        return "failed"
+    _face(emu, face_dir)
+    emu.tick(90)
+    st = emu.read_state()
+    if (st.x, st.y) != stance or st.in_battle:
+        return "failed"
+    _press10(emu, "a")
+    for _ in range(300):
+        st = emu.read_state()
+        if st.in_battle:
+            break
+        if st.in_dialog:
+            _press10(emu, "a")
+        emu.tick(20)
+    if not emu.read_state().in_battle:
+        log("engage: battle never started")
+        return "failed"
+    if recorder is not None:
+        recorder.capture()
+    mem = emu.pb.memory
+    for _ in range(400):
+        sp, hp, mx, lv = _enemy_live(emu)
+        batk = (mem[ADDR_BATTLE_MON_SPECIES + 17] << 8) \
+            | mem[ADDR_BATTLE_MON_SPECIES + 18]
+        if sp == species and lv == level \
+                and max_hp_range[0] <= mx <= max_hp_range[1] \
+                and 60 <= batk <= 260:
+            break
+        if emu.read_state().in_dialog:
+            _press10(emu, "a")
+        emu.tick(20)
+    sp, hp, mx, lv = _enemy_live(emu)
+    if sp != species or lv != level:
+        log(f"intro sanity: enemy=({sp:#x},{hp},{mx},{lv})")
+        return "failed"
+    stored0 = _stored_count(emu)
+    sel_fails = 0
+    thrower_only = False
+    chips_this_sleep = 0
+    was_asleep = False
+    for _turn in range(max_turns):
+        st = emu.read_state()
+        if not st.in_battle:
+            return "caught" if _stored_count(emu) > stored0 \
+                else "stuck"
+        r = _ride_to_battle_menu(emu)
+        if r == "over":
+            return "caught" if _stored_count(emu) > stored0 \
+                else "stuck"
+        if mem[ADDR_MENU_TOP_Y] != 14:
+            return "stuck"
+        sp, hp, mx, lv = _enemy_live(emu)
+        if sp != species:
+            return "stuck"
+        if hp == 0:
+            return "ko"
+        active = mem[ADDR_BATTLE_MON_SPECIES]
+        if active != lapras:
+            thrower_only = True
+        slp = mem[ADDR_ENEMY_STATUS] & 0x07
+        if slp == 0:
+            chips_this_sleep = 0
+            was_asleep = False
+        elif not was_asleep:
+            was_asleep = True
+        if _bag_count(emu, ultra) == 0:
+            return "out_of_balls"
+        log(f"t{_turn}: hp={hp}/{mx} slp={slp} balls="
+            f"{_bag_count(emu, ultra)} "
+            f"thrower_only={thrower_only} "
+            f"chips={chips_this_sleep}")
+        if not thrower_only and slp == 0:
+            if not _fight_cursor(emu) or \
+                    not _use_move_at_menu(emu, MOVE_SING):
+                sel_fails += 1
+                log(f"sing selection failed ({sel_fails})")
+                if sel_fails >= 3:
+                    return "stuck"
+                emu.tick(300)
+                continue
+            sel_fails = 0
+            emu.tick(200)
+            continue
+        if not thrower_only and slp > 0:
+            if not recover_aware or chips_this_sleep < 2:
+                base, crit = _chip_bounds_live(
+                    emu, 80, dfn_range)
+                if crit < hp:
+                    log(f"chip: Strength bounds base<={base} "
+                        f"crit<={crit} < hp {hp}")
+                    if not _fight_cursor(emu) or \
+                            not _use_move_at_menu(
+                                emu, MOVE_STRENGTH):
+                        sel_fails += 1
+                        log(f"chip selection failed "
+                            f"({sel_fails})")
+                        if sel_fails >= 3:
+                            return "stuck"
+                        emu.tick(300)
+                        continue
+                    sel_fails = 0
+                    chips_this_sleep += 1
+                    emu.tick(200)
+                    continue
+        r = _throw_one_careful(emu, ultra, stored0)
+        log(f"throw -> {r}")
+        if recorder is not None:
+            recorder.capture()
         if r == "caught":
             return "caught"
         if r == "over":

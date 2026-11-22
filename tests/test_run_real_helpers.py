@@ -1703,6 +1703,68 @@ class TestGen1DamageBound(unittest.TestCase):
                 rr._gen1_damage_bound(lv, 40, 90, 90))
 
 
+class TestChipBoundsLive(unittest.TestCase):
+    """leg 11 port (probe178): _chip_bounds_live is
+    _strength_bounds_live with a caller-set Def range -
+    Mewtwo's live Def (~131-152) sits outside the
+    Zapdos window (80-120), so the generalised helper
+    must (a) compute the same Gen 1 bounds when the
+    read is inside the caller's range and (b) return
+    the never-attack bound (0, 9999) outside it."""
+
+    def _emu(self, atk, dfn, level=62):
+        mem = bytearray(0x10000)
+        base = rr.ADDR_BATTLE_MON_SPECIES
+        mem[base + 17] = (atk >> 8) & 0xFF
+        mem[base + 18] = atk & 0xFF
+        ebase = rr.ADDR_ENEMY_SPECIES
+        mem[ebase + 19] = (dfn >> 8) & 0xFF
+        mem[ebase + 20] = dfn & 0xFF
+
+        class _PB:
+            memory = mem
+
+        class _Mon:
+            pass
+
+        mon = _Mon()
+        mon.level = level
+
+        class _State:
+            party = [mon]
+
+        class _Emu:
+            pb = _PB()
+
+            def read_state(self):
+                return _State()
+
+        return _Emu()
+
+    def test_in_range_matches_damage_bound(self):
+        emu = self._emu(170, 140)
+        base, crit = rr._chip_bounds_live(emu, 80,
+                                          (125, 160))
+        self.assertEqual(
+            base, rr._gen1_damage_bound(62, 80, 170, 140))
+        self.assertEqual(
+            crit, rr._gen1_damage_bound(62, 80, 170, 140,
+                                        crit=True))
+
+    def test_out_of_range_never_attacks(self):
+        emu = self._emu(170, 140)
+        self.assertEqual(
+            rr._chip_bounds_live(emu, 80, (80, 120)),
+            (0, 9999))
+
+    def test_mewtwo_window_admits_higher_def(self):
+        emu = self._emu(170, 152)
+        base, crit = rr._chip_bounds_live(emu, 80,
+                                          (125, 160))
+        self.assertGreater(crit, base)
+        self.assertLess(crit, 9999)
+
+
 class TestEnemyLive(unittest.TestCase):
     """probe174 port: _enemy_live reads the enemy from
     the BATTLE struct (wEnemyMon). _battle_enemy's level
