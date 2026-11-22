@@ -4269,3 +4269,88 @@ steps/entry → ~1.7 sightings/entry at the 11/256
 slot → ~11% per sighting → roughly 70% for a
 6-entry round); fenced — Articuno, Moltres,
 Mewtwo.
+
+## 38. Post-game leg 10 (probe177, 2026-11-22): Safari round 5 — TAUROS CAUGHT on the fixed machinery — dex 120 → 121
+
+Vlad's authorisation: **"Authorise Safari round 5 —
+first hunt with fixed machinery (~70% over 6
+entries)"** — up to 6 entries (¥500 each), unbaited
+throws only, Tauros only, stop the moment it is
+caught. Start state: probe176's head (Fuchsia
+Pokécenter, dex 120, ¥160, box 6 empty and current).
+
+**Funding (sales only, no Elite Four).** The S0
+census found the bag's only sellable stack was
+Ultra Ball ×16 — everything else is HMs, key items
+or the fenced CARBOS, and PC storage is TMs + key
+items. Ultra ×5 sold at the Fuchsia Mart at the
+exact pokered half (¥600 each) → **¥160 → ¥3,160**,
+covering all six fees; Ultra ×11 kept. Money
+trail for the leg: ¥3,160 → entry fees −¥1,000
+(2 entries) → **¥2,160**. ¥2,000 of the authorised
+envelope was never spent.
+
+**Sanity gate (the round-4 lesson, applied).**
+Entry 1 ran alone before the rest were committed.
+The ported machinery reproduced §37's verification
+figures exactly: `_safari_replay_west_route`
+arrived at West (17,20) with **222 of 500 steps
+left**, and pacing the live pair (15,20)/(16,20)
+produced **19 battles in 214 paced steps** (~1 per
+11 steps — the lawn-scan rate, counted by wrapping
+`hunt_battle`, since the engaged-battle log does
+not record fled dupes). One Tauros sighting: one
+unbaited ball, fled — the ordinary ~11%-per-
+sighting game. Gate passed; entries 2–6 committed.
+
+**Entry 2 — caught on the approach.** Before
+pacing even began (pacing counters 0), a Tauros
+hit during the West approach — the replay's tail
+or the two-cell walk west from (17,20) to the pair
+crosses West grass, and the hunt settle engages
+transit battles under the same policy. **L26**
+(the West table, not North's L28), first unbaited
+ball: **CAUGHT.** Filed box 6 slot 0 (OT 25522,
+exp 21970). The hunt stopped immediately, per the
+authorisation; entries 3–6 were never bought.
+
+**Round 5 result: 2 of 6 entries used, Tauros
+2 sightings / 2 balls / 1 catch. Dex 120 → 121.**
+Round totals across both entries: 55 battles
+(transit + pacing). Lifetime Tauros tally, closed:
+**6 sightings / 6 balls / 1 catch** (rounds 1–5;
+round 4 contributed no canonical sightings).
+Every Safari-obtainable species is now owned.
+
+**Port: none required — deliberately.** The leg
+ran entirely on §37's ported machinery
+(`_safari_replay_west_route`, the live-pair rule)
+and validated it end-to-end under paid conditions:
+the 222-step arrival reproduced to the step, and
+the live pair produced battles at the scan rate.
+The stage glue (the two-cell walk west from the
+replay's end cell to the pair, the pacing-battle
+counter) stays probe-side in probe177. Suite
+unchanged: **265/265**.
+
+**Chain head: `probe177/s3-final.state`, sha256
+`6f5f0ec16c40d0931d14854fc22cf1ff95e477e30fde49a9eb07f8f8e21cd4b2`**
+— Fuchsia Pokécenter, dex **121**, ¥2,160, party
+unchanged (Lapras 60 / Blastoise 97 / Pidgeot 36 /
+Oddish 12 (Cut) / Voltorb 16 (Flash) / Scyther
+25); current box 6 now holds the Tauros (1/20);
+census 107 stored + 6 party. Fences held: no coin
+spending, no TM/HM teaches, no stat items, Master
+Ball never thrown, Articuno/Moltres/Mewtwo
+untouched.
+
+Remainder (3, ALL fenced — the dex programme is
+otherwise complete at 121 of the 124 solo-Red
+ceiling): **Articuno** (Seafoam B4F, never
+entered), **Moltres** (Victory Road, "leave it
+alone" 2026-11-11), **Mewtwo** (Cerulean Cave
+B1F). Any of the three moves only on Vlad's
+explicit revisit. Queued next project (Vlad,
+2026-11-18): revise the accumulated code into
+named, command-callable side quests — scope is
+his to set; do not start unprompted.
