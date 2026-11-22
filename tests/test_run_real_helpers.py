@@ -556,6 +556,68 @@ class TestSafari(unittest.TestCase):
                                (219, (19, 8)), blocked)
         self.assertIsNotNone(path)
 
+    @staticmethod
+    def _grass(map_id, x, y):
+        w, h, bits = rr.SAFARI_GRASS[map_id]
+        if not (0 <= x < w and 0 <= y < h):
+            return False
+        i = y * w + x
+        return bool(bits[i // 8] >> (i % 8) & 1)
+
+    def test_grass_pair_west_is_not_the_sterile_edge_pair(self):
+        # probe176 (docs S37): the old anchor-nearest West
+        # pair ((17,20),(17,21)) is the field's last grass
+        # column and produced ZERO encounters in ~1,080
+        # paced steps across five paid entries - the
+        # encounter check reads the half-block's
+        # bottom-right tile, which is off-grass there.
+        pair = rr._safari_grass_pair(rr.MAP_SZ_WEST)
+        self.assertNotEqual(pair, ((17, 20), (17, 21)))
+        for (x, y) in pair:
+            self.assertTrue(self._grass(219, x + 1, y))
+            self.assertTrue(self._grass(219, x, y + 1))
+
+    def test_grass_pairs_are_live_in_every_area(self):
+        # Wherever a both-live pair exists (grass east AND
+        # south of both cells), the picker must return one.
+        for mid in (217, 218, 219, 220):
+            pair = rr._safari_grass_pair(mid)
+            self.assertIsNotNone(pair)
+            for (x, y) in pair:
+                self.assertTrue(self._grass(mid, x + 1, y),
+                                (mid, pair))
+                self.assertTrue(self._grass(mid, x, y + 1),
+                                (mid, pair))
+
+    def test_west_route_is_a_continuous_walk(self):
+        # The recorded ring route (probe176): starts on the
+        # Center spawn, ends on the West pair's first cell,
+        # and every step is a 1-cell move, a straight
+        # 2-cell ledge jump, or a warp hop to the map of a
+        # warp cell adjacent to the previous cell.
+        cells = rr.SAFARI_WEST_ROUTE
+        self.assertEqual(cells[0], (220, 15, 25))
+        # Ends at (17,20): the pair cell the route was
+        # recorded for. The live pair (S37 fix) starts two
+        # cells west at (15,20) - a short grass walk.
+        self.assertEqual(cells[-1], (219, 17, 20))
+        warps = {(m, w.x, w.y): w.dest_id
+                 for m, ws in _SAFARI_WARPS.items()
+                 for w in [SimpleNamespace(x=a, y=b, dest_id=c)
+                           for (a, b, c, _i) in ws]}
+        for cur, nxt in zip(cells, cells[1:]):
+            if nxt[0] == cur[0]:
+                dx = abs(nxt[1] - cur[1])
+                dy = abs(nxt[2] - cur[2])
+                self.assertIn((dx, dy),
+                              [(1, 0), (0, 1), (2, 0), (0, 2)],
+                              (cur, nxt))
+            else:
+                adj = [dest for (m, x, y), dest in warps.items()
+                       if m == cur[0]
+                       and abs(x - cur[1]) + abs(y - cur[2]) == 1]
+                self.assertIn(nxt[0], adj, (cur, nxt))
+
 
 class TestFuchsiaConstants(unittest.TestCase):
     def test_hm_and_tm_ids(self):

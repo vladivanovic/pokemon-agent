@@ -4133,3 +4133,139 @@ thrown, Articuno/Moltres/Mewtwo untouched.
 Remainder (4, all gated): Tauros (Safari round 4
 = fresh authorisation; it has no other route);
 fenced — Articuno, Moltres, Mewtwo.
+
+## 37. Post-game leg 9 (probe176, 2026-11-22): Safari round 4 — the hunt was beaten by a sterile grass pair, not by Tauros — dex 120 → 120
+
+Vlad's authorisation: **"Authorise Safari round 4 —
+Tauros, the last open species"** — up to 6 entries
+(¥500 each), unbaited throws only, stop the moment
+Tauros is caught. Start state: probe175's head
+(Celadon Pokécenter, dex 120, ¥660, box 3 FULL and
+current).
+
+**Tables verified from pokered before hunting.**
+Tauros appears in exactly two Safari tables: **West
+slot 9 (11/256 ≈ 4.3% per encounter), L26**, and
+**North slot 10 (3/256 ≈ 1.2%), L28**; Center and
+East have none. West wins on rate even after transit
+cost (the ring transit leaves ~222 of 500 steps;
+North gets fewer steps at a quarter of the rate).
+Engine math (also from source): Tauros catch rate
+45, Speed at L26 ≈ 62–70 → the Safari flee roll
+b = 2×Speed ≈ 124–140, i.e. **~50% flee chance after
+every throw**; a Safari Ball at full HP catches
+**~6%** of the time (gates 46/256 × ~86/256), so a
+sighting is worth **~11%** overall. The lifetime
+0-for-4 coming in was a ~63%-likely outcome — an
+ordinary drought, not a freak one.
+
+**Funding (no Elite Four needed).** Box switched
+3 → 6 (empty) at the Fuchsia PC first — §30's
+full-box lesson applied before, not after. Sales of
+re-buyable stock at exact pokered half-prices:
+Full Heal ×2 +¥600, Super Potion ×2 +¥700, Ultra
+Ball ×2 of 18 +¥1,200 → **¥660 → ¥3,160**, covering
+all six fees with no E4 run. Endurance stock kept:
+Ultra Ball ×16.
+
+**Entry 1 — the transit lottery.** The ported
+`_sz_nav` replanner failed the Center→West transit
+immediately ("nav to West failed") and the entry
+burned out: fee spent, zero encounters. Diagnosis
+(instrumented, probe176/dbg_nav2): the replanner is
+a lottery on the ring — ledge/fence lines the
+SAFARI grid marks walkable poison its blocked set
+one cell at a time until no plan survives (one run
+died in North at (38,12), 222 steps left). The
+direct Center→West edge is sealed in practice
+(one-way ledge country); only the ring works. Fix
+that held: **recorded-route replay** — a successful
+traversal recorded as a 279-cell path and replayed
+press-for-press with per-cell verification arrives
+at West (17,20) with exactly 222 steps left, 0
+failures.
+
+**Entries 2–6 — five fees spent pacing a dead
+pair.** Every entry transited cleanly by replay,
+then paced the West pair `_safari_grass_pair`
+returns — **(17,20)/(17,21)**, the pair nearest the
+anchor — until the step budget ended. Result across
+all five: **zero encounters logged, zero Tauros
+sightings, zero balls thrown, balls 30/30 every
+time.** The post-mortem (a counting wrapper over
+every battle call) split the entry in two: the
+transit produced battles normally (5 in one test
+entry: Rhyhorn, Nidoran-M ×2, Exeggcute, Venonat),
+while **120 pacing steps on the West pair produced
+ZERO battles**. At the nominal ~11.7% per-step
+rate, five zero-encounter entries are a ~0.4%
+event; zero encounters at all is the explanation:
+**the pair is sterile.** The encounter check reads
+the tile at the bottom-right of the player's
+half-block; (17,20) is the West field's last grass
+column, so the checked tile sits off-grass. An
+empirical lawn scan (scratch entries, discarded
+lines) proved the field itself is fine: pair
+(10,20) → 7 battles in 40 steps (incl. a Tauros,
+fled after throws); pair (13,22) → 10 in 60; the
+new ported pick (15,20) → 6 in 60 (incl. another
+Tauros). All scratch sightings were on discarded
+lines and do not count. This also re-diagnoses
+round 3 (§34): its West segment paced the same
+sterile pair — its 11 spent balls were all Center
+throws, and its zero Tauros needs no routing
+explanation beyond this one.
+
+**Round 4 result: 6/6 entries used, Tauros 0
+sightings / 0 balls / not caught. Dex stays 120.**
+Lifetime Tauros tally unchanged: **4 sightings /
+4 balls / 0 catches** (rounds 1–3). Money trail:
+¥660 → sales +¥2,500 → ¥3,160 → fees −¥3,000 →
+**¥160**. No E4 run, no sales beyond the three
+stacks, no battles fought. Media: none — there was
+no canonical sighting to shoot. (Bookkeeping note:
+debug scripts sharing the stage's persist-on-settle
+wiring twice appended scratch records to
+hunt4_log.json and once zeroed its summaries; the
+file was rebuilt to its canonical content — 6 entry
+summaries, 0 records — attested by the stage logs
+s2.log/s2b.log.)
+
+**Ported to run_real.py.** (1) `_safari_grass_pair`
+gained the **live-pair rule**: pairs whose BOTH
+cells have grass to the east and the south are
+preferred (the checked tile then stays in grass),
+anchor-nearest as before, unfiltered fallback when
+no live pair exists. New picks: West ((15,20),
+(16,20)) — live-verified in the lawn scan above;
+Center ((11,22),(12,22)), sharing a cell with the
+pair rounds 1–3 hunted successfully; East
+((4,12),(5,12)); North ((20,30),(21,30)).
+(2) `SAFARI_WEST_ROUTE` (the 279 recorded cells) +
+`_safari_replay_west_route(emu, ex, seen)` — the
+deterministic ring transit; live-verified from the
+funded state with the stock settle: arrives
+(219,17,20), 222 steps left. +3 tests (sterile-pair
+regression, live pairs in every area, route
+continuity). **Suite: 265/265.**
+
+**Chain head: `probe176/s3-final.state`, sha256
+`563d59a6e5621b91f3f4548a337fcb269272caab1ac6bb31a3444dbc95076959`**
+— Fuchsia Pokécenter, dex **120**, ¥160, party
+Lapras 60 / Blastoise 97 / Pidgeot 36 / Oddish 12
+(Cut) / Voltorb 16 (Flash) / Scyther 25; **current
+box 6 (empty, left current deliberately — the
+safer default; box 3 remains full at 20/20)**;
+census 106 stored + 6 party. Fences held: no coin
+spending, no TM/HM teaches, no stat items, Master
+Ball never thrown, Articuno/Moltres/Mewtwo
+untouched.
+
+Remainder (4, all gated): **Tauros** — a round 5
+is Vlad's fresh call, but it would run with the
+two defects fixed: a live pair (~15% battles/step
+in scans) and a deterministic transit (~270 paced
+steps/entry → ~1.7 sightings/entry at the 11/256
+slot → ~11% per sighting → roughly 70% for a
+6-entry round); fenced — Articuno, Moltres,
+Mewtwo.

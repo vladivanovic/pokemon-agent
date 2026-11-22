@@ -8530,7 +8530,19 @@ def _safari_grass_pair(map_id: int):
     """An adjacent pair of grass cells in a Safari area:
     both SAFARI_GRASS cells, both _safari_passable, neither
     an item-ball cell; the pair nearest the area anchor.
-    Pacing between the two is the encounter engine."""
+    Pacing between the two is the encounter engine.
+
+    LIVE-PAIR RULE (probe176, docs S37): the encounter check
+    reads the tile at the bottom-right of the player's
+    half-block, so a pair on a field's east/south edge can
+    be STERILE - the old West pick ((17,20),(17,21)), the
+    field's last grass column, produced ZERO encounters in
+    ~1,080 paced steps across five paid entries, while
+    interior pairs produced 7-10 battles per 40-60 steps.
+    Prefer pairs whose BOTH cells have grass to the east
+    and the south (the checked tile then stays in grass);
+    fall back to the unfiltered list when no live pair
+    exists."""
     w, h, bits = SAFARI_GRASS[map_id]
 
     def is_grass(x, y):
@@ -8555,9 +8567,141 @@ def _safari_grass_pair(map_id: int):
                     pairs.append(((x, y), nb))
     if not pairs:
         return None
+
+    def live(cell):
+        x, y = cell
+        return is_grass(x + 1, y) and is_grass(x, y + 1)
+
+    live_pairs = [p for p in pairs if live(p[0]) and live(p[1])]
+    if live_pairs:
+        pairs = live_pairs
     pairs.sort(key=lambda p: abs(p[0][0] - anchor[0])
                + abs(p[0][1] - anchor[1]))
     return pairs[0]
+
+
+# Recorded ring route, Center spawn -> West grass pair
+# (probe176, docs S37): (map_id, x, y) after every settled
+# step of a successful _sz_nav traversal, deduplicated.
+SAFARI_WEST_ROUTE = [
+    (220, 15, 25), (220, 15, 24), (220, 15, 23), (220, 14, 23), (220, 13, 23), (220, 13, 22),
+    (220, 12, 22), (220, 12, 21), (220, 12, 20), (220, 12, 19), (220, 12, 18), (220, 12, 17),
+    (220, 12, 16), (220, 13, 16), (220, 14, 16), (220, 15, 16), (220, 16, 16), (220, 17, 16),
+    (220, 18, 16), (220, 19, 16), (220, 20, 16), (220, 20, 15), (220, 20, 14), (220, 21, 14),
+    (220, 22, 14), (220, 22, 13), (220, 22, 12), (220, 22, 11), (220, 23, 11), (220, 24, 11),
+    (220, 25, 11), (220, 26, 11), (220, 27, 11), (220, 28, 11), (217, 0, 23), (217, 0, 24),
+    (217, 1, 24), (217, 2, 24), (217, 3, 24), (217, 4, 24), (217, 5, 24), (217, 6, 24),
+    (217, 7, 24), (217, 8, 24), (217, 9, 24), (217, 10, 24), (217, 11, 24), (217, 12, 24),
+    (217, 13, 24), (217, 14, 24), (217, 15, 24), (217, 16, 24), (217, 17, 24), (217, 17, 23),
+    (217, 17, 22), (217, 18, 22), (217, 19, 22), (217, 20, 22), (217, 20, 21), (217, 20, 20),
+    (217, 20, 19), (217, 20, 18), (217, 21, 18), (217, 21, 17), (217, 21, 16), (217, 21, 15),
+    (217, 21, 14), (217, 21, 13), (217, 21, 12), (217, 20, 12), (217, 21, 12), (217, 22, 12),
+    (217, 23, 12), (217, 24, 12), (217, 25, 12), (217, 26, 12), (217, 26, 13), (217, 26, 14),
+    (217, 25, 14), (217, 24, 14), (217, 23, 14), (217, 22, 14), (217, 22, 15), (217, 22, 16),
+    (217, 22, 17), (217, 22, 18), (217, 22, 19), (217, 22, 20), (217, 21, 20), (217, 20, 20),
+    (217, 19, 20), (217, 18, 20), (217, 17, 20), (217, 16, 20), (217, 15, 20), (217, 14, 20),
+    (217, 13, 20), (217, 12, 20), (217, 12, 21), (217, 12, 22), (217, 11, 22), (217, 10, 22),
+    (217, 9, 22), (217, 9, 21), (217, 9, 20), (217, 9, 19), (217, 9, 18), (217, 9, 17),
+    (217, 9, 16), (217, 9, 15), (217, 9, 14), (217, 9, 13), (217, 9, 12), (217, 9, 11),
+    (217, 9, 10), (217, 9, 9), (217, 9, 8), (217, 10, 8), (217, 11, 8), (217, 12, 8),
+    (217, 12, 7), (217, 12, 6), (217, 12, 5), (217, 12, 4), (217, 11, 4), (217, 12, 4),
+    (217, 13, 4), (217, 14, 4), (217, 15, 4), (217, 16, 4), (217, 17, 4), (217, 18, 4),
+    (217, 18, 5), (217, 18, 6), (217, 17, 6), (217, 17, 7), (217, 17, 8), (217, 18, 8),
+    (217, 19, 8), (217, 20, 8), (217, 20, 7), (217, 20, 6), (217, 20, 5), (217, 20, 4),
+    (217, 20, 3), (217, 20, 2), (217, 19, 2), (217, 18, 2), (217, 17, 2), (217, 16, 2),
+    (217, 15, 2), (217, 14, 2), (217, 13, 2), (217, 12, 2), (217, 11, 2), (217, 10, 2),
+    (217, 10, 3), (217, 9, 3), (217, 9, 4), (217, 9, 5), (217, 8, 5), (217, 7, 5),
+    (217, 6, 5), (217, 5, 5), (217, 5, 4), (217, 4, 4), (217, 3, 4), (217, 2, 4),
+    (217, 1, 4), (218, 39, 30), (218, 38, 30), (218, 37, 30), (218, 37, 29), (218, 36, 29),
+    (218, 35, 29), (218, 34, 29), (218, 33, 29), (218, 32, 29), (218, 31, 29), (218, 30, 29),
+    (218, 29, 29), (218, 28, 29), (218, 27, 29), (218, 26, 29), (218, 25, 29), (218, 25, 28),
+    (218, 25, 27), (218, 25, 26), (218, 25, 25), (218, 25, 24), (218, 24, 24), (218, 23, 24),
+    (218, 22, 24), (218, 22, 23), (218, 22, 22), (218, 21, 22), (218, 20, 22), (218, 19, 22),
+    (218, 18, 22), (218, 18, 23), (218, 18, 24), (218, 18, 25), (218, 18, 26), (218, 17, 26),
+    (218, 16, 26), (218, 16, 27), (218, 16, 28), (218, 16, 29), (218, 16, 30), (218, 16, 31),
+    (218, 16, 32), (218, 16, 33), (218, 15, 33), (218, 14, 33), (218, 13, 33), (218, 12, 33),
+    (218, 11, 33), (218, 10, 33), (218, 9, 33), (218, 9, 34), (219, 27, 0), (219, 27, 1),
+    (219, 27, 2), (219, 27, 3), (219, 27, 4), (219, 27, 5), (219, 27, 6), (219, 27, 7),
+    (219, 27, 8), (219, 27, 9), (219, 27, 10), (219, 27, 11), (219, 27, 12), (219, 27, 13),
+    (219, 27, 14), (219, 27, 15), (219, 27, 16), (219, 27, 17), (219, 27, 18), (219, 26, 18),
+    (219, 25, 18), (219, 24, 18), (219, 23, 18), (219, 22, 18), (219, 21, 18), (219, 21, 17),
+    (219, 21, 16), (219, 20, 16), (219, 19, 16), (219, 18, 16), (219, 17, 16), (219, 16, 16),
+    (219, 16, 17), (219, 16, 18), (219, 15, 18), (219, 14, 18), (219, 13, 18), (219, 12, 18),
+    (219, 11, 18), (219, 10, 18), (219, 9, 18), (219, 8, 18), (219, 7, 18), (219, 6, 18),
+    (219, 6, 19), (219, 6, 20), (219, 6, 21), (219, 7, 21), (219, 8, 21), (219, 9, 21),
+    (219, 9, 20), (219, 10, 20), (219, 11, 20), (219, 12, 20), (219, 13, 20), (219, 14, 20),
+    (219, 15, 20), (219, 16, 20), (219, 17, 20),
+]
+
+
+def _safari_replay_west_route(emu: PyBoyEmulator,
+                              ex: Executor,
+                              seen: list = None) -> bool:
+    """Replay SAFARI_WEST_ROUTE from the Center spawn to
+    West (17,20), press-for-press with per-cell
+    verification. (17,20) is two grass cells east of the
+    live pair _safari_grass_pair returns for West - walk
+    the last hop in the grass. _sz_nav's replanner is a
+    lottery across the ring: ledge lines the SAFARI grid
+    marks walkable poison its blocked set one cell at a
+    time until the plan dies (round-4 entry 1 spent its
+    fee with zero encounters; an instrumented run died in
+    North at (38,12) with "no plan"). The recorded route
+    arrives at (17,20) with 222 of 500 steps left (verified
+    by an exact replay, probe176 dbg_replay). Battles en
+    route are resolved by _safari_settle; hunt stages
+    rewire that hook to their own battle policy. Caller
+    must be standing on the Center spawn cell (15,25)
+    inside the Zone."""
+    if seen is None:
+        seen = []
+    inv = {(0, -1): "up", (0, 1): "down",
+           (-1, 0): "left", (1, 0): "right"}
+
+    def pos():
+        st = emu.read_state()
+        return st.map_id, st.x, st.y
+
+    cells = SAFARI_WEST_ROUTE
+    cur = pos()
+    if cur != cells[0]:
+        return False
+    for nxt in cells[1:]:
+        if nxt[0] == cur[0]:
+            dx, dy = nxt[1] - cur[1], nxt[2] - cur[2]
+            if abs(dx) + abs(dy) == 1:
+                btns = [inv[(dx, dy)]]
+            elif abs(dx) + abs(dy) == 2 and \
+                    (dx == 0 or dy == 0):
+                btns = [inv[(dx // 2, dy // 2)]]  # ledge jump
+            else:
+                return False
+        else:
+            btns = []
+            for w in ex.world.maps[cur[0]].warps:
+                if w.dest_id != nxt[0]:
+                    continue
+                d = inv.get((w.x - cur[1], w.y - cur[2]))
+                if d:
+                    btns.append(d)
+            if not btns:
+                return False
+        ok = False
+        for btn in btns:
+            for _try in range(3):
+                emu.press(btn)
+                _safari_settle(emu, seen)
+                if pos() == nxt:
+                    ok = True
+                    break
+                if pos() != cur:
+                    break
+            if ok:
+                break
+        if not ok:
+            return False
+        cur = nxt
+    return pos() == cells[-1]
 
 
 def _safari_menu_pick(emu: PyBoyEmulator, row: int,
