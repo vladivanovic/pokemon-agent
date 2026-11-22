@@ -15958,6 +15958,278 @@ def catch_zapdos(emu, ex, log=print):
     return "stuck"
 
 
+# ------------------------------------------------------------------
+# Game Corner: slots driver + prize redemption (probe175, leg 8)
+#
+# Engine facts (verified against pret/pokered, docs §36):
+# - Prizes (Red, vendor 2): DRATINI 2800, SCYTHER 5500,
+#   PORYGON 9999 coins; levels 18/25/26.
+# - wPlayerCoins is 2-byte BCD, so the Coin Case CAPS AT
+#   9,999: wins above the cap are clipped while losses still
+#   subtract in full. Never plan to hold more than 9,999.
+# - Per spin the game rolls wSlotMachineFlags: ~82% of spins
+#   cannot win (wheel 3 is scrolled away from any match);
+#   ~17.6% are CAN_WIN / CAN_WIN_WITH_7_OR_BAR (wheel 3 is
+#   scrolled until a line completes). A 1/256 roll sets
+#   wSlotMachineAllowMatchesCounter=60: CAN_WIN stays on
+#   until 60 small (8/15) wins have been paid. Payouts are
+#   fixed per symbol: 7=300, BAR=100, cherry=8, others=15.
+# - One machine per Game Corner visit is "lucky"
+#   (wLuckySlotHiddenEventIndex, re-rolled on map entry):
+#   same win rate, better big-win mix. Its stance can be
+#   NPC-blocked (the Gentleman stands on (17,13)).
+# - Strategy: always bet 3 (five lines; wheel 2's early
+#   stop hunts a line pair), press-until-resolved wheel
+#   stops, ride the windows. Measured +0.86 coins/spin over
+#   17,728 spins including ~6,600 cap-pinned spins; the
+#   unclipped chunks ran +1.4..+3.2/spin.
+
+ADDR_PLAYER_COINS = 0xD5A4     # wPlayerCoins (2-byte BCD)
+ADDR_LUCKY_SLOT = 0xCD05       # wLuckySlotHiddenEventIndex
+ADDR_SLOT_FLAGS = 0xCD4C       # wSlotMachineFlags
+ADDR_SLOT_ALLOW_CTR = 0xD096   # wSlotMachineAllowMatchesCounter
+
+# Game Corner hidden-event order (machines first, then the
+# 12 hidden coins). Indices 5/8/27 are unplayable
+# (SOMEONESKEYS / OUTTOLUNCH / OUTOFORDER).
+SLOT_MACHINE_CELLS = [
+    (18, 15), (18, 14), (18, 13), (18, 12), (18, 11),
+    (18, 10), (13, 10), (13, 11), (13, 12), (13, 13),
+    (13, 14), (13, 15), (12, 15), (12, 14), (12, 13),
+    (12, 12), (12, 11), (12, 10), (7, 10), (7, 11),
+    (7, 12), (7, 13), (7, 14), (7, 15), (6, 15),
+    (6, 14), (6, 13), (6, 12), (6, 11), (6, 10),
+    (1, 10), (1, 11), (1, 12), (1, 13), (1, 14), (1, 15),
+]
+SLOT_UNPLAYABLE = frozenset({5, 8, 27})
+
+
+def _face(emu: PyBoyEmulator, face: str) -> None:
+    """Turn in place (pressing toward the counter/wall the
+    caller is standing at). Long called by helpers in this
+    module but never defined; the probes monkey-patched it
+    (lib168) with exactly these semantics."""
+    emu.press(face)
+    emu.tick(15)
+
+
+def player_coins(emu: PyBoyEmulator) -> int:
+    """Coin Case balance, BCD-decoded from wPlayerCoins."""
+    mem = emu.pb.memory
+    b0, b1 = mem[ADDR_PLAYER_COINS], mem[ADDR_PLAYER_COINS + 1]
+    return (b0 >> 4) * 1000 + (b0 & 15) * 100 \
+        + (b1 >> 4) * 10 + (b1 & 15)
+
+
+def slot_machine_stance(idx: int):
+    """(stance cell, facing) for hidden-event machine idx:
+    play the x=18/12/6 columns from the west, the x=13/7/1
+    columns from the east."""
+    x, y = SLOT_MACHINE_CELLS[idx]
+    if x in (18, 12, 6):
+        return (x - 1, y), "right"
+    return (x + 1, y), "left"
+
+
+def lucky_slot_index(emu: PyBoyEmulator):
+    """Hidden-event index of this visit's lucky machine, or
+    None when the roll named no playable machine."""
+    idx = emu.pb.memory[ADDR_LUCKY_SLOT] - 1
+    if idx in range(len(SLOT_MACHINE_CELLS)) \
+            and idx not in SLOT_UNPLAYABLE:
+        return idx
+    return None
+
+
+def _slots_txt(emu: PyBoyEmulator) -> str:
+    return _norm_text(_screen_text(emu))
+
+
+def slots_open_session(emu: PyBoyEmulator, ex: Executor,
+                       map_id: int, stance, face: str,
+                       timeout: int = 3000) -> bool:
+    """Walk to stance, face the machine, confirm the play
+    prompt; True when the bet menu is on screen."""
+    _walk_fighting(emu, ex, map_id, stance, attempts=40,
+                   flee_wild=True)
+    st = emu.read_state()
+    if (st.x, st.y) != stance:
+        return False
+    _face(emu, face)
+    emu.tick(30)
+    _press10(emu, "a")
+    for _ in range(timeout // 25):
+        t = _slots_txt(emu).upper()
+        if "BET" in t and "COIN" in t:
+            return True
+        if emu.read_state().in_dialog:
+            _press10(emu, "a")
+        emu.tick(25)
+    return "BET" in _slots_txt(emu).upper()
+
+
+def slots_play_spins(emu: PyBoyEmulator, n: int, log: list,
+                     should_stop=None) -> int:
+    """Play up to n spins at 3-coin bets (the bet menu
+    cursor defaults to x3). Wheel stops are
+    press-until-resolved: the intro animation eats early
+    presses, so keep pressing A until 'One more go?'
+    appears. Appends one dict per spin to log (before /
+    after / payout / net / flags / allow_ctr / resolved)
+    and returns the number of spins completed. Assumes
+    the bet menu is up; declines the next spin and
+    returns when should_stop() fires."""
+    mem = emu.pb.memory
+    done = 0
+    for _ in range(n):
+        if should_stop and should_stop():
+            break
+        before = player_coins(emu)
+        if before < 3:
+            break
+        _press10(emu, "a")
+        landed = False
+        for _ in range(300):
+            if player_coins(emu) == before - 3:
+                landed = True
+                break
+            emu.tick(15)
+        if not landed:
+            log.append({"spin": done, "error": "bet_not_landed",
+                        "before": before,
+                        "now": player_coins(emu)})
+            break
+        flags = mem[ADDR_SLOT_FLAGS]
+        ctr = mem[ADDR_SLOT_ALLOW_CTR]
+        resolved = False
+        for _ in range(120):
+            _press10(emu, "a", settle=8)
+            emu.tick(30)
+            if "ONE MORE" in _slots_txt(emu).upper():
+                resolved = True
+                break
+        after = player_coins(emu)
+        log.append({"spin": done, "before": before,
+                    "after": after, "payout": after - before + 3,
+                    "net": after - before, "flags": flags,
+                    "allow_ctr": ctr, "resolved": resolved})
+        done += 1
+        if not resolved:
+            break
+        if should_stop and should_stop():
+            _press10(emu, "down")
+            emu.tick(20)
+            _press10(emu, "a")
+            emu.tick(60)
+            break
+        _press10(emu, "a")  # YES, one more go
+        emu.tick(80)
+    return done
+
+
+def slots_close_session(emu: PyBoyEmulator) -> bool:
+    """Exit a slot session with B at the bet menu. The
+    menu WRAM bytes stay stale after the exit, so success
+    is verified by the player being able to move again."""
+    st0 = emu.read_state()
+    x0, y0 = st0.x, st0.y
+    _press10(emu, "b")
+    emu.tick(240)
+    for d in ("down", "up", "left", "right"):
+        emu.press(d)
+        emu.tick(45)
+        st = emu.read_state()
+        if (st.x, st.y) != (x0, y0):
+            return True
+    st = emu.read_state()
+    return (st.x, st.y) != (x0, y0)
+
+
+def redeem_prize_mon(emu: PyBoyEmulator, ex: Executor,
+                     prize_map_id: int, menu_index: int,
+                     species_name: str, price: int):
+    """Buy a prize Pokemon from the Game Corner Prize
+    Room's middle vendor (bg event at (4,2), stance (4,3)
+    facing up). Strict phase waits keyed on screen text:
+    the intro text races a blind A-press and the cursor
+    resets, and the nickname YesNo must be steered to NO
+    (coins subtract only after GivePokemon returns).
+    Verifies the price drop and the +1 dex in RAM.
+    Returns 'party' or the box census hit list."""
+    spid = next(k for k, v in _SPECIES_NAMES_169.items()
+                if v == species_name)
+    mem = emu.pb.memory
+    dex0 = _dex_owned_count(emu)
+    bal0 = player_coins(emu)
+    assert bal0 >= price, (bal0, price)
+    assert _ride_to(emu, ex, prize_map_id), "ride to Prize Room"
+    assert emu.read_state().map_id == prize_map_id
+    _walk_fighting(emu, ex, prize_map_id, (4, 3), attempts=40,
+                   flee_wild=True)
+    st = emu.read_state()
+    assert (st.x, st.y) == (4, 3), (st.x, st.y)
+    _face(emu, "up")
+    emu.tick(30)
+    _press10(emu, "a")
+
+    def wait_text(needle, timeout=6000, press=False):
+        for _ in range(timeout // 25):
+            if needle in _slots_txt(emu).upper():
+                return True
+            if press and emu.read_state().in_dialog:
+                _press10(emu, "a")
+            emu.tick(25)
+        return needle in _slots_txt(emu).upper()
+
+    assert wait_text("WHICH PRIZE", 6000, press=True)
+    emu.tick(60)
+    for _ in range(3):
+        if mem[ADDR_MENU_ITEM] == menu_index:
+            break
+        assert _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM],
+                           menu_index)
+        emu.tick(40)
+    assert mem[ADDR_MENU_ITEM] == menu_index
+    _press10(emu, "a")
+    assert wait_text("YES", 4000)  # 'So you want...?' YesNo
+    emu.tick(40)
+    _press10(emu, "a")             # YES
+    nick = False
+    for _ in range(800):
+        if player_coins(emu) == bal0 - price:
+            break
+        t = _slots_txt(emu).upper()
+        if "NICKNAME" in t and "YES" in t and not nick:
+            if _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 1):
+                _press10(emu, "a")
+                nick = True
+            emu.tick(40)
+            continue
+        if "A B C D" in t:
+            raise RuntimeError("landed in nickname entry screen")
+        if emu.read_state().in_dialog:
+            _press10(emu, "a")
+        emu.tick(25)
+    assert player_coins(emu) == bal0 - price, \
+        (player_coins(emu), bal0 - price)
+    # Ride out with at most a few presses: the menu-top
+    # WRAM byte goes stale after this menu, and a runaway
+    # A-loop re-triggers the vendor (it bought a Dratini
+    # in probe175 testing).
+    for _ in range(6):
+        if not emu.read_state().in_dialog:
+            break
+        _press10(emu, "a")
+        emu.tick(60)
+    emu.tick(120)
+    assert _dex_owned_count(emu) == dex0 + 1
+    st = emu.read_state()
+    if spid in [m.species_id for m in st.party]:
+        return "party"
+    hits = _box_find_species(_box_census(emu), spid)
+    assert hits, f"{species_name} not found after redemption"
+    return hits
+
 
 
 if __name__ == "__main__":

@@ -1687,3 +1687,55 @@ class TestReleaseHeldButtons(unittest.TestCase):
             ["a", "b", "down", "left", "right", "select",
              "start", "up"])
         self.assertTrue(ticks and ticks[0] >= 30)
+
+
+class TestGameCorner(unittest.TestCase):
+    """probe175 (leg 8): coin BCD decode, the slot machine
+    table and the lucky-machine read are pure functions of
+    WRAM; the sessions themselves are live-verified in the
+    probe (17,728 spins, both prizes redeemed)."""
+
+    def _emu_with_coins(self, b0, b1):
+        emu = FakeEmu()
+        emu.memory[rr.ADDR_PLAYER_COINS] = b0
+        emu.memory[rr.ADDR_PLAYER_COINS + 1] = b1
+        return emu
+
+    def test_player_coins_zero(self):
+        self.assertEqual(rr.player_coins(self._emu_with_coins(0, 0)), 0)
+
+    def test_player_coins_seed_330(self):
+        emu = self._emu_with_coins(0x03, 0x30)
+        self.assertEqual(rr.player_coins(emu), 330)
+
+    def test_player_coins_cap_9999(self):
+        emu = self._emu_with_coins(0x99, 0x99)
+        self.assertEqual(rr.player_coins(emu), 9999)
+
+    def test_player_coins_post_scyther_4469(self):
+        emu = self._emu_with_coins(0x44, 0x69)
+        self.assertEqual(rr.player_coins(emu), 4469)
+
+    def test_machine_table_shape(self):
+        self.assertEqual(len(rr.SLOT_MACHINE_CELLS), 36)
+        self.assertEqual(rr.SLOT_UNPLAYABLE, frozenset({5, 8, 27}))
+        # the shadowed hidden coin shares (12, 15) with
+        # machine index 12 - the machine event wins the scan
+        self.assertEqual(rr.SLOT_MACHINE_CELLS[12], (12, 15))
+
+    def test_stance_west_column_plays_from_west(self):
+        self.assertEqual(rr.slot_machine_stance(2), ((17, 13), "right"))
+        self.assertEqual(rr.slot_machine_stance(16), ((11, 11), "right"))
+
+    def test_stance_east_column_plays_from_east(self):
+        self.assertEqual(rr.slot_machine_stance(9), ((14, 13), "left"))
+        self.assertEqual(rr.slot_machine_stance(30), ((2, 10), "left"))
+
+    def test_lucky_slot_index(self):
+        emu = FakeEmu()
+        emu.memory[rr.ADDR_LUCKY_SLOT] = 10
+        self.assertEqual(rr.lucky_slot_index(emu), 9)
+        emu.memory[rr.ADDR_LUCKY_SLOT] = 6   # SOMEONESKEYS machine
+        self.assertIsNone(rr.lucky_slot_index(emu))
+        emu.memory[rr.ADDR_LUCKY_SLOT] = 0   # no lucky machine
+        self.assertIsNone(rr.lucky_slot_index(emu))

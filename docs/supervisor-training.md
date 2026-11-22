@@ -3964,3 +3964,172 @@ fenced — Articuno, Moltres, Mewtwo. Fences held all
 leg: no other legendary engaged, no Safari, no Game
 Corner, no TM/HM teaches, no stat items, Master
 Ball never thrown.
+
+## 36. Post-game leg 8 (probe175, 2026-11-22): THE GAME CORNER — slots ground honestly to 9,999 twice, Scyther + Porygon redeemed — dex 118 → 120
+
+Vlad's decision (2026-11-22): "Game Corner next —
+grind the slots for Scyther (5,500c) and Porygon
+(9,999c)". Both prizes are now owned. The leg's real
+subject turned out to be the slot engine itself,
+read from pret/pokered before a single coin was bet.
+
+### Prices and free coins (verified from data first)
+
+`data/events/prizes.asm` (Red): vendor 2 sells
+DRATINI 2,800 / **SCYTHER 5,500** / **PORYGON
+9,999**; `prize_mon_levels.asm`: Scyther L25,
+Porygon L26. Buying the 15,499 coins outright would
+cost ≈¥310,000 (¥1,000 per 50); the chain held
+¥1,660. Free coins, all verified in the scripts:
+NPC handouts — Fishing Guru +10, Clerk2 +20,
+Gentleman +20 = 50. Hidden floor coins: 12 spots
+totalling 260 nominal — one spot, (11,7), is
+labelled COIN+40 but the engine's `.bcd40` branch
+is unreachable (a typo routes it to `.bcd20`), so
+it pays 20; and the (12,15) spot (+10) is
+**shadowed**: machine hidden-event 12 sits on the
+identical tile and the scan takes the first match,
+so that coin is unobtainable in retail. Real free
+total = 230 hidden + 50 NPC = 280, plus the one
+authorised seed purchase (50c for ¥1,000) =
+**330 coins, ¥660 left**. Collection mechanics
+worth keeping: hidden events match the tile IN
+FRONT of the player, and floor tiles are walkable,
+so a "face" press steps onto the coin instead of
+turning — the working pattern is a step-approach
+(arrive at the stance by stepping toward the
+target, so facing comes from the step itself).
+
+### The slot engine (why the grind works)
+
+`engine/slots/slot_machine.asm`, read in full:
+
+- Every spin, `SlotMachine_SetFlags` rolls the
+  outcome class: ~82% of spins get flags=0 and
+  **cannot win** (if a line forms, wheel 3 is
+  scrolled away); ~17.6% get CAN_WIN or
+  CAN_WIN_WITH_7_OR_BAR (wheel 3 is scrolled
+  until a line completes, rejecting 7/BAR lines
+  unless in 7/BAR mode). A 1/256 roll sets
+  `wSlotMachineAllowMatchesCounter` = 60: CAN_WIN
+  then stays on until 60 small (8/15) wins have
+  been paid — the "window".
+- Payouts are fixed per symbol, bet-independent:
+  7 = 300, BAR = 100, cherry = 8, the rest 15.
+  Always bet 3 anyway: five lines are checked and
+  wheel 2's early-stop rule actively hunts a
+  wheel-1/wheel-2 line pair during its slip, so a
+  flagged spin converts to a paid win ~always.
+- One machine per visit is "lucky"
+  (`wLuckySlotHiddenEventIndex`, re-rolled on map
+  entry, readable in RAM): identical win rate,
+  better big-win mix (7/BAR mode 5/256 vs 2/256).
+  Its stance can be NPC-blocked — the Gentleman
+  stands on (17,13), the only stance for machine
+  (18,13); the driver falls back to another
+  machine.
+- Driver shape: bet (cursor defaults to ×3),
+  then press-until-resolved — the 20-frame intro
+  animation eats early A presses, so wheel stops
+  keep pressing until "One more go?" renders.
+  Per-spin log samples `wSlotMachineFlags` and
+  the allow-counter right after the bet lands.
+
+### The cap — the leg's central discovery
+
+**`wPlayerCoins` is 2-byte BCD: the Coin Case caps
+at 9,999.** The first grind reached the cap zone
+and then produced three consecutive "flat" chunks
+(6,600 spins, +76 net) that looked like an EV
+collapse. The per-spin log gave it away: balance
+9,995 → 9,999 → 9,999, and clipped wins surfacing
+as impossible payouts (3, 6, 7, 9…). Wins above
+the cap are destroyed while losses subtract in
+full, so a balance pinned at the cap bleeds.
+Consequences: holding 15,499 coins is impossible;
+Porygon (9,999) must be redeemed from a full case,
+and any mid-leg redemption must leave a bankroll,
+because a ~256-spin expected wait for the first
+window trigger will bust a thin one (demonstrated:
+the first Scyther redemption, banked on a side
+branch at 5,512 → 12 coins left, busted in 4
+spins). Kept-line sequence, in order:
+
+1. Grind 330 → **5,512** (2,946 spins).
+2. (Side branch: redeemed Scyther, busted at 0 —
+   discarded; the redemption driver it proved was
+   replayed for both prizes on the kept line.)
+3. Grind on into the cap zone (the balance first
+   touches 9,999 inside chunk s6d; 11,346 spins
+   cumulative by the s6e checkpoint, balance
+   9,969 — the cap-pinned tail is inside that
+   count).
+4. Redeem **SCYTHER** 5,500 → 4,469 left (party
+   slot 6), dex 119.
+5. Grind 4,469 → **9,999** (6,382 more spins).
+6. Redeem **PORYGON** 9,999 → 0 (party full; filed
+   box 3), dex **120**.
+
+### Totals (coin conservation is exact)
+
+17,728 kept-line spins; starting 330 + net won
+**15,169** = 5,500 + 9,999 redeemed, 0 left.
+Overall +0.86 coins/spin — dragged down by the
+~6,600 cap-pinned spins; productive chunks ran
++1.4 to +3.2/spin (the 300-spin measurement
+sample that justified committing: +3.15/spin,
+89/300 wins). Across all sessions: 27.3% of spins
+paid, 45 window triggers, clean payout histogram
+8×1,918 / 15×1,951 / 100×111 / 300×21.
+
+### Redemption driver lessons (both ported)
+
+- The prize menu races a blind A-press: the intro
+  text consumes it and the cursor resets to item
+  0 — the first debug run bought a DRATINI into
+  the nickname screen. The ported flow uses
+  strict phase waits keyed on screen text and
+  confirms the cursor is stable before choosing.
+- GivePokemon runs BEFORE the coin subtraction,
+  and its nickname YesNo must be steered to NO;
+  coins drop only when it returns.
+- After the menu, the menu-top WRAM byte is stale:
+  a ride-out loop keyed on it never saw the menu
+  as closed, kept pressing A, re-triggered the
+  vendor and bought a second Dratini (2,800c,
+  discarded branch). The ported ride-out caps its
+  presses. Slot-session close has the same stale-
+  byte trap; it verifies by movement instead.
+
+### Port and chain head
+
+run_real.py gained the Game Corner section:
+`player_coins`, `SLOT_MACHINE_CELLS` /
+`SLOT_UNPLAYABLE`, `slot_machine_stance`,
+`lucky_slot_index`, `slots_open_session`,
+`slots_play_spins`, `slots_close_session`,
+`redeem_prize_mon` — plus the module's missing
+`_face` definition (the probes had monkey-patched
+it since probe168). The port was **replayed live**
+from the collection state: session opened on the
+lucky machine, 60 spins (330 → 589), clean close.
+Suite: +8 tests (BCD decode incl. the 9,999 cap,
+machine table, stances, lucky read).
+
+**Chain head: `probe175/s10-final.state`, sha256
+`a69a2c09d53c6d565d9b920dc2bd00efbc6e686c07f7cdae05bba662079fe932`**
+— Celadon Pokécenter, dex **120**, ¥660, coins 0,
+party Lapras 60 / Blastoise 97 / Pidgeot 36 /
+Oddish 12 (Cut) / Voltorb 16 (Flash) / **Scyther
+25**; **Porygon 26 in box 3**; current box 3 (now
+full at 20). Money trail for the whole leg:
+¥1,660 → −¥1,000 (the single seed purchase) →
+**¥660**; no item sales, no other yen spent.
+Fences held: no prize TMs bought (coins went to
+the two Pokémon only), no TM teaches, no stat
+items, no Safari, no trades, Master Ball never
+thrown, Articuno/Moltres/Mewtwo untouched.
+
+Remainder (4, all gated): Tauros (Safari round 4
+= fresh authorisation; it has no other route);
+fenced — Articuno, Moltres, Mewtwo.
