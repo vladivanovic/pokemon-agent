@@ -3808,3 +3808,159 @@ Scyther alternatively 5,500 Game Corner coins), Porygon
 Articuno, Moltres, Mewtwo. Fences held all leg: no Game
 Corner, Zapdos unengaged, no TM/HM teaches, no stat
 items, Master Ball never thrown.
+
+## 35. Post-game leg 7 (probe174, 2026-11-22): ZAPDOS — the deferred bird, caught on Ultra Balls — dex 117 → 118
+
+Vlad's call (2026-11-22): "Go for Zapdos — restock
+Ultra Balls and clear the Power Plant". Zapdos had been
+deferred-not-fenced since the storyline; the tap
+un-parked it. The Master Ball stayed unthrown — the
+tap specified Ultra Balls, and the run's perfect
+streak survives.
+
+### Verified from pokered before travelling
+
+- `data/maps/objects/PowerPlant.asm`: the bird is
+  `object_event 4, 9, SPRITE_BIRD, STAY, UP, ...,
+  ZAPDOS, 50` — a static L50 at (4,9); the live sprite
+  table at the stance confirmed pic 0x9 at (4,9).
+- `base_stats/zapdos.asm`: catch rate **3**, stats
+  90/90/85/100/125. `evos_moves.asm`: its next learn
+  is Thunder at **51**, so at L50 it carries only
+  THUNDERSHOCK + DRILL PECK (its caught summary page
+  agrees).
+- The catch algorithm (`engine/items/item_effects
+  .asm`), Ultra Ball: Rand1 uniform on [0,150]; sleep
+  subtracts 25; the first gate passes iff Rand1−25 ≤
+  catch rate 3 → 29/151 ≈ **19.2%**. Then Rand2 ≤ X,
+  X = min(((MaxHP·255/12) / (HP/4)), 255): at full HP
+  X = 85 → ≈33.6%, so ≈**6.5% per ball** at full HP
+  asleep; below 1/3 HP the second gate is free and
+  the rate caps at the 19.2% gate. Chipping matters —
+  but only if it cannot KO.
+- Chip math: Lapras's live Attack reads **164**, not
+  the ~115 the base stats suggest — stat EXP from a
+  game's worth of work. Against the bird's live
+  Defense 101, the Gen 1 formula gives Strength
+  (80, no STAB) ceilings of **69 non-crit / 131 crit**
+  — exactly one provably safe Strength from 156 HP,
+  and none after it. The driver gates on that bound,
+  computed from live RAM every time.
+
+### Restock and route
+
+Fuchsia Mart: ULTRA BALL ×20 (−¥24,000) + SUPER
+POTION ×2 (−¥1,400) → ¥27,060 → **¥1,660** (potions
+never used; no sales, no money battles). Route: Fly
+to Cerulean → the restored Cut tree at (32,13) →
+Route 9 → Route 10 → the plant door. Two banked
+route facts: the ride threaded Route 9 without a
+single trainer battle (Lapras arrived 259/259, full
+PP), and the river boarding is `_surf_walk_to`'s job
+— a manual `_board_surf` from the (13,28) bank fails
+(its front tiles are land: 0x2c/0x3a; the surf_path
+machinery boards internally and covers the whole
+(13,28) → door (6,39) leg, 105 steps). Inside, the
+model path entry → (4,10) is 157 steps and walked
+clean. Pre-engagement checkpoint:
+`probe174/s2-prezapdos.state`.
+
+### Two incidents before the fight was won
+
+1. **Save states carry held joypad input.** The
+   checkpoint was saved at the end of a westward
+   step; on load the player drifted west on the held
+   LEFT and wandered into a wild Voltorb battle
+   before any deliberate input. Two stage launches
+   died on this (one read the previous battle's
+   stale enemy struct mid-intro and aborted on
+   assert; the next fought the struct check against
+   a battle that was never Zapdos). Neither reached
+   the bird; no balls were spent. The post-catch
+   state drifted the same way — out of the plant to
+   Route 10 (2,40) — harmless once named. Fix,
+   ported as `release_held_buttons`: release all
+   eight buttons after any load, prove the position
+   stable before the first input, and save chain
+   heads only after releasing.
+2. **The battle menu remembers its cursor.** After
+   a ball throw the menu reopens at sig **(14, 1, 9)**
+   — the row the ITEM flow left behind — not
+   (14, 0, 9). Fight attempts 1 and 2 both ran
+   Sing → Strength → first throw broke → then
+   wedged forever on rides that demanded the exact
+   FIGHT sig (attempt 1's hand-rolled ride also
+   A-pressed into the move list, TOP_Y 12). The
+   diagnosis was proven on a scratch wild battle
+   (menu bytes printed pre/post throw), and the fix
+   is `_fight_cursor`: steer (item, col) back to
+   (0, 9) before `_use_move_at_menu`, with
+   `_ride_to_battle_menu` as the only rider.
+
+Also banked: `_battle_enemy`'s level/max HP come
+from the party-struct copy and read garbage
+mid-battle (L125 / 984 against the real L50 / 156).
+`_enemy_live` (battle struct: species +0, HP +1,
+level +14, max HP +15, attack +17, defense +19) is
+the reader to trust.
+
+### The attempts (all from the checkpoint)
+
+- **Attempt 1:** Sing landed (counter 6), Strength
+  156→96 (inside the ≤69 bound), Ultra #1 broke —
+  then the menu wedge. Abandoned.
+- **Attempt 2:** Sing, Strength 156→98, Ultra #1
+  broke — same wedge. Abandoned.
+- **Attempt 3 (kept):** Sing, Strength 156→98
+  (58 damage), Ultra #1 broke (the bird woke during
+  the throw turn), re-Sing, **Ultra #2 caught** at
+  98/156 — its summary page still reads STATUS/SLP.
+  Lapras took **zero damage in all three attempts**
+  (Sing landed first every time). Kept-line ball
+  spend: 2 (18 left).
+
+Verification: dex 117 → **118** in RAM at the catch
+and at close-out. Zapdos L50: HP 98/156, Atk 95 /
+Def 101 / Spd 106 / Spc 134, [THUNDERSHOCK,
+DRILL PECK], OT VLAD 25522 — filed **box 3 slot
+18**. Party restored to the leg-5 five; chain head
+healed at Fuchsia Pokécenter.
+
+### Money trail (to the yen)
+
+¥27,060 → Ultra ×20 −24,000 → Super Potion ×2
+−1,400 → **¥1,660 final**. Nothing sold, no
+trainer battles fought, no Elite Four.
+
+### Port
+
+run_real.py gained `catch_zapdos` (the proven line:
+settle → engage → Sing / bound-gated Strength /
+careful throws, throw-only if the singer faints) +
+`release_held_buttons`, `_enemy_live`,
+`_gen1_damage_bound`, `_strength_bounds_live`,
+`_fight_cursor`, `_throw_one_careful`. The port was
+**replayed from the checkpoint and reproduced the
+catch** — same line, 2 balls, dex 118. The probe
+driver's Super-Potion branch never fired live
+(Lapras was never scratched) and was NOT ported.
+Suite **254/254** (+4 tests: the damage bound on
+the live numbers, the battle-struct offsets, the
+button release).
+
+### Chain head and remainder
+
+**Chain head: `probe174/s4-final.state`, sha256
+`35dcce547ff7be3d7ad8c3c4ac345e6de23404412ece602bb5190211e5f04020`**
+— Fuchsia Pokécenter, dex **118**, ¥1,660, Ultra
+×18, party Lapras 60 / Blastoise 97 / Pidgeot 36 /
+Oddish 12 (Cut) / Voltorb 16 (Flash), all healed;
+Zapdos in box 3 slot 18; current box 3.
+
+Remainder (6, all gated): Tauros + Scyther (Safari
+round 4 = fresh authorisation; Scyther alternatively
+5,500 Game Corner coins), Porygon (9,999 coins);
+fenced — Articuno, Moltres, Mewtwo. Fences held all
+leg: no other legendary engaged, no Safari, no Game
+Corner, no TM/HM teaches, no stat items, Master
+Ball never thrown.

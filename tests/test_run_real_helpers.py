@@ -1614,3 +1614,76 @@ class TestPartyNeedsHeal(unittest.TestCase):
 
     def test_empty_party_needs_no_heal(self):
         self.assertFalse(rr._party_needs_heal(self._emu([])))
+
+
+class TestGen1DamageBound(unittest.TestCase):
+    """probe174 port: the Strength gate on Zapdos used
+    worst-case Gen 1 damage bounds computed from the live
+    battle-struct stats. The live reads (L60 Lapras with
+    stat-EXP Attack 164 vs the bird's Defense 101) are
+    pinned exactly: non-crit ceiling 69, crit ceiling
+    131 - the first Strength at 156 HP was provably
+    non-lethal, the second at ~98 HP was provably not
+    attempted."""
+
+    def test_live_zapdos_numbers(self):
+        self.assertEqual(
+            rr._gen1_damage_bound(60, 80, 164, 101), 69)
+        self.assertEqual(
+            rr._gen1_damage_bound(60, 80, 164, 101,
+                                  crit=True), 131)
+
+    def test_crit_always_exceeds_base(self):
+        for lv in (5, 36, 50, 100):
+            self.assertGreater(
+                rr._gen1_damage_bound(lv, 40, 90, 90,
+                                      crit=True),
+                rr._gen1_damage_bound(lv, 40, 90, 90))
+
+
+class TestEnemyLive(unittest.TestCase):
+    """probe174 port: _enemy_live reads the enemy from
+    the BATTLE struct (wEnemyMon). _battle_enemy's level
+    / max-HP come from the party-struct copy and read
+    garbage mid-battle (L125 / 984 against the real
+    L50 / 156); the battle-struct offsets are pinned
+    here: species +0, HP +1, level +14, max HP +15."""
+
+    def test_reads_battle_struct(self):
+        emu = FakeEmu()
+        mem = emu.memory
+        base = rr.ADDR_ENEMY_SPECIES
+        mem[base] = 0x4B                    # ZAPDOS
+        mem[base + 1] = 0
+        mem[base + 2] = 98                  # HP 98
+        mem[base + 14] = 50                 # level
+        mem[base + 15] = 0
+        mem[base + 16] = 156                # max HP
+        self.assertEqual(rr._enemy_live(emu),
+                         (0x4B, 98, 156, 50))
+
+
+class TestReleaseHeldButtons(unittest.TestCase):
+    """probe174 port: a save state can carry a held
+    direction in the emulated joypad - the player drifts
+    on load (the pre-engagement checkpoint drifted west
+    into a wild battle; the post-catch state drifted out
+    of the Power Plant). release_held_buttons must free
+    all eight buttons and settle."""
+
+    def test_releases_everything_and_settles(self):
+        released = []
+        ticks = []
+
+        class PB:
+            def button_release(self, b):
+                released.append(b)
+
+        emu = SimpleNamespace(pb=PB(),
+                              tick=lambda n=1: ticks.append(n))
+        rr.release_held_buttons(emu)
+        self.assertEqual(
+            sorted(released),
+            ["a", "b", "down", "left", "right", "select",
+             "start", "up"])
+        self.assertTrue(ticks and ticks[0] >= 30)

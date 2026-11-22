@@ -15706,6 +15706,258 @@ def _step_warp(emu, direction, want_map, tries=8):
     return emu.read_state().map_id == want_map
 
 
+# -------------------------------------------------------
+# probe174 (leg 7): the Zapdos catch + the held-input
+# lesson. See docs/supervisor-training.md S35.
+# -------------------------------------------------------
+
+def release_held_buttons(emu):
+    """Release every joypad button and settle.
+
+    Save states can carry a HELD direction in the emulated
+    joypad (a walk's final step still down when the state
+    was saved): on load the player drifts on that input -
+    the probe174 pre-engagement checkpoint drifted west
+    into a wild battle before a single deliberate press,
+    and the post-catch state drifted out of the Power
+    Plant to Route 10 the same way. Any consumer that
+    loads a state should call this before its first
+    input, and any stage that saves a chain head should
+    call it first so the head is clean."""
+    for b in ("up", "down", "left", "right", "a", "b",
+              "start", "select"):
+        emu.pb.button_release(b)
+    emu.tick(30)
+
+
+def _enemy_live(emu):
+    """(species, hp, max_hp, level) of the enemy from the
+    BATTLE struct (wEnemyMon). _battle_enemy reads level
+    and max HP from the party-struct copy, which does not
+    track the live battle (it read L125 / 984 max HP
+    against the real L50 / 156 in probe174); the battle
+    struct is the truth: species +0, HP +1 (dw), level
+    +14, max HP +15 (dw), attack +17, defense +19."""
+    mem = emu.pb.memory
+    base = ADDR_ENEMY_SPECIES
+    hp = (mem[base + 1] << 8) | mem[base + 2]
+    mx = (mem[base + 15] << 8) | mem[base + 16]
+    return mem[base], hp, mx, mem[base + 14]
+
+
+def _gen1_damage_bound(level, power, atk, dfn, crit=False):
+    """Worst-case (max-roll) damage of a physical move by
+    the Gen 1 formula: floor(floor(floor(2L/5 + 2) * P *
+    A / D) / 50) + 2, before the 0.85-1.00 random factor
+    (so this is the ceiling). A crit doubles the level
+    term: floor(2*(2L)/5 + 2). Pure - unit-tested against
+    the live probe174 reads (L60 Lapras, Strength 80,
+    Atk 164 vs Zapdos Def 101 -> 69 / 131)."""
+    lv = 2 * level if crit else level
+    return (2 * lv // 5 + 2) * power * atk // dfn // 50 + 2
+
+
+def _strength_bounds_live(emu, power=80):
+    """(noncrit_max, crit_max) for the active mon's
+    physical move of the given power against the enemy,
+    from the live battle-struct stats. Out-of-range stat
+    reads (mid-intro garbage) return a never-attack
+    bound."""
+    mem = emu.pb.memory
+    atk = (mem[ADDR_BATTLE_MON_SPECIES + 17] << 8) \
+        | mem[ADDR_BATTLE_MON_SPECIES + 18]
+    dfn = (mem[ADDR_ENEMY_SPECIES + 19] << 8) \
+        | mem[ADDR_ENEMY_SPECIES + 20]
+    if not (90 <= atk <= 180 and 80 <= dfn <= 120):
+        return 0, 9999
+    lv = emu.read_state().party[0].level
+    return (_gen1_damage_bound(lv, power, atk, dfn),
+            _gen1_damage_bound(lv, power, atk, dfn,
+                               crit=True))
+
+
+def _fight_cursor(emu):
+    """Steer the main battle menu cursor to FIGHT (menu
+    item 0, col 9) so _use_move_at_menu's sig check
+    passes. The battle menu REMEMBERS its cursor: after
+    a ball throw it reopens at (14, 1, 9) - the row the
+    ITEM flow left behind - and any ride that demands
+    the (14, 0, 9) sig wedges (probe174 attempts 1-2)."""
+    mem = emu.pb.memory
+    for _ in range(14):
+        if (mem[ADDR_MENU_ITEM], mem[ADDR_MENU_COL]) \
+                == (0, 9):
+            return True
+        if mem[ADDR_MENU_COL] != 9:
+            _raw(emu, "left", hold=4, settle=22)
+        elif mem[ADDR_MENU_ITEM] != 0:
+            _raw(emu, "up", hold=4, settle=22)
+        emu.tick(30)
+    return (mem[ADDR_MENU_ITEM], mem[ADDR_MENU_COL]) \
+        == (0, 9)
+
+
+def _throw_one_careful(emu, ball_id, stored0):
+    """One careful throw + the S32 post-throw ride (the
+    ITEM list can stay open - one B closes it; 'menu
+    live' is proven by _advance_battle, never by the
+    dialog flag). Returns 'caught' / 'broke' / 'over' /
+    'failed'."""
+    mem = emu.pb.memory
+    r = _throw_ball_careful(emu, ball_id)
+    if r == "failed":
+        return "failed"
+    if r == "over":
+        return "caught" if _stored_count(emu) > stored0 \
+            else "over"
+    for _ in range(120):
+        if _stored_count(emu) > stored0:
+            _catch_epilogue(emu, stored0 + 1)
+            return "caught"
+        st = emu.read_state()
+        if not st.in_battle:
+            return "caught" if _stored_count(emu) > stored0 \
+                else "over"
+        if mem[ADDR_MENU_TOP_Y] == 4:
+            _press10(emu, "b")
+            emu.tick(60)
+            continue
+        if _advance_battle(emu) == "menu":
+            return "broke"
+    return "failed"
+
+
+def catch_zapdos(emu, ex, log=print):
+    """The Power Plant Zapdos (probe174, leg 7): engage
+    the static bird at (4, 9) from the stance (4, 10)
+    and catch it with ULTRA BALLS - the MASTER BALL is
+    never referenced. Policy, all from live RAM at the
+    battle menu (_ride_to_battle_menu is the rider):
+      - enemy awake -> SING (Lapras must lead, with
+        Sing + Strength in its moveset).
+      - enemy asleep -> STRENGTH only when a worst-case
+        CRIT (_gen1_damage_bound on the live stats)
+        cannot KO from the current HP; else throw.
+      - if the lead faints, _ride_to_battle_menu sends
+        the first healthy mon and the fight continues
+        throw-only (no singer left).
+    The caller owns the checkpoint: save a state at the
+    stance before calling; on 'ko' / 'out_of_balls' /
+    'stuck' restore it and retry (probe174 caught it on
+    attempt 3 - attempts 1-2 wedged on the battle menu's
+    cursor memory, fixed by _fight_cursor above; the
+    kept attempt: Sing, Strength 156->98, ball broke,
+    re-Sing, ball 2 caught - Lapras never took a hit).
+    Returns 'caught' / 'ko' / 'out_of_balls' / 'stuck' /
+    'failed' (preconditions). RAM-verified on success:
+    dex +1 and the bird in party or box."""
+    world = ex.world
+    pp = world.map_id("PowerPlant")
+    zapdos = 0x4B
+    lapras = 0x13
+    ultra = 0x02  # ITEM_ULTRA_BALL (no module constant
+    # exists for it; MASTER 0x01 / GREAT 0x03 / POKE 0x04)
+    st = emu.read_state()
+    if st.map_id != pp or (st.x, st.y) != (4, 10):
+        return "failed"
+    lead = st.party[0] if st.party else None
+    if lead is None or lead.species_id != lapras or \
+            MOVE_SING not in lead.moves or \
+            MOVE_STRENGTH not in lead.moves:
+        return "failed"
+    if _bag_count(emu, ultra) == 0:
+        return "failed"
+    release_held_buttons(emu)
+    p1 = emu.read_state()
+    emu.tick(90)
+    p2 = emu.read_state()
+    if (p1.x, p1.y) != (4, 10) or (p2.x, p2.y) != (4, 10) \
+            or p2.in_battle:
+        return "failed"
+    # engage: face the bird and talk to it
+    _face(emu, "up")
+    emu.tick(90)
+    st = emu.read_state()
+    if (st.x, st.y) != (4, 10) or st.in_battle:
+        return "failed"
+    _press10(emu, "a")
+    for _ in range(300):
+        st = emu.read_state()
+        if st.in_battle:
+            break
+        if st.in_dialog:
+            _press10(emu, "a")
+        emu.tick(20)
+    if not emu.read_state().in_battle:
+        return "failed"
+    # ride the intro until both battle structs are sane
+    mem = emu.pb.memory
+    for _ in range(400):
+        sp, hp, mx, lv = _enemy_live(emu)
+        batk = (mem[ADDR_BATTLE_MON_SPECIES + 17] << 8) \
+            | mem[ADDR_BATTLE_MON_SPECIES + 18]
+        if sp == zapdos and lv == 50 and 140 <= mx <= 170 \
+                and 100 <= batk <= 180:
+            break
+        if emu.read_state().in_dialog:
+            _press10(emu, "a")
+        emu.tick(20)
+    stored0 = _stored_count(emu)
+    thrower_only = False
+    for _turn in range(80):
+        st = emu.read_state()
+        if not st.in_battle:
+            return "caught" if _stored_count(emu) > stored0 \
+                else "stuck"
+        r = _ride_to_battle_menu(emu)
+        if r == "over":
+            return "caught" if _stored_count(emu) > stored0 \
+                else "stuck"
+        if mem[ADDR_MENU_TOP_Y] != 14:
+            return "stuck"
+        sp, hp, mx, lv = _enemy_live(emu)
+        if sp != zapdos:
+            return "stuck"
+        if hp == 0:
+            return "ko"
+        active = mem[ADDR_BATTLE_MON_SPECIES]
+        if active != lapras:
+            thrower_only = True
+        slp = mem[ADDR_ENEMY_STATUS] & 0x07
+        if _bag_count(emu, ultra) == 0:
+            return "out_of_balls"
+        log(f"zapdos hp={hp}/{mx} slp={slp} balls="
+            f"{_bag_count(emu, ultra)} thrower_only="
+            f"{thrower_only}")
+        if not thrower_only and slp == 0:
+            if not _fight_cursor(emu) or \
+                    not _use_move_at_menu(emu, MOVE_SING):
+                return "stuck"
+            emu.tick(200)
+            continue
+        if not thrower_only and slp > 0:
+            base, crit = _strength_bounds_live(emu)
+            if crit < hp:
+                log(f"Strength (bounds base<={base} "
+                    f"crit<={crit} < hp {hp})")
+                if not _fight_cursor(emu) or \
+                        not _use_move_at_menu(
+                            emu, MOVE_STRENGTH):
+                    return "stuck"
+                emu.tick(200)
+                continue
+        r = _throw_one_careful(emu, ultra, stored0)
+        log(f"throw -> {r}")
+        if r == "caught":
+            return "caught"
+        if r == "over":
+            return "caught" if _stored_count(emu) > stored0 \
+                else "stuck"
+        if r == "failed":
+            return "stuck"
+    return "stuck"
+
+
 
 
 if __name__ == "__main__":
