@@ -3685,3 +3685,126 @@ Corner coins), ZAPDOS (deferred, not fenced — a
 go-ahead un-parks it), and the fenced three:
 ARTICUNO (Seafoam B4F — transited B3F this leg,
 B4F never entered), MOLTRES, MEWTWO.
+
+## 34. Post-game leg 6 (probe173, 2026-11-22): Safari round 3 — funded by a Champion run, and the Zone wins again — dex 117 → 117
+
+Vlad's call (2026-11-22): "Authorise another Safari hunt —
+Tauros and Scyther, unbaited throws". Budget shape as
+rounds 1–2: up to 6 entries, stop early if both land.
+Neither did. Round 3 in one line: **Scyther 4 sightings /
+4 balls / 0 catches (every one fled after exactly one
+throw); Tauros 0 sightings; 28 encounters over 6 entries;
+dex unmoved at 117.** Combined across all three rounds:
+**Tauros 4 sightings / 4 balls, Scyther 12 sightings /
+45 balls, ZERO catches.**
+
+### Tables re-verified before hunting (pokered)
+
+`data/wild/maps/SafariZone*.asm`, Red: SCYTHER — Center
+slot 9 (index 8, ≈4%, L23) and East slot 10 (≈1%, L28);
+TAUROS — West slot 9 (≈4%, L26) and North slot 10 (≈1%,
+L28). Round 2's routing (Center for Scyther, West for
+Tauros) is what the data supports; round 3 kept it.
+
+### Funding (start ¥361 — not even one ¥500 entry)
+
+1. **Sales of re-buyable non-fence stock** (withdrawn
+   from PC storage first): POTION ×1 +¥150, REPEL ×2
+   +¥350, POKE BALL ×3 +¥300, GREAT BALL ×2 +¥600 (from
+   the bag) → ¥1,761. Fenced items untouched: the HMs,
+   the TM shelf, CARBOS, all key items. Mart lesson
+   banked: after a sale the clerk flow sits in the item
+   list, not the BUY/SELL menu — `_mart_sell_stack`
+   assumes the menu, so consecutive sales need an
+   exit-and-reopen per stack (the §-era `sell_many`
+   pattern).
+2. **One Elite Four run** (the brief's hard rule: one
+   run, complete or first blackout, never feed repeat
+   Champion attempts). Party assembled for it: Lapras 58,
+   Blastoise 96, Pidgeot 36, Snorlax 54, Arcanine 52,
+   Dragonite 55; one REVIVE bought at the Indigo lobby
+   mart (−¥1,500 → ¥261). The run **completed**: Lorelei
+   +5,544, Bruno +5,742, Agatha +5,940, Lance +6,138,
+   Champion +6,435 → **¥30,060**. It was not comfortable —
+   Lapras, Blastoise and Snorlax all fainted in the
+   Champion fight and Arcanine (L53) + Dragonite closed
+   it — but with `_league_guard_switch` in, the §31
+   five-blackout attrition pattern did not repeat.
+   Levels after: Lapras 60, Blastoise 97, Snorlax 55,
+   Arcanine 53. (Process note: the post-HoF fly-home
+   loop hung silently for ~7 minutes after the win; the
+   run's `s0-after.state` checkpoint was intact and a
+   fresh stage flew home from it. Checkpoints over
+   processes, again.)
+3. Entries: 6 × ¥500 = −¥3,000 → **¥27,060** at leg end.
+
+### The hunt
+
+Machinery: probe168's `hunt.py` + round 2's entry flow,
+unbaited-only (`force_arm "U"`), per-entry checkpoints
+`s1-hunt3-e{n}.state`, full log in probe173's
+`hunt3_log.json`. Catch box switched to the empty box 5
+before entry 1 (§30's lesson; box 3 had only 2 free
+slots). Throw-path sanity: entry 1 was run alone first —
+7 encounters, every throw
+resolved (catches and clean flees, no stuck/"?" outcomes)
+before the remaining 5 entries were committed.
+
+Aggregate (per-entry checkpoints `s1-hunt3-e{n}.state`;
+the log is cumulative): **28 encounters, 28 balls
+thrown** — every encounter resolved in exactly one
+throw. Entry 1 (run solo first as the sanity pass):
+7 encounters, 0 sightings. All 4 Scyther sightings
+fell in entries 2–5; entry 6 added a single encounter
+and no sighting. Tauros: no sightings in any entry —
+West exposure per entry is the tail of the step budget
+after the Center phase, and at ~4% the expected yield
+over the round was under one sighting; round 1's 4
+sightings remain the anomaly, not the norm.
+
+(The encounter total is lower than round 2's 84: see
+the owned-set bug below — every encounter this round ran
+the full throw ride instead of an instant flee, so
+entries burned their 500 steps on battle frames. Target
+exposure is what matters and Scyther's 4 sightings at
+~4% of Center encounters is in line with the table.)
+
+**The owned-set bug (round 3's engineering find):**
+`hunt.py`'s owned set was built as party +
+`_box_species(emu)` — and `_box_species` reads only the
+CURRENT box. With the catch box switched to empty box 5,
+the owned set came up nearly empty, so all 11 bycatch
+"unowned" engagements threw a ball instead of fleeing:
+Rhyhorn, Nidoran-M, Doduo, Exeggcute, Nidorina,
+Nidorino, Venonat, Nidoran-F, Parasect, Paras, Venomoth
+— all dupes, all filed in box 5. No target was affected
+(targets are always engaged), but a future hunt should
+flee dupes properly. PORTED: `_all_box_species(emu)`
+(the full `_box_census` union) for owned sets, +1 test.
+Companion find: SAFARI_SPECIES had no name for 0x0F —
+it is NIDORAN_F (pokered `pokemon_constants.asm` $0F;
+the East-area slot-7 encounter, logged nameless in all
+three rounds). Added to SAFARI_SPECIES /
+SAFARI_CATCH_RATE / SAFARI_SPEED (mirroring Nidoran-M's
+row; the two are statistically identical).
+
+### Close state
+
+Party restored to the leg-5 arrangement (Snorlax /
+Arcanine / Dragonite back in box 4; Oddish + Voltorb
+back in the party; current box 3). **Chain head:
+`~/workspace/pokemon-play/probe173/s2-final.state`,
+sha256 `93c65d7420a71f9e5f046b7a7b979af07799dd0d8a40c17b612426ddf8f9735b`**
+— Fuchsia Pokécenter, healed, **dex 117**, **¥27,060**,
+party Lapras 60 / Blastoise 97 / Pidgeot 36 / Oddish 12
+(Cut) / Voltorb 16 (Flash). Census: 104 boxed + 5 party
+(93 + 11 round-3 dupes in box 5). Ports: `_all_box_species`
++ the NIDORAN_F table entries; suite **250/250**.
+
+Remainder (7, all Vlad's calls): Tauros + Scyther
+(Safari round 4 would need a fresh authorisation;
+Scyther alternatively 5,500 Game Corner coins), Porygon
+(9,999 coins), Zapdos (deferred, not fenced); fenced —
+Articuno, Moltres, Mewtwo. Fences held all leg: no Game
+Corner, Zapdos unengaged, no TM/HM teaches, no stat
+items, Master Ball never thrown.

@@ -582,6 +582,14 @@ class TestSafariHunt(unittest.TestCase):
         self.assertEqual(rr.SAFARI_SPECIES[0x3C], "TAUROS")
         self.assertEqual(rr.SAFARI_SPECIES[0x1A], "SCYTHER")
         self.assertEqual(rr.SAFARI_SPECIES[0x58], "DRATINI")
+        # probe173: 0x0F logged nameless through three hunt
+        # rounds - it is NIDORAN_F (pokered pokemon_constants
+        # $0F), the East-area slot-7 encounter
+        self.assertEqual(rr.SAFARI_SPECIES[0x0F], "NIDORAN_F")
+        self.assertEqual(rr.SAFARI_CATCH_RATE[0x0F],
+                         rr.SAFARI_CATCH_RATE[0x03])
+        self.assertEqual(rr.SAFARI_SPEED[0x0F],
+                         rr.SAFARI_SPEED[0x03])
         self.assertEqual(rr.SAFARI_TARGETS,
                          frozenset({0x28, 0x02, 0x3C, 0x1A, 0x58}))
 
@@ -1572,6 +1580,12 @@ class TestBoxCensus(unittest.TestCase):
         emu.memory[rr.ADDR_CURRENT_BOX_NUM] = 0
         census = rr._box_census(emu)
         self.assertEqual(census[1], [])
+
+    def test_all_box_species_spans_every_box(self):
+        # probe173: the owned set must come from all 12
+        # boxes, not just the current one (_box_species)
+        self.assertEqual(rr._all_box_species(self._emu()),
+                         {0x08, 0x0B})
 
 
 class TestPartyNeedsHeal(unittest.TestCase):

@@ -971,6 +971,21 @@ def _box_find_species(census: dict, species_id: int) -> list:
             for m in mons if m["species"] == species_id]
 
 
+def _all_box_species(emu: PyBoyEmulator) -> set:
+    """Species ids stored in ANY of the 12 PC boxes.
+
+    probe173's lesson: _box_species reads only the CURRENT
+    box, so a hunt driver that builds its owned set from it
+    (party + _box_species) undercounts whenever the catch
+    box differs from the box holding the collection - in
+    round 3 every owned dupe was misread as unowned bycatch
+    and engaged for a ball instead of fled. Build owned
+    sets from the full census instead."""
+    return {m["species"]
+            for mons in _box_census(emu).values()
+            for m in mons}
+
+
 def _party_needs_heal(emu: PyBoyEmulator) -> bool:
     """True if any party mon is below full HP (raw WRAM:
     wPartyCount 0xD163, 44-byte party structs at 0xD16B,
@@ -8218,6 +8233,7 @@ SAFARI_SPECIES = {
     0x41: "VENONAT", 0x77: "VENOMOTH", 0x0C: "EXEGGCUTE",
     0xA7: "NIDORINO", 0xA8: "NIDORINA", 0x6D: "PARAS",
     0x2E: "PARASECT", 0x46: "DODUO", 0x03: "NIDORAN_M",
+    0x0F: "NIDORAN_F",
     0x4E: "KRABBY", 0x2F: "PSYDUCK", 0x25: "SLOWPOKE",
     0x9D: "GOLDEEN", 0x47: "POLIWAG",
 }
@@ -8234,12 +8250,14 @@ SAFARI_CATCH_RATE = {
     0x12: 120, 0x41: 190, 0x77: 75, 0x0C: 90, 0xA7: 120,
     0xA8: 120, 0x6D: 190, 0x2E: 75, 0x46: 190, 0x03: 190,
     0x4E: 225, 0x2F: 190, 0x25: 190, 0x9D: 225, 0x47: 190,
+    0x0F: 190,
 }
 SAFARI_SPEED = {
     0x28: 50, 0x02: 90, 0x3C: 110, 0x1A: 105, 0x58: 50,
     0x12: 25, 0x41: 45, 0x77: 90, 0x0C: 40, 0xA7: 65,
     0xA8: 56, 0x6D: 25, 0x2E: 30, 0x46: 75, 0x03: 45,
     0x4E: 50, 0x2F: 55, 0x25: 15, 0x9D: 63, 0x47: 90,
+    0x0F: 45,
 }
 # The five rares Vlad named. Encounter slots (pokered
 # data/wild/grass_water + probabilities.asm: slot8 = 4.3%,
