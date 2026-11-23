@@ -7,6 +7,8 @@ page (POST /directive appends to the same file) - can steer it by
 appending JSON Lines to FILE:
 
     {"goal": {"target_map_name": "ViridianCity", "reason": "detour"}}
+    {"quest": "heal", "args": {}}
+    {"quest": "travel", "args": {"town": "Fuchsia City"}}
     {"action": "pause"}
     {"action": "resume"}
     {"action": "stop"}
@@ -34,6 +36,20 @@ outsiders exactly as to the built-in supervisor):
   leg functions are atomic - a directive that lands mid-leg is picked
   up when the leg ends. A redirect is an inserted validated goal
   between phases/rounds, not mid-leg surgery.
+* A quest directive names a side quest from the quest
+  library (quests.py - the named, command-callable actions:
+  heal, travel, fund_e4, grind, catch_wild, catch_static,
+  safari_hunt, game_corner, trade, evolve_stone,
+  revive_fossil, buy, sell, box_switch, dex_audit). Quests
+  carry their own verify-first discipline: arguments are
+  schema-validated and every precondition is RAM-checked
+  before anything moves, so the channel's job is routing and
+  audit, exactly as for goals. The host's execute_quest runs
+  one quest and reports "executed" / "failed" / "rejected"
+  (a quest refusal - an unmet precondition - is a rejection
+  with the reason, not a failure). Quest directives queue
+  while paused, like goals. A host that does not serve
+  quests rejects them, loudly, in the audit.
 * "pause" takes effect at the next service point and blocks there,
   polling the file, until "resume" or "stop" arrives. Goal directives
   received while paused are queued and executed, in file order, after
@@ -216,6 +232,10 @@ class DirectiveChannel:
         host.read_state()     - current GameState
         host.execute_goal(goal) -> (success: bool, detail: str)
           runs ONE already-validated goal through the executor.
+        host.execute_quest(name, args) -> (outcome, detail)
+          OPTIONAL: runs ONE named side quest (quests.py);
+          outcome is "executed" / "failed" / "rejected".
+          Hosts without it get quest directives rejected.
 
     service() returns "ok" when the run may proceed, "stop" when a
     stop was requested (directive or the optional stop_check - the
@@ -291,6 +311,15 @@ class DirectiveChannel:
                            f"(want one of {', '.join(ACTIONS)})")
                 self._audit(obj, "rejected", f"unknown action {action!r}")
             return
+        if "quest" in obj:
+            if self.paused or self._deferred:
+                self._deferred.append(obj)
+                self._note("quest queued (paused) - runs after "
+                           f"resume: {json.dumps(obj)[:160]}")
+                self._audit(obj, "queued")
+                return
+            self._do_quest(obj)
+            return
         if "goal" in obj:
             if self.paused or self._deferred:
                 self._deferred.append(obj)
@@ -300,9 +329,48 @@ class DirectiveChannel:
                 return
             self._do_goal(obj)
             return
-        self._note("MALFORMED ignored (no 'goal' or 'action' key): "
+        self._note("MALFORMED ignored (no 'goal', 'quest' or "
+                   "'action' key): "
                    f"{json.dumps(obj)[:120]}")
-        self._audit(obj, "malformed", "no 'goal' or 'action' key")
+        self._audit(obj, "malformed",
+                    "no 'goal', 'quest' or 'action' key")
+
+    def _do_quest(self, obj) -> None:
+        name = obj.get("quest")
+        args = obj.get("args", {})
+        if not isinstance(name, str) or not name:
+            self._note(f"REJECTED quest directive without a "
+                       f"quest name: {json.dumps(obj)[:160]}")
+            self._audit(obj, "rejected",
+                        "quest name missing or not a string")
+            return
+        if args is None:
+            args = {}
+        if not isinstance(args, dict):
+            self._note(f"REJECTED quest {name!r}: args must "
+                       f"be a JSON object, got {args!r}")
+            self._audit(obj, "rejected", "args not an object")
+            return
+        fn = getattr(self.host, "execute_quest", None)
+        if fn is None:
+            self._note(f"REJECTED quest {name!r} - this host "
+                       "does not serve quests")
+            self._audit(obj, "rejected",
+                        "host does not serve quests")
+            return
+        self._note(f"ACCEPTED quest {name} {json.dumps(args)} "
+                   "- executing before the storyline continues")
+        try:
+            outcome, detail = fn(name, args)
+        except Exception as exc:
+            # A quest must never take the storyline down with
+            # it (quests.run_quest already returns failures as
+            # results; this is the belt to its braces).
+            outcome, detail = "failed", f"quest raised {exc!r}"
+        if outcome not in ("executed", "failed", "rejected"):
+            outcome = "executed" if outcome else "failed"
+        self._note(f"OUTCOME quest {name}: {outcome} - {detail}")
+        self._audit(obj, outcome, detail)
 
     def _do_goal(self, obj) -> None:
         host = self.host
@@ -383,7 +451,11 @@ class DirectiveChannel:
                 time.sleep(self.poll_interval)
                 continue
             if self._deferred:
-                self._do_goal(self._deferred.popleft())
+                obj = self._deferred.popleft()
+                if "quest" in obj:
+                    self._do_quest(obj)
+                else:
+                    self._do_goal(obj)
                 if self.stop_requested:
                     return "stop"
                 continue

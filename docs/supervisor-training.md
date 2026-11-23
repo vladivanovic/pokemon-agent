@@ -4538,3 +4538,121 @@ project (Vlad, 2026-11-18): revise the
 accumulated code into named, command-callable
 side quests — scope is his to set; do not start
 unprompted.
+
+## 40. The side-quest refactor (probe179, 2026-11-23): the leg machinery revised into named, command-callable quests — Vlad's 2026-11-18 design, go-ahead 2026-11-23
+
+**What shipped.** `quests.py`: a registry of 15 named quests, each a
+self-contained action with a declared argument schema, RAM-verified
+preconditions (a structured refusal — quest, precondition, reason —
+with nothing moved), execution by composition of the ported
+`run_real.py` primitives, and RAM-verified postconditions. A quest
+ends `ok` / `failed` (it ran; the postcondition does not hold) /
+`refused` (it never ran). Two invocation surfaces:
+
+1. **CLI** — `python3 quests.py --list`; `python3 quests.py --state
+   work.state [--out done.state] <quest> [args]`. Exit codes mirror
+   the outcome (0/1/2); a refused quest never writes the state file,
+   a failed one does (it may honestly have spent money or moved).
+2. **Live redirect** — `directives.py` accepts
+   `{"quest": "<name>", "args": {...}}` beside the goal/action
+   forms, with the same exactly-once consumption, pause-queueing and
+   audit treatment; `play_full_game.Ctx.execute_quest` is the host
+   endpoint and maps quest outcomes onto the audit vocabulary
+   (ok → `executed`, refused → `rejected` with the reason, failed →
+   `failed`). A host without `execute_quest` rejects quest
+   directives loudly in the audit rather than dropping them.
+
+**Additive ports into `run_real.py`** (the refactor's consolidation,
+nothing rewritten): the post-Hall-of-Fame text-verified PC layer
+from the probe168/172 lineage (`pc_open_bills`, `pc_open_items`,
+`pc_close`, `pc_deposit_mon`, `pc_withdraw_mon`, `pc_swap_mon`,
+`pc_change_box`, `pc_withdraw_item`, `pc_deposit_item`) — the stock
+PC flows misfire on any post-League save, which is most of what the
+quests run against — and `_mart_sell_qty`, `_mart_sell_stack`
+parameterised by quantity.
+
+**Data** is parsed from the pret/pokered checkout (the
+`agent/dex_audit.py` source): species/trades/prizes via the ledger,
+plus learnsets (evos_moves), item ids, wild tables, mart stocks and
+prices parsed in `quests.Data`. Data-dependent quests refuse
+cleanly when no checkout is found; heal/travel/box_switch do not
+need it.
+
+**The catalogue**: `dex_audit` (read-only), `heal`, `travel`,
+`fund_e4`, `grind`, `catch_wild`, `catch_static`, `safari_hunt`,
+`game_corner`, `trade`, `evolve_stone`, `revive_fossil`, `buy`,
+`sell`, `box_switch`. Policy baked in from the legs: Safari throws
+are unbaited-only (the A/B verdict); grind declines every move
+replacement (free-slot auto-learns are simulated from the learnset
+and audited, not hidden); `fund_e4` refuses when a party member's
+next learnset level falls within a ±4-level guard window — the §39
+Snorlax/Hyper Beam wedge, detected before the gauntlet instead of
+inside it — and requires a full party of six (the §31 attrition
+lesson); `catch_wild` checks active-box headroom before hunting
+(the §30 full-box lesson) and rotates pacing pairs when one
+produces no encounters (the §37 sterile-pair lesson, applied
+generically: pairs are ranked by modal-tile score and a pair that
+yields nothing in 50 paces is abandoned); `catch_static` saves its
+own pre-engagement checkpoint and retries ≤3 attempts from it,
+restoring the checkpoint after a failed series so the returned
+state is clean.
+
+**Smokes** (probe179, all on copies of the canonical
+`probe178/s7-final.state`; the original was never mutated):
+
+| Smoke | Result |
+|---|---|
+| `dex_audit` | ok — 124/124 owned, 0 obtainable missing; Flareon/Vaporeon reported as choice-locked/unchosen |
+| `travel` Cerulean → Fuchsia → Cerulean | ok both ways, RAM map verified (after the settle fix below) |
+| `heal` | ok — party full HP at Cerulean |
+| `fund_e4` (1 run) | **ok — ¥5,459 → ¥34,033 (net +28,574)**, home healed at Fuchsia |
+| `catch_static mewtwo` | refused `[owned]` — already owned, encounter consumed |
+| `safari_hunt tauros` | refused `[owned]` |
+| `game_corner scyther` | refused `[owned]` |
+
+The travel smoke caught a real bug the legs knew and the quest
+layer had to relearn: a state saved immediately after a flight
+carries held-input residue that eats `fly_to`'s start-menu press
+(Fuchsia → Cerulean failed cold, passed after
+`release_held_buttons` + settle). `quests.fly()` now releases and
+settles before every `fly_to`.
+
+**Honest limits.**
+- `catch_static` does not travel between maps: the bespoke
+  descents (Seafoam's B3F boulder pushes, the Victory Road loop,
+  the Cerulean Cave ladder route) remain leg work. The quest owns
+  verification, checkpointing, the catch and the retries from the
+  stance on the target's own map. Item-ball statics are refused.
+- `catch_wild` hunts grass habitats only (surf/fishing-only
+  species refuse with that reason). Its live catch path was not
+  smoke-run: on the complete save every grass species is owned,
+  and the smoke plan judged a duplicate catch pointless — the
+  machinery is the legs' ported careful-catch + pacing, and the
+  refusal paths are what the smokes prove.
+- `game_corner` redeems vendor-2 prizes only (Dratini/Scyther/
+  Porygon — the §36-proven vendor); vendor-1 prizes refuse as
+  unproven rather than guessing a stance.
+- `trade`: 4 of 9 Red trades were proven live in the legs
+  (Mr. Mime, Farfetch'd, Jynx, Lickitung); the other five are
+  encoded from pokered and ride the same `_do_trade_live`, but
+  their rooms are unproven paths.
+- `sell` is restricted to the Fuchsia/Saffron clerk stances
+  (proven); `buy` at Celadon floor marts relies on journey
+  warp-chaining and is unverified live. `grind` is Mansion-only.
+  The `fund_e4` guard window (±4 levels) is a heuristic: a
+  bystander member has never gained more in one gauntlet, and a
+  refusal names the member, the level and the move so the call
+  is the player's.
+
+**Tests**: suite 299/299 (268 existing + 31 new in
+`tests/test_quests.py`: registry integrity, argument validation,
+CLI parsing, data parsers against the checkout, and the channel's
+quest form — executed / rejected / host-without-quests /
+args-not-object / queued-while-paused).
+
+**The engineering arc is closed**: storyline (§§1–28), post-game
+dex programme (§§29–39, 124/124), and now the refactor (§40). What
+remains genuinely open is unchanged from §39: a single-process
+power-on-to-credits soak of `play_full_game.py` has still never
+been run, and the in-process phase-retry spin at OaksLab is still
+a known defect. Both are runner concerns, not quest concerns.

@@ -185,6 +185,53 @@ validator and the same executor. For an agent like Hermes, steering
 a run is: append a line (or POST), then watch `/state.json` and
 `run/progress.log` for the verdict and the outcome.
 
+### Side quests
+
+The post-game legs accumulated a lot of one-off machinery. `quests.py`
+packages it as **named, command-callable side quests** — each one a
+self-contained action with declared arguments, RAM-verified
+preconditions (an unmet one refuses cleanly with the reason, and
+nothing moves), execution by the proven `run_real.py` primitives, and
+RAM-verified postconditions. Two ways to call them:
+
+```bash
+# the catalogue, with argument specs
+python3 quests.py --list
+
+# one quest against a save state (--out defaults to --state;
+# a refused quest never writes)
+python3 quests.py --state work.state travel "Fuchsia City"
+python3 quests.py --state work.state --out done.state grind lapras 60
+python3 quests.py --state work.state fund_e4
+python3 quests.py --state work.state safari_hunt tauros scyther entries=4
+```
+
+| Quest | What it does |
+|---|---|
+| `dex_audit` | Read-only: owned vs the 124 solo-Red ceiling, obtainable species still missing |
+| `heal` | Heal the party at the nearest Pokécenter (all members full HP, verified) |
+| `travel <town>` | Fly to a visited town |
+| `fund_e4 [runs=1]` | Elite Four money run(s); refuses if a party member would hit a learn prompt mid-gauntlet (the §39 lesson) |
+| `grind <slot\|species> <to_level>` | Mansion switch-grind, prompt-aware, all move replacements declined |
+| `catch_wild <species> [area]` | Travel to the species' pokered-verified grass habitat and careful-catch one |
+| `catch_static <species>` | Snorlax / Zapdos / Articuno / Moltres / Mewtwo from the stance, with a pre-engagement checkpoint and up to 3 attempts |
+| `safari_hunt <species...> [entries=6]` | Safari Zone hunt — unbaited throws only, recorded West route, live pairs |
+| `game_corner <prize>` | Slots grind + prize redemption (vendor 2: Dratini / Scyther / Porygon) |
+| `trade <trade_id>` | An in-game NPC trade (the give species is fetched from its box first) |
+| `evolve_stone <species> <stone>` | Stone evolution; stone/base may come from PC storage / a box |
+| `revive_fossil <fossil>` | Cinnabar Lab fossil revival |
+| `buy <item> <qty> [mart]` / `sell <item> <qty> [mart]` | Mart operations, stock and prices parsed from pokered, money verified |
+| `box_switch <n>` | Change the active PC box (post-HoF text-verified flow) |
+
+The same quests ride the live redirect channel: append
+`{"quest": "heal", "args": {}}` to the directives file and the runner
+executes it at the next service point, audit-logged like a goal
+(`executed` / `failed` / `rejected` — a quest refusal is a rejection
+with the precondition named). Species, learnsets, habitats, mart
+stocks and prices are parsed from the pret/pokered checkout
+(`POKERED_DIR` or `~/workspace/projects/pokered`), the same source as
+`agent/dex_audit.py`. Design, limits and smoke results: docs §40.
+
 ### Running a single leg
 
 Every storyline leg is a function in `run_real.py`, and the pattern the

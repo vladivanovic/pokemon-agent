@@ -185,6 +185,24 @@ class Ctx:
             entry.get("problems", [])) or result.status
         return False, f"executor: {result.status}: {detail}"
 
+    def execute_quest(self, name, args):
+        """Run ONE named side quest (quests.py) against the
+        live game - the DirectiveChannel host endpoint for
+        {"quest": ...} directives. quests.run_quest validates
+        args and preconditions itself and returns outcomes as
+        results, so this maps them onto the channel's audit
+        vocabulary: ok -> executed, refused -> rejected (the
+        reason is the detail), failed -> failed. Returns
+        (outcome, detail)."""
+        import quests as quest_lib
+        result = quest_lib.run_quest(
+            self.emu, self.ex, name, args,
+            log=lambda m: self.note(m),
+            checkpoint_dir=self.out_dir / "quest-checkpoints")
+        outcome = {"ok": "executed", "refused": "rejected",
+                   "failed": "failed"}[result.outcome]
+        return outcome, result.detail
+
     def enable_directives(self, path) -> None:
         from directives import DirectiveChannel
         self.directives_path = Path(path)

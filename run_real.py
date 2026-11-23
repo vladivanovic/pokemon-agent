@@ -16569,5 +16569,363 @@ def redeem_prize_mon(emu: PyBoyEmulator, ex: Executor,
 
 
 
+# --- post-Hall-of-Fame PC helpers (ported from probe168/172's
+# pc168/pc172 lineage for the side-quest refactor, docs S40) ----
+#
+# The Hall of Fame adds a 5th entry to the PC main menu (BILL'S
+# PC / VLAD'S PC / PROF. OAK'S PC / HALL OF FAME / LOG OFF), so
+# the stock PC flows above - keyed on pre-HoF menu signatures -
+# misfire on any post-League save (pc_swap steered DEPOSIT on
+# the main menu and landed in item storage, probe168). These
+# helpers identify menus by SCREEN TEXT instead and verify
+# every effect in RAM. They were the working PC layer for legs
+# 5-11 (trades, box switches, party assembly, item juggling).
+
+def _pc_txt(emu) -> str:
+    return _norm_text(_screen_text(emu))
+
+
+def pc_close(emu) -> bool:
+    """B-press out of every PC menu; True when menus are shut
+    and no dialog is up."""
+    for _ in range(16):
+        if emu.pb.memory[ADDR_MENU_TOP_Y] == 0 and \
+                not emu.read_state().in_dialog:
+            return True
+        _press10(emu, "b")
+        emu.tick(30)
+    return emu.pb.memory[ADDR_MENU_TOP_Y] == 0 and \
+        not emu.read_state().in_dialog
+
+
+def _pc_ride_to_text(emu, needles, rounds: int = 200):
+    """Press A through dialogs until the screen contains one
+    of `needles`; returns the needle found or None."""
+    for _ in range(rounds):
+        t = _pc_txt(emu)
+        for n in needles:
+            if n in t:
+                return n
+        if emu.read_state().in_dialog:
+            _press10(emu, "a")
+        emu.tick(25)
+    t = _pc_txt(emu)
+    for n in needles:
+        if n in t:
+            return n
+    return None
+
+
+def pc_open_bills(emu, ex, pc_map: int) -> bool:
+    """Boot the PC and land in BILL'S PC menu (text-verified:
+    the menu lists WITHDRAW/DEPOSIT/RELEASE/CHANGE BOX)."""
+    if not _open_pc(emu, ex, pc_map):
+        return False
+    for _ in range(60):
+        t = _pc_txt(emu)
+        if "CHANGE BOX" in t:
+            return True
+        if "BILL" in t and "LOG OFF" in t:
+            # PC main menu: item 0 is BILL'S PC
+            if not _steer_menu(
+                    emu, lambda: emu.pb.memory[ADDR_MENU_ITEM], 0):
+                return False
+            _press10(emu, "a")
+            emu.tick(60)
+            continue
+        if emu.read_state().in_dialog:
+            _press10(emu, "a")
+        emu.tick(25)
+    return "CHANGE BOX" in _pc_txt(emu)
+
+
+def pc_open_items(emu, ex, pc_map: int) -> bool:
+    """Boot the PC and land in the player's item-storage menu
+    (WITHDRAW ITEM / DEPOSIT ITEM / LOG OFF)."""
+    if not _open_pc(emu, ex, pc_map):
+        return False
+    for _ in range(60):
+        t = _pc_txt(emu)
+        if "WITHDRAW ITEM" in t:
+            return True
+        if "BILL" in t and "LOG OFF" in t:
+            if not _steer_menu(
+                    emu, lambda: emu.pb.memory[ADDR_MENU_ITEM], 1):
+                return False
+            _press10(emu, "a")
+            emu.tick(60)
+            continue
+        if emu.read_state().in_dialog:
+            _press10(emu, "a")
+        emu.tick(25)
+    return "WITHDRAW ITEM" in _pc_txt(emu)
+
+
+def _pc_list_pick(emu, index, done) -> bool:
+    """Pick `index` from an open scrolling list (cursor =
+    wMenuScrollIndex + wMenuItem), confirm, and ride A until
+    `done()` - probe144's pick_from_list shape, plus a settle
+    wait for the list to render."""
+    mem = emu.pb.memory
+    emu.tick(60)
+    cur = lambda: mem[ADDR_MENU_SCROLL] + mem[ADDR_MENU_ITEM]
+    if not _steer_menu(emu, cur, index):
+        return False
+    _press10(emu, "a")
+    emu.tick(90)
+    # a confirm sub-menu (item 0) follows for mon lists; item
+    # lists go straight to quantity/text - the steer is
+    # harmless either way if a menu is actually up
+    if mem[ADDR_MENU_TOP_Y] != 0:
+        _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 0)
+        _press10(emu, "a")
+    return _pc_press_a_ride(emu, done, rounds=200)
+
+
+def pc_deposit_mon(emu, ex, pc_map: int, species: int) -> bool:
+    """Deposit the party's `species` specimen into the current
+    box; RAM-verified (party shrinks, species in box list)."""
+    if _party_index_of(emu, species) is None:
+        return False
+    if not pc_open_bills(emu, ex, pc_map):
+        return False
+    mem = emu.pb.memory
+    if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 1):
+        pc_close(emu)
+        return False
+    _press10(emu, "a")                         # DEPOSIT
+    idx = _party_index_of(emu, species)
+    n0 = len(emu.read_state().party)
+    ok = _pc_list_pick(emu, idx,
+                       lambda: len(emu.read_state().party) == n0 - 1)
+    pc_close(emu)
+    return ok and species in _box_species(emu)
+
+
+def pc_withdraw_mon(emu, ex, pc_map: int, species: int) -> bool:
+    """Withdraw a `species` specimen from the CURRENT box into
+    the party; RAM-verified."""
+    if species not in _box_species(emu):
+        return False
+    if not pc_open_bills(emu, ex, pc_map):
+        return False
+    mem = emu.pb.memory
+    if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 0):
+        pc_close(emu)
+        return False
+    _press10(emu, "a")                         # WITHDRAW
+    idx = _box_species(emu).index(species)
+    n0 = len(emu.read_state().party)
+    ok = _pc_list_pick(emu, idx,
+                       lambda: len(emu.read_state().party) == n0 + 1)
+    pc_close(emu)
+    return ok and _party_index_of(emu, species) is not None
+
+
+def pc_swap_mon(emu, ex, pc_map: int, dep_species: int,
+                wd_species: int) -> bool:
+    """Deposit then withdraw in two PC sessions (each fully
+    closed between) - slower than pc_swap but stage-safe on
+    post-HoF saves."""
+    if _party_index_of(emu, wd_species) is not None and \
+            _party_index_of(emu, dep_species) is None:
+        return True
+    if not pc_deposit_mon(emu, ex, pc_map, dep_species):
+        return False
+    return pc_withdraw_mon(emu, ex, pc_map, wd_species)
+
+
+def pc_change_box(emu, ex, pc_map: int, want_box: int) -> bool:
+    """CHANGE BOX to `want_box` (1-12) at a Pokecenter PC;
+    the game saves as part of the switch. RAM-verified via
+    _current_box_num."""
+    if _current_box_num(emu) == want_box:
+        return True
+    if not pc_open_bills(emu, ex, pc_map):
+        return False
+    mem = emu.pb.memory
+    if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 3):
+        pc_close(emu)
+        return False
+    _press10(emu, "a")                         # CHANGE BOX
+    # a warning text ("When you change a POKeMON BOX, data
+    # will be saved...") precedes the list; ride it until the
+    # BOX1..BOX12 list itself is on screen
+    if _pc_ride_to_text(emu, ["BOX1"], rounds=120) is None:
+        pc_close(emu)
+        return False
+    cur = lambda: mem[ADDR_MENU_SCROLL] + mem[ADDR_MENU_ITEM]
+    if not _steer_menu(emu, cur, want_box - 1):
+        pc_close(emu)
+        return False
+    _press10(emu, "a")
+    # the game saves, then the box swaps in
+    for _ in range(400):
+        if _current_box_num(emu) == want_box:
+            break
+        if emu.read_state().in_dialog:
+            _press10(emu, "a")
+        emu.tick(25)
+    ok = _current_box_num(emu) == want_box
+    pc_close(emu)
+    return ok
+
+
+def _pc_shown_quantity(emu):
+    """The number on the 'How many?' prompt, parsed from the
+    screen (it renders as a two-digit field)."""
+    import re as _re
+    m = _re.findall(r"(\d{2})", _pc_txt(emu))
+    return int(m[-1]) if m else None
+
+
+def pc_withdraw_item(emu, ex, pc_map: int, item_id: int,
+                     want: int = None) -> int:
+    """Withdraw up to `want` (default: the whole stack) of
+    item_id from PC item storage. The quantity prompt
+    defaults to 01; it is driven to the goal and verified on
+    screen before confirming. Returns the count gained."""
+    have0 = _bag_count(emu, item_id)
+    total = _pc_count(emu, item_id)
+    if total == 0:
+        return 0
+    goal = total if want is None else min(want, total)
+    if not pc_open_items(emu, ex, pc_map):
+        return 0
+    mem = emu.pb.memory
+    if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 0):
+        pc_close(emu)
+        return 0
+    _press10(emu, "a")                         # WITHDRAW ITEM
+    emu.tick(60)
+    items = _pc_items(emu)
+    idx = next((i for i, (iid, _c) in enumerate(items)
+                if iid == item_id), None)
+    if idx is None:
+        pc_close(emu)
+        return 0
+    cur = lambda: mem[ADDR_MENU_SCROLL] + mem[ADDR_MENU_ITEM]
+    if not _steer_menu(emu, cur, idx):
+        pc_close(emu)
+        return 0
+    _press10(emu, "a")
+    emu.tick(60)
+    # wait WITHOUT pressing (an A here would confirm the
+    # default quantity 01): the quantity prompt either
+    # appears, or the withdrawal completes outright
+    qty = False
+    for _ in range(40):
+        if "How many" in _pc_txt(emu):
+            qty = True
+            break
+        if _bag_count(emu, item_id) > have0:
+            break
+        emu.tick(25)
+    if qty:
+        for _ in range(120):
+            q = _pc_shown_quantity(emu)
+            if q is None or q == goal:
+                break
+            _press10(emu, "up" if q < goal else "down")
+            emu.tick(30)
+    ok = _pc_press_a_ride(
+        emu, lambda: _bag_count(emu, item_id) >= have0 + goal,
+        rounds=200)
+    pc_close(emu)
+    return _bag_count(emu, item_id) - have0 if ok else 0
+
+
+def pc_deposit_item(emu, ex, pc_map: int, item_id: int) -> bool:
+    """Deposit the whole bag stack of item_id into PC item
+    storage; RAM-verified. (The older deposit_item above is
+    the pre-HoF flow kept for the storyline phases.)"""
+    if _bag_count(emu, item_id) < 1:
+        return False
+    if not pc_open_items(emu, ex, pc_map):
+        return False
+    mem = emu.pb.memory
+    if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 1):
+        pc_close(emu)
+        return False
+    _press10(emu, "a")                         # DEPOSIT ITEM
+    emu.tick(60)
+    idx = _bag_index(emu, item_id)
+    if idx is None:
+        pc_close(emu)
+        return False
+    goal = _bag_count(emu, item_id)
+    cur = lambda: mem[ADDR_MENU_SCROLL] + mem[ADDR_MENU_ITEM]
+    if not _steer_menu(emu, cur, idx):
+        pc_close(emu)
+        return False
+    _press10(emu, "a")
+    emu.tick(60)
+    qty = False
+    for _ in range(40):
+        if "How many" in _pc_txt(emu):
+            qty = True
+            break
+        if _bag_count(emu, item_id) < goal:
+            break
+        emu.tick(25)
+    if qty:
+        for _ in range(120):
+            q = _pc_shown_quantity(emu)
+            if q is None or q == goal:
+                break
+            _press10(emu, "up" if q < goal else "down")
+            emu.tick(30)
+    ok = _pc_press_a_ride(
+        emu, lambda: _bag_count(emu, item_id) == 0, rounds=200)
+    pc_close(emu)
+    return ok and _pc_count(emu, item_id) >= 1
+
+
+def _mart_sell_qty(emu, item_id: int, want: int) -> int:
+    """Sell `want` of item_id at the already-open clerk menu
+    (BUY/SELL/QUIT up); _mart_sell_stack parameterised by
+    quantity for the quest layer (docs S40). The quantity
+    selector starts at 1 and each UP adds one. Returns the
+    money delta (0 when the sale never landed)."""
+    mem = emu.pb.memory
+    idx = _bag_index(emu, item_id)
+    if idx is None:
+        return 0
+    have = mem[ADDR_BAG_ITEMS + 2 * idx + 1]
+    qty = min(want, have)
+    if qty < 1:
+        return 0
+    money0 = emu.read_state().money
+    if not _steer_menu(emu, lambda: mem[ADDR_MENU_ITEM], 1):
+        return 0
+    _press10(emu, "a")              # SELL -> list
+
+    def _menu_y4():
+        for _ in range(60):
+            if mem[ADDR_MENU_TOP_Y] == 4:
+                return True
+            emu.tick(20)
+        return mem[ADDR_MENU_TOP_Y] == 4
+
+    if not _menu_y4():
+        return 0
+    if not _steer_menu(
+            emu, lambda: mem[ADDR_MENU_SCROLL]
+            + mem[ADDR_MENU_ITEM], idx):
+        return 0
+    _press10(emu, "a")
+    emu.tick(60)
+    for _ in range(qty - 1):        # selector 1 -> qty
+        _press10(emu, "up")
+        emu.tick(25)
+    for _ in range(40):
+        _press10(emu, "a")
+        emu.tick(25)
+        if emu.read_state().money != money0:
+            break
+    return emu.read_state().money - money0
+
+
+
 if __name__ == "__main__":
     sys.exit(main())
