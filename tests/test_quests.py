@@ -321,5 +321,46 @@ class QuestChannelTests(unittest.TestCase):
         self.assertEqual(results[-1], "executed")
 
 
+class WatchdogTests(unittest.TestCase):
+    """The S40 fund_e4 hang fix: timeboxed primitives and
+    the Fly-carrier lookup."""
+
+    def test_timeboxed_returns_value(self):
+        self.assertEqual(quests._timeboxed(5, lambda: 42), 42)
+
+    def test_timeboxed_trips(self):
+        import time
+        with self.assertRaises(quests._Watchdog):
+            quests._timeboxed(0.2, time.sleep, 5)
+
+    def test_fly_carrier(self):
+        from types import SimpleNamespace
+        from agent.state import ADDR_PARTY_MONS
+        mem = bytearray(ADDR_PARTY_MONS + 44 * 2 + 12)
+        mem[ADDR_PARTY_MONS + 44 + 8] = quests.rr.MOVE_FLY
+        party = [SimpleNamespace(hp=10),
+                 SimpleNamespace(hp=0)]
+        emu = SimpleNamespace(
+            pb=SimpleNamespace(memory=mem))
+        ctx = SimpleNamespace(
+            emu=emu,
+            state=lambda: SimpleNamespace(party=party))
+        idx, mon = quests._fly_carrier(ctx)
+        self.assertEqual(idx, 1)
+        self.assertEqual(mon.hp, 0)
+
+    def test_fly_carrier_absent(self):
+        from types import SimpleNamespace
+        from agent.state import ADDR_PARTY_MONS
+        mem = bytearray(ADDR_PARTY_MONS + 44 + 12)
+        party = [SimpleNamespace(hp=10)]
+        emu = SimpleNamespace(
+            pb=SimpleNamespace(memory=mem))
+        ctx = SimpleNamespace(
+            emu=emu,
+            state=lambda: SimpleNamespace(party=party))
+        self.assertIsNone(quests._fly_carrier(ctx))
+
+
 if __name__ == "__main__":
     unittest.main()

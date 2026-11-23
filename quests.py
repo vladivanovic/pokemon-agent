@@ -573,6 +573,49 @@ def party_has_move(emu, move_id) -> bool:
     return False
 
 
+class _Watchdog(Exception):
+    """A timeboxed primitive exceeded its wall-clock budget."""
+
+
+def _timeboxed(seconds, fn, *a, **k):
+    """Run fn under a wall-clock budget (SIGALRM; main thread
+    only - on any other thread fn simply runs unboxed). The
+    ported menu rides can spin forever on a state they do not
+    recognise (the S40 fund_e4 home-flight hang: fly_to looped
+    for 23 minutes on a fainted Fly carrier); a quest must
+    degrade to an honest failure, never hang. Raises
+    _Watchdog on expiry."""
+    import signal
+    import threading
+    if threading.current_thread() is not \
+            threading.main_thread():
+        return fn(*a, **k)
+
+    def handler(signum, frame):
+        raise _Watchdog(f"exceeded {seconds}s budget")
+
+    old = signal.signal(signal.SIGALRM, handler)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        return fn(*a, **k)
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, old)
+
+
+def _fly_carrier(ctx):
+    """(party index, mon) of the first party member knowing
+    Fly, or None."""
+    from agent.state import ADDR_PARTY_MONS
+    mem = ctx.emu.pb.memory
+    for i, mon in enumerate(ctx.state().party):
+        moves = [mem[ADDR_PARTY_MONS + 44 * i + 8 + j]
+                 for j in range(4)]
+        if rr.MOVE_FLY in moves:
+            return i, mon
+    return None
+
+
 def ensure_outdoors(ctx) -> bool:
     """Exit buildings until the player is outside (Fly and
     the journeys need it); the probe178 home-loop pattern."""
@@ -595,7 +638,11 @@ def fly(ctx, town_key: str) -> bool:
     # settle first
     rr.release_held_buttons(ctx.emu)
     ctx.emu.tick(120)
-    return rr.fly_to(ctx.emu, ctx.ex, town_key)
+    try:
+        return _timeboxed(120, rr.fly_to, ctx.emu, ctx.ex,
+                          town_key)
+    except _Watchdog:
+        return False
 
 
 def go_pc(ctx, fly_town: str = None) -> int:
@@ -834,23 +881,68 @@ def q_fund_e4(ctx, args):
                 f"completed first); money {money0} -> "
                 f"{ctx.state().money}")
         done += 1
-    # home to Fuchsia, healed (the probe178 loop)
+        # bank the win immediately: a later hang or kill must
+        # not lose a completed gauntlet (the S40 lesson)
+        ctx.checkpoint(f"fund_e4-run{done}")
+    # home to Fuchsia, healed (the probe178 loop). Two S40
+    # failure modes are handled explicitly: the Fly carrier
+    # can be FAINTED after a hard gauntlet (fly_to then spins
+    # forever - it hung 23 minutes in the first smoke), and
+    # every ride home is timeboxed so a hang degrades to an
+    # honest failure with the money already banked.
+    money_now = ctx.state().money
+    carrier = _fly_carrier(ctx)
+    if carrier is not None and carrier[1].hp == 0:
+        idx = carrier[0]
+        if rr._bag_count(emu, rr.ITEM_REVIVE) > 0 and \
+                rr._use_bag_item_on_mon(emu, rr.ITEM_REVIVE,
+                                        idx):
+            ctx.log(f"fund_e4: revived the Fly carrier "
+                    f"(party slot {idx}) for the trip home")
+        if ctx.state().party[idx].hp == 0:
+            raise QuestFailure(
+                f"{done} E4 run(s) complete and the money "
+                f"banked ({money0} -> {money_now}), but the "
+                f"trip home is impossible: the Fly carrier "
+                f"is fainted and no Revive is available - "
+                f"the saved state is post-gauntlet; heal at "
+                f"a Pokecenter and re-run to finish the trip")
     fuchsia_pc = world.map_id("FuchsiaPokecenter")
-    for _ in range(4):
-        st = ctx.state()
-        if st.map_id == fuchsia_pc:
-            break
-        name = world.map_name(st.map_id)
-        if name.endswith("Pokecenter") or "House" in name \
-                or "Lobby" in name:
-            rr._exit_building(emu, ex, st.map_id)
-        try:
-            rr.fly_to(emu, ex, "FUCHSIA CITY")
-        except Exception:
-            pass
-        if ctx.state().map_id != fuchsia_pc:
-            rr._ride_battling(emu, ex, fuchsia_pc)
-    heal_party(ctx, fuchsia_pc)
+    try:
+        for _ in range(4):
+            st = ctx.state()
+            if st.map_id == fuchsia_pc:
+                break
+            name = world.map_name(st.map_id)
+            if name.endswith("Pokecenter") or "House" in name \
+                    or "Lobby" in name:
+                rr._exit_building(emu, ex, st.map_id)
+            fly(ctx, "FUCHSIA CITY")
+            if ctx.state().map_id != fuchsia_pc \
+                    and world.map_name(ctx.state().map_id) \
+                    == "FuchsiaCity":
+                # ride only within Fuchsia: from anywhere
+                # else the ride is a cross-map journey, the
+                # spin-prone path - fail banked instead
+                _timeboxed(120, rr._ride_battling, emu, ex,
+                           fuchsia_pc)
+    except _Watchdog:
+        raise QuestFailure(
+            f"{done} E4 run(s) complete and the money banked "
+            f"({money0} -> {money_now}), but the trip home "
+            f"hung and was timeboxed out - the saved state "
+            f"is post-gauntlet; heal at a Pokecenter and "
+            f"re-run to finish the trip")
+    if ctx.state().map_id != fuchsia_pc \
+            or not heal_party(ctx, fuchsia_pc):
+        raise QuestFailure(
+            f"{done} E4 run(s) complete and the money banked "
+            f"({money0} -> {money_now}), but the trip home "
+            f"did not complete (ended at "
+            f"{world.map_name(ctx.state().map_id)}; fly_to "
+            f"is known to refuse post-Hall-of-Fame landing "
+            f"states) - the saved state holds the banked "
+            f"money; finish the trip from a fresh boot")
     money1 = ctx.state().money
     return (f"{done} E4 run(s) complete; money {money0} -> "
             f"{money1} (net {money1 - money0:+d})")

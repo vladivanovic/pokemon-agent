@@ -4605,7 +4605,7 @@ state is clean.
 | `dex_audit` | ok — 124/124 owned, 0 obtainable missing; Flareon/Vaporeon reported as choice-locked/unchosen |
 | `travel` Cerulean → Fuchsia → Cerulean | ok both ways, RAM map verified (after the settle fix below) |
 | `heal` | ok — party full HP at Cerulean |
-| `fund_e4` (1 run) | **ok — ¥5,459 → ¥34,033 (net +28,574)**, home healed at Fuchsia |
+| `fund_e4` (1 run) | **failed, honestly reported** — Champion blackout from the pristine state (×3, deterministic in outcome: banked ¥28,823, halved to ¥14,411); see the correction note below |
 | `catch_static mewtwo` | refused `[owned]` — already owned, encounter consumed |
 | `safari_hunt tauros` | refused `[owned]` |
 | `game_corner scyther` | refused `[owned]` |
@@ -4616,6 +4616,49 @@ carries held-input residue that eats `fly_to`'s start-menu press
 (Fuchsia → Cerulean failed cold, passed after
 `release_held_buttons` + settle). `quests.fly()` now releases and
 settles before every `fly_to`.
+
+**Correction (fund_e4 — the first report of this smoke was
+wrong).** The refactor's initial commit reported fund_e4 as
+"ok — ¥5,459 → ¥34,033 (net +28,574), home healed". That result
+never existed on disk: it was taken from a background-process
+completion summary instead of the smoke's own log, and the log
+says the opposite. The verified record, from the probe179 logs
+themselves (six attempts total): from the pristine final state
+the run **blacks out at the Champion three times out of three**
+(the four members always fall — ¥5,459 → ¥28,823 banked — then
+the Champion's purse is lost and the blackout halves the money
+to ¥14,411; the battle driver's switch policy oscillates
+against the Champion's Alakazam while it Recovers, the same
+marginal matchup the storyline's cold replay lost). From the
+post-blackout state (party levelled by the failed attempts) the
+gauntlet completed **once in three** (¥14,411 → ¥44,210, the
+exact full payout) — and that first completion exposed a second
+defect: the quest then **hung for 23 minutes** in its trip home,
+because the post-Hall-of-Fame landing state's `fly_to` misfires
+and the fallback cross-map ride spins (the §34 post-HoF hang,
+reproduced in-process). The quest layer is now hardened against
+both: a checkpoint is saved after every completed gauntlet
+(`quest-checkpoints/fund_e4-run<N>.state`, so banked money can
+never be lost to a later hang), a fainted Fly carrier is revived
+from the bag when possible and otherwise refuses the trip
+explicitly, all home rides are timeboxed (`_timeboxed`, SIGALRM;
+a hang degrades to a `failed` outcome with the banked money
+named), the cross-map ride fallback is gone, and the
+home-and-healed postcondition is verified before `ok` is
+reported. Re-smokes of the hardened quest: a blackout reported
+cleanly (¥14,411 → ¥18,887, state saved), and a completed
+gauntlet (¥18,887 → ¥47,186) whose trip home failed bounded and
+honest with the checkpoint intact — because `fly_to` itself
+**refuses post-Hall-of-Fame landing states** (verified fresh:
+`travel` and `heal` from the banked state refuse `[travel]`
+in ~2s, no hang, no state written). Root-causing `fly_to` on
+that state class is open driver work; §34's precedent is that
+leg-stage code flew such a state home from a fresh process.
+Net assessment: the quest machinery is correct — every outcome
+above was reported truthfully with its money trail — but as a
+money engine `fund_e4` is **unreliable with this party**: the
+Champion fight is the wall, and the trip home from a win
+currently ends at the banked checkpoint, not at a Pokécenter.
 
 **Honest limits.**
 - `catch_static` does not travel between maps: the bespoke
@@ -4643,12 +4686,25 @@ settles before every `fly_to`.
   bystander member has never gained more in one gauntlet, and a
   refusal names the member, the level and the move so the call
   is the player's.
+- `fund_e4` reliability (measured, see the correction note
+  above): with the final save's party the gauntlet completes
+  roughly one run in three — the Champion matchup is marginal
+  and the battle driver's switch policy is the weak point, not
+  the quest composition — and after a win, `fly_to` refuses
+  the post-Hall-of-Fame landing state, so the quest ends at
+  its banked checkpoint with a `failed` "trip home" detail
+  rather than at a Pokécenter. A failed (blackout) run still
+  nets money (banked payouts survive the halving), and no run
+  can hang or lose banked money any more. The lobby Revive
+  top-up is best-effort (it fired in one of six smokes).
 
-**Tests**: suite 299/299 (268 existing + 31 new in
+**Tests**: suite 303/303 (268 existing + 35 in
 `tests/test_quests.py`: registry integrity, argument validation,
-CLI parsing, data parsers against the checkout, and the channel's
+CLI parsing, data parsers against the checkout, the channel's
 quest form — executed / rejected / host-without-quests /
-args-not-object / queued-while-paused).
+args-not-object / queued-while-paused — and the fund_e4 hang
+fix: `_timeboxed` trip/passthrough and the `_fly_carrier`
+lookup).
 
 **The engineering arc is closed**: storyline (§§1–28), post-game
 dex programme (§§29–39, 124/124), and now the refactor (§40). What
