@@ -271,15 +271,21 @@ segments were cold-replayed from checkpoints during the build; the
 phase chain in `play_full_game.py` is that same code, with the save
 line's decisions baked in (Squirtle, Fire Stone → Arcanine, Hitmonlee,
 Surf + Strength on Lapras, the Route 16 Snorlax caught — Master Ball
-never thrown — and the League team). What has *not* yet been done is a
-single-process power-on-to-credits soak of the runner itself; that is
-the remaining hardening step, and the checkpoint/retry design exists
-so a soak — or your own run — stops loudly at a phase boundary
-instead of corrupting a save line. Three segments are hand-written
-glue rather than single ported functions (the Fly leg's journeys:
-`fly-journey`, `snorlax-journey`, `teach-fly`), assembled from the
-same primitives along the legs' documented routes; treat their first
-full-run outing as part of the soak.
+never thrown — and the League team). The soak has now been run (probe181, docs §42). The unmodified
+runner dies in Mt. Moon (a fossil-scene deadlock); with the soak's
+tightenings in place, the chain completes phases 1–10 of 34
+(intro through the Saffron gates — four badges) back-to-back in
+the runner's own terms, ≈48 minutes of successful phase wall
+time, recovered across fresh-process `--resume`s exactly as the
+checkpoint design intends. It then walls at phase 11 (Silph Co.):
+the ported two-lead grind was calibrated on the probe lineage's
+stronger party, and the runner's Blastoise — Lv44 on arrival,
+carrying only Water Gun/Bubble after the opening loop's move
+replacements — cannot earn the grind's gates inside the building
+(see §42 for the arithmetic and the two decisions it hands back).
+Phases 12–34, the three hand-written Fly glue phases among them
+(`fly-journey`, `snorlax-journey`, `teach-fly`), remain unproven
+in a full-run outing.
 
 ## On a real ROM (PyBoy)
 

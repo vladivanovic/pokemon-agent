@@ -451,7 +451,16 @@ def _ride_to(emu: PyBoyEmulator, ex: Executor, map_id: int,
             result = ex.run(max_goals=1)
             if result.log and result.log[-1].get("goal"):
                 ex.memory.forgive(result.log[-1]["goal"])
-            if emu.read_state().map_id == map_id:
+            st = emu.read_state()
+            # Arriving mid-battle is not arriving: rounds end on the
+            # battle interrupt by construction, so the first round to
+            # step onto a grass map usually ends in a pending wild
+            # battle, and every caller's next _walk_to then raises
+            # 'battle interrupted walk' before moving (probe181:
+            # catch_oddish_and_teach_cut died in 0s at the Route 6
+            # boundary). Keep riding while a battle is pending - the
+            # next round's run() fights it at its top.
+            if st.map_id == map_id and not st.in_battle:
                 return True
         return emu.read_state().map_id == map_id
     finally:
@@ -807,6 +816,10 @@ SPECIES_DIGLETT = 0x3B
 # not National Dex numbers - pokered constants/pokemon_constants.
 SPECIES_NIDORAN_M = 0x03
 SPECIES_SPEAROW = 0x05
+SPECIES_EKANS = 0x6C
+SPECIES_DROWZEE = 0x30
+SPECIES_MANKEY = 0x39
+SPECIES_WEEDLE = 0x70
 SPECIES_NIDORAN_F = 0x0F
 SPECIES_PIDGEY = 0x24
 SPECIES_PIKACHU = 0x54
@@ -1401,8 +1414,18 @@ def _catch_any(emu: PyBoyEmulator, ex: Executor,
     wants = set(want_species)
     for _enc in range(max_encounters):
         for i in range(150):
-            if emu.read_state().in_battle:
+            st = emu.read_state()
+            if st.in_battle:
                 break
+            if st.in_dialog:
+                # A trainer who found us mid-hunt leaves his
+                # post-battle text open (the fight fallback's
+                # wait_free only ticks - text needs presses), and
+                # directional pacing is ignored while text is up:
+                # the hunt paces in place forever (probe181,
+                # Route 6's patrolling Bug Catcher). Clear it.
+                emu.close_dialog(max_presses=2)
+                continue
             emu.press("left" if i % 2 == 0 else "right")
             emu.tick(8)
         if not emu.read_state().in_battle:
@@ -1706,6 +1729,41 @@ def buy_poke_balls(emu: PyBoyEmulator, ex: Executor,
     return got >= want
 
 
+def _walk_to_settled(emu: PyBoyEmulator, ex: Executor, map_id: int,
+                     xy, attempts: int = 12) -> bool:
+    """Walk to an outdoor tile, settling interruptions between
+    attempts: a bare ex._walk_to treats the first battle- or
+    dialog-interrupted walk as fatal, but outdoors (grass,
+    trainer sight lines) an interrupted walk is the normal case -
+    rides end mid-battle by construction. This is the walk_leg
+    pattern the hunt stages already use, factored out (probe181).
+    Battles are settled with the leg-grade _BattleDriver, not the
+    executor's stock policy: the policy can wedge for its whole
+    500-press cap on a trainer fight (the party-screen trap,
+    probe132) - probe181's first oddish retry died exactly there
+    ('battle did not end'). Success is RAM-verified: standing on
+    the tile, on the map, and not in battle."""
+    for _ in range(attempts):
+        try:
+            ex._walk_to(map_id, tuple(xy))
+        except StuckError:
+            pass
+        st = emu.read_state()
+        if st.map_id == map_id and (st.x, st.y) == tuple(xy) \
+                and not st.in_battle:
+            return True
+        if st.in_battle:
+            try:
+                _fight_now(emu, _BattleDriver(emu))
+            except StuckError:
+                pass
+        elif st.in_dialog:
+            emu.close_dialog(max_presses=2)
+    st = emu.read_state()
+    return st.map_id == map_id and (st.x, st.y) == tuple(xy) \
+        and not st.in_battle
+
+
 def catch_oddish_and_teach_cut(emu: PyBoyEmulator,
                                ex: Executor) -> bool:
     """Route 6's grass holds Oddish (the only Cut-capable family
@@ -1719,9 +1777,12 @@ def catch_oddish_and_teach_cut(emu: PyBoyEmulator,
     if oddish_idx is None:
         if not _ride_to(emu, ex, r6):
             return False
-        try:
-            ex._walk_to(r6, (9, 15))           # the mid-route field
-        except StuckError:
+        # The mid-route field is grass: the positioning walk is
+        # interrupted by wild battles as a matter of course, and a
+        # bare _walk_to treats the first interrupt as fatal
+        # (probe181: the stage died seconds after reaching Route 6,
+        # three soak attempts in a row).
+        if not _walk_to_settled(emu, ex, r6, (9, 15)):
             return False
         if not _catch_species(emu, ex, SPECIES_ODDISH):
             return False
@@ -1748,17 +1809,60 @@ def catch_oddish_and_teach_cut(emu: PyBoyEmulator,
 
 def catch_diglett(emu: PyBoyEmulator, ex: Executor) -> bool:
     """Diglett in Diglett's Cave (via Route 11): Ground type,
-    already knows Dig at cave levels. The Surge answer."""
+    the Surge answer - but only a Diglett that actually knows
+    Dig. The learnset gives Dig at Lv19 (pokered evos_moves.asm:
+    Growl 15, Dig 19), so a Lv15-18 catch leaves the Surge
+    switch line with Scratch/Growl; probe181's soak party wiped
+    to Surge behind a Lv18 Diglett and blacked out. The hunt
+    below only throws at Lv19+ Diglett."""
     world = ex.world
     r11 = world.map_id("Route11")
     cave = world.map_id("DiglettsCave")
-    if _party_index_of(emu, SPECIES_DIGLETT) is not None:
+    mem = emu.pb.memory
+
+    def dig_ready() -> bool:
+        return any(m.species_id == SPECIES_DIGLETT
+                   and MOVE_DIG in m.moves
+                   for m in emu.read_state().party)
+
+    if dig_ready():
         return True
     if not _ride_to(emu, ex, r11):
         return False
     if not _ride_to(emu, ex, cave):
         return False
-    return _catch_species(emu, ex, SPECIES_DIGLETT)
+    # _catch_any's pace-in-place hunt, with the level gate in
+    # front of the throw.
+    for _enc in range(60):
+        if dig_ready():
+            return True
+        for i in range(150):
+            st = emu.read_state()
+            if st.in_battle:
+                break
+            if st.in_dialog:
+                emu.close_dialog(max_presses=2)
+                continue
+            emu.press("left" if i % 2 == 0 else "right")
+            emu.tick(8)
+        if not emu.read_state().in_battle:
+            continue
+        for _ in range(200):
+            if mem[ADDR_ENEMY_SPECIES] != 0 \
+                    and mem[ADDR_ENEMY_MAX_HP] != 0:
+                break
+            emu.tick(10)
+        if mem[ADDR_ENEMY_SPECIES] != SPECIES_DIGLETT \
+                or mem[ADDR_ENEMY_LEVEL] < 19:
+            if not _run_away(emu) and emu.read_state().in_battle:
+                _BattleDriver(emu).fight_until_end(
+                    _ranked_move_fn(emu), max_actions=300)
+                emu.wait_free(max_rounds=8, stable_needed=2)
+            continue
+        if _bag_count(emu, ITEM_POKE_BALL) == 0:
+            return False
+        _catch_current(emu)
+    return dig_ready()
 
 
 def collect_flash(emu: PyBoyEmulator, ex: Executor) -> bool:
@@ -1779,9 +1883,25 @@ def collect_flash(emu: PyBoyEmulator, ex: Executor) -> bool:
         return False
     if not _ride_to(emu, ex, gate):
         return False
-    try:
-        ex._walk_to(gate, (2, 4))
-    except StuckError:
+    # The stance (2,4) is crossed by a wandering youngster
+    # (pokered objects: the aide STAYs at (1,4); a youngster
+    # WALKs LEFT_RIGHT along row 4 from (5,4)). When he parks
+    # on the stance the walk refuses - and talking from (3,4)
+    # would address HIM, not the aide - so retry until he
+    # vacates (probe181: the runner's first attempt died here).
+    for _ in range(12):
+        try:
+            ex._walk_to(gate, (2, 4))
+        except StuckError:
+            pass
+        st = emu.read_state()
+        if st.map_id == gate and (st.x, st.y) == (2, 4):
+            break
+        if st.in_dialog:
+            emu.close_dialog(max_presses=2)
+        emu.tick(45)
+    st = emu.read_state()
+    if st.map_id != gate or (st.x, st.y) != (2, 4):
         return False
     emu.press("left")                        # face the aide
     emu.tick(20)
@@ -2514,8 +2634,17 @@ def traverse_rock_tunnel(emu: PyBoyEmulator, ex: Executor) -> bool:
             r = _walk_tile_leg(emu, ex, rt1, (15, 33), {r10})
             if r != "warp":
                 return False
-    # Route 10 south segment -> step off the south edge.
+    # The south exit lands at Route 10 (8,53) - but a blackout
+    # mid-leg ALSO warps to Route 10, at the tunnel-side
+    # center's doorstep (11,20), and _walk_tile_leg calls both
+    # "warp" (probe181: attempt 2's leg 5 halved the money and
+    # healed the party, then the tail walked the wrong segment).
+    # North of y=40 is the respawn, not the exit: fail so the
+    # leg's heal-and-retry loop re-crosses a thinner tunnel.
     st = emu.read_state()
+    if st.map_id == r10 and st.y < 40:
+        return False
+    # Route 10 south segment -> step off the south edge.
     if st.map_id != r10:
         return emu.read_state().map_id == lav
     use_repel(emu)
@@ -2547,6 +2676,16 @@ def _cut_tree_at_gym(emu: PyBoyEmulator, ex: Executor) -> bool:
     except StuckError:
         return False
     _step(emu, ex, "right")                    # blocked: turns us
+    st = emu.read_state()
+    if (st.x, st.y) == (15, 18):
+        # The positioning walk already cut the tree en route: with
+        # the Cut capability live the executor's BFS routes THROUGH
+        # the tree tile and cuts it on the way (probe181 - from the
+        # Pokecenter exit the east approach wins, so the runner hit
+        # this every time). We are standing in the gap; the original
+        # flow read the tile-in-front from here, found fence instead
+        # of tree, and failed the leg.
+        return True
     if mem[ADDR_TILE_IN_FRONT] == 0x3D:
         oddish_idx = _party_index_of(emu, SPECIES_ODDISH)
         if oddish_idx is None:
@@ -2764,7 +2903,13 @@ def beat_surge(emu: PyBoyEmulator, ex: Executor) -> bool:
         emu.tick(20)
     if not emu.read_state().in_battle:
         return False
-    diglett_idx = _party_index_of(emu, SPECIES_DIGLETT)
+    # The switch line keys on Dig: prefer the Diglett that knows
+    # it (catch_diglett guarantees one; the fallback keeps the
+    # old behaviour for a party built any other way).
+    diglett_idx = next(
+        (i for i, m in enumerate(emu.read_state().party)
+         if m.species_id == SPECIES_DIGLETT and MOVE_DIG in m.moves),
+        _party_index_of(emu, SPECIES_DIGLETT))
     ranked = _ranked_move_fn(emu)
 
     def surge_moves(idx):
@@ -2805,6 +2950,176 @@ def vermilion_leg(emu: PyBoyEmulator, ex: Executor) -> bool:
     return beat_surge(emu, ex)
 
 
+GRASS_TILE_ID = 0x52
+
+
+def _grass_tile(ex: Executor, map_id: int):
+    """A deep-grass pacing tile on `map_id`: the left tile of a
+    horizontal grass pair whose whole 2x3 block is grass (tile id
+    0x52 in the overworld tileset - both probe-proven hunt tiles,
+    Route 6 (9,15) and Route 10 (8,7), carry it). Deterministic
+    scan order; None when the map has no such patch."""
+    gm = ex.world.maps[map_id]
+    warps = {(wp.x, wp.y) for wp in gm.warps}
+    for y in range(2, gm.h - 2):
+        for x in range(2, gm.w - 3):
+            if all(gm.tiles[yy][xx] == GRASS_TILE_ID
+                   and gm.tile_walkable(xx, yy)
+                   and (xx, yy) not in warps
+                   for xx, yy in ((x, y), (x + 1, y), (x, y - 1),
+                                  (x + 1, y - 1), (x, y + 1),
+                                  (x + 1, y + 1))):
+                return (x, y)
+    return None
+
+
+def _on_hunt_grass(emu: PyBoyEmulator, ex: Executor,
+                   map_id: int) -> bool:
+    """True when the player stands on grass (tile 0x52) on
+    `map_id` with at least one grass neighbour to pace against -
+    a serviceable _catch_any stance even when it is not the
+    tile the walk was aiming for."""
+    st = emu.read_state()
+    if st.map_id != map_id or st.in_battle:
+        return False
+    gm = ex.world.maps[map_id]
+    if gm.tiles[st.y][st.x] != GRASS_TILE_ID:
+        return False
+    return any(
+        0 <= st.x + dx < gm.w and 0 <= st.y + dy < gm.h
+        and gm.tiles[st.y + dy][st.x + dx] == GRASS_TILE_ID
+        and gm.tile_walkable(st.x + dx, st.y + dy)
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)))
+
+
+def _flash_detour(emu: PyBoyEmulator, ex: Executor) -> bool:
+    """The catching detour the storyline sessions ran by hand
+    (probes 143/144) that the runner's phase list never wired -
+    probe181's soak found rock_tunnel_leg refusing at its gate
+    with no stage anywhere collecting HM05. The aide's price is
+    10 owned species and the leg's PC swap needs a Spearow IN
+    THE PARTY; the post-Surge runner party owns 4 (Squirtle
+    line, Oddish, Diglett). The missing commons are all on the
+    leg's own doorstep (tables verified in pokered data/wild):
+    Route 11 Spearow/Ekans/Drowzee, Route 6 Pidgey, Route 2
+    Rattata/Weedle - exactly +6. Spearow is hunted first,
+    while the party still has room for it; later catches file
+    to the box, which the dex counts all the same. Ends with
+    collect_flash: HM05 in the bag is the leg's gate."""
+    def owned(sp: int) -> bool:
+        return _party_index_of(emu, sp) is not None \
+            or sp in _box_species(emu)
+
+    # (map, species, heal stop on the way) - the heals matter:
+    # the detour's hunts and trainer fights wear the party down,
+    # and probe181's first full run blacked out on Route 9's
+    # doorstep with a party that had not healed since the gym.
+    # The last stop is Route 2, on collect_flash's own road:
+    # Rattata and Weedle are both 255-rate Lv2-5 there and the
+    # route has no trainers. (Route 9's Rattata was the original
+    # third stop - its grass sits on a ledged plateau whose walk
+    # desynced twice in probe181; Route 2 is strictly easier.)
+    hunts = [
+        ("Route11", [SPECIES_SPEAROW, SPECIES_EKANS,
+                     SPECIES_DROWZEE], "VermilionPokecenter"),
+        ("Route6", [SPECIES_PIDGEY], None),
+        ("Route2", [SPECIES_RATTATA, SPECIES_WEEDLE],
+         "CeruleanPokecenter"),
+    ]
+    if any(not owned(sp) for _, sps, _ in hunts for sp in sps):
+        if not buy_poke_balls(emu, ex, want=18):
+            return False
+    world = ex.world
+    for map_name, species_list, heal_name in hunts:
+        missing = [sp for sp in species_list if not owned(sp)]
+        if not missing:
+            continue
+        if heal_name is not None:
+            pc = world.map_id(heal_name)
+            if not _ride_to(emu, ex, pc):
+                return False
+            if not heal_at_pokecenter(emu, ex, pc):
+                return False
+        map_id = world.map_id(map_name)
+        if not _ride_to(emu, ex, map_id):
+            return False
+        tile = _grass_tile(ex, map_id)
+        if tile is None:
+            return False
+        if not _on_hunt_grass(emu, ex, map_id) \
+                and not _walk_to_settled(emu, ex, map_id, tile,
+                                         attempts=16) \
+                and not _on_hunt_grass(emu, ex, map_id):
+            # The settled walk can fail with the player already
+            # standing on huntable grass - an NPC standing on the
+            # target tile refuses the walk for as long as he
+            # lingers (probe181: Route 6's Bug Catcher parked on
+            # (2,15) while the player waited on the grass next
+            # door). The hunt paces in place; any grass stance
+            # with a grass neighbour serves.
+            return False
+        for sp in missing:
+            if owned(sp):
+                continue
+            if _catch_any(emu, ex, {sp}, max_encounters=40) != sp:
+                return False
+        if map_name == "Route11" \
+                and emu.read_state().money < 4200:
+            # Funding sweep: the hunts burn ~17 balls at full-HP
+            # rates (expected, not unlucky), and the leg's
+            # Cerulean shopping (15 balls + Potions + Antidotes,
+            # then the Repel/Potion resupply) needs ~¥3,600 in
+            # hand - more than the post-Surge purse plus the
+            # hunts' incidental payouts. Route 11 hosts FOUR
+            # Gamblers (base ¥7,000 x level / 100 = ~¥1,260 a
+            # head, pokered pic_pointers_money.asm); the sweep
+            # steps onto their sight-line tiles (ranges from
+            # scripts/Route11.asm: the three DOWN-facing ones
+            # cover (10,15-17), (26,10-11), (45,8-10); the
+            # UP-facing one covers (33,0-2)) and lets the
+            # settled walks fight whoever engages. Wartortle is
+            # Water into their Fire teams.
+            r11 = world.map_id("Route11")
+            for tile in [(10, 16), (26, 10), (45, 9), (33, 2)]:
+                _walk_to_settled(emu, ex, r11, tile, attempts=8)
+            # Heal the sweep's toll - hop-ridden and non-fatal:
+            # a single warm-executor journey from Route 11's
+            # east end spun in probe181, and the heal is
+            # insurance, not a gate.
+            vpc = world.map_id("VermilionPokecenter")
+            if _hop_ride(emu, ex, ["VermilionCity",
+                                   "VermilionPokecenter"]):
+                heal_at_pokecenter(emu, ex, vpc)
+    if _dex_owned_count(emu) < 10:
+        return False
+    if _party_index_of(emu, SPECIES_SPEAROW) is None:
+        return False
+    # collect_flash's ride only reaches the gate from the
+    # Viridian side: from Route 2's north segment the world
+    # model has NO journey to Route2Gate (the gate's doors sit
+    # on the east bypass strip, cut off from the north segment
+    # by a ledge row and the warp-corridor rule) and the ride
+    # spins in place (probe181). Via Viridian City - whose east
+    # side the forest-gates chain lands on - the same ride
+    # arrives in seconds.
+    vir = world.map_id("ViridianCity")
+    if emu.read_state().map_id != vir:
+        if emu.read_state().map_id == world.map_id("Route2"):
+            # Hop the forest-gates chain map by map: a single
+            # warm-executor journey from Route 2's north segment
+            # picks a first leg onto the east strip (15,21) that
+            # its own tile walker cannot serve, then re-plans it
+            # forever - the in-process spin (probe181, live).
+            if not _hop_ride(emu, ex, ["ViridianForestNorthGate",
+                                       "ViridianForest",
+                                       "ViridianForestSouthGate",
+                                       "Route2", "ViridianCity"]):
+                return False
+        elif not _ride_to(emu, ex, vir):
+            return False
+    return collect_flash(emu, ex)
+
+
 def rock_tunnel_leg(emu: PyBoyEmulator, ex: Executor) -> bool:
     """The whole Rock Tunnel chain, as proven by probe144:
     ride the long way round to Cerulean (Saffron's gates are
@@ -2829,7 +3144,10 @@ def rock_tunnel_leg(emu: PyBoyEmulator, ex: Executor) -> bool:
             any(MOVE_FLASH in m.moves for m in st.party):
         return heal_at_pokecenter(emu, ex, lavpc)
     if ITEM_HM05 not in _bag_items(emu):
-        return False                     # collect_flash's stage
+        # The catching detour + the aide (probe181: no runner
+        # stage collected HM05, so the leg refused at this gate).
+        if not _flash_detour(emu, ex):
+            return False
     if not _ride_battling(emu, ex, vpc):
         return False
     if not heal_at_pokecenter(emu, ex, vpc):
@@ -2866,17 +3184,53 @@ def rock_tunnel_leg(emu: PyBoyEmulator, ex: Executor) -> bool:
         return False
     if buy_mart_item(emu, ex, cermart,
                      CERULEAN_MART_LIST.index(ITEM_REPEL),
-                     ITEM_REPEL, 3) < 3:
+                     ITEM_REPEL, 2) < 2:
         return False
+    # Potions 8, not the storyline's 5 (probe181): the B1F
+    # corridor leg deals ~106 damage to the lead - the 5-Potion
+    # resupply (100 HP of healing) ran dry there and the party
+    # wiped a leg later, while the third Repel was never used.
+    # The rebalance (2 Repels, 8 Potions) fits the same purse.
     if buy_mart_item(emu, ex, cermart,
                      CERULEAN_MART_LIST.index(ITEM_POTION),
-                     ITEM_POTION, 5) < 5:
+                     ITEM_POTION, 8) < 8:
         return False
     if not _ride_battling(emu, ex, rtpc):
         return False
     if not heal_at_pokecenter(emu, ex, rtpc):
         return False
-    if not traverse_rock_tunnel(emu, ex):
+    # The crossing is an attrition problem the single-pass
+    # storyline resupply only just covered: probe181's B1F
+    # corridor leg deals ~190 damage across the party (Self-
+    # destructing Geodudes included), more than the whole HP
+    # pool plus the Potion stock. Beaten trainers stay beaten,
+    # so heal at the tunnel-side center and go again - each
+    # attempt faces a thinner tunnel.
+    for _attempt in range(3):
+        if traverse_rock_tunnel(emu, ex):
+            break
+        # Heal AND restock between attempts: a failed crossing
+        # eats the Repel/Potion stock (probe181's attempt 3 died
+        # at the tunnel mouth with zero Repels - the traverse
+        # gates its entry on one), so ride the Cerulean loop
+        # again. The buys are count-topped, not gated: a
+        # blackout-halved purse may only partly refill them,
+        # which still beats none.
+        if not _ride_battling(emu, ex, cerpc):
+            return False
+        if not heal_at_pokecenter(emu, ex, cerpc):
+            return False
+        buy_mart_item(emu, ex, cermart,
+                      CERULEAN_MART_LIST.index(ITEM_REPEL),
+                      ITEM_REPEL, 2)
+        buy_mart_item(emu, ex, cermart,
+                      CERULEAN_MART_LIST.index(ITEM_POTION),
+                      ITEM_POTION, 8)
+        if not _ride_battling(emu, ex, rtpc):
+            return False
+        if not heal_at_pokecenter(emu, ex, rtpc):
+            return False
+    else:
         return False
     if not _ride_to(emu, ex, lavpc):
         return False
@@ -3304,6 +3658,13 @@ def buy_vending_drink(emu: PyBoyEmulator, ex: Executor,
     for _ in range(60):
         if mem[ADDR_MENU_TOP_Y] == 5:
             break
+        if emu.read_state().in_dialog:
+            # "A vending machine! Here's the menu!" - the intro
+            # text needs its own A before the menu opens; the
+            # original loop only ticked, so whether the first A
+            # both opened and advanced was a timing race
+            # (probe181's runner lost it).
+            _press10(emu, "a")
         emu.tick(20)
     if mem[ADDR_MENU_TOP_Y] != 5:
         return False
@@ -3398,11 +3759,21 @@ def evolve_with_stone(emu: PyBoyEmulator, item_id: int,
         emu.tick(40)
     emu.wait_free(max_rounds=8, stable_needed=2)
     mon = emu.read_state().party[idx]
-    return mon.species_id == to_species and \
+    ok = mon.species_id == to_species and \
         mon.level == before.level and \
         [m for m in mon.moves if m] == [m for m in before.moves if m] and \
         _dex_owned_count(emu) == dex0 + 1 and \
         _bag_count(emu, item_id) == 0
+    if ok:
+        # The evolution is RAM-verified complete, so the no-B
+        # rule above no longer applies: close the bag menu the
+        # stone was used from. Left open, it eats every later
+        # ride's presses into the ITEM list (probe181: the
+        # executor spun at the Celadon PC doorstep with the bag
+        # on screen).
+        _close_menus(emu)
+        emu.wait_free(max_rounds=8, stable_needed=2)
+    return ok
 
 
 # (npc tile, stance, facing to talk, event flag) - flags from
@@ -3559,7 +3930,14 @@ def beat_erika(emu: PyBoyEmulator, ex: Executor) -> bool:
     st = emu.read_state()
     if st.party and st.party[0].hp < 80:
         _gym_heal_trip(emu, ex, gym, celpc)
-    ex.prepare_battle_party()
+    # The probe harness's ex.prepare_battle_party() never got
+    # ported (probe181: AttributeError at this exact line) -
+    # its content in this scene is the front-pair arrangement:
+    # counter leads, Blastoise sits second as the closer.
+    if _party_index_of(emu, SPECIES_ARCANINE) is not None:
+        _arrange_front(emu, SPECIES_ARCANINE, SPECIES_BLASTOISE)
+    elif _party_index_of(emu, SPECIES_GROWLITHE) is not None:
+        _arrange_front(emu, SPECIES_GROWLITHE, SPECIES_BLASTOISE)
     for _attempt in range(80):
         st = emu.read_state()
         if "Rainbow" in st.badges:
@@ -3698,26 +4076,47 @@ def celadon_leg(emu: PyBoyEmulator, ex: Executor) -> bool:
                                    "UndergroundPathRoute7",
                                    "Route7"]):
             return False
+    if emu.read_state().map_id != world.map_id("Route8"):
+        # catch_growlithe's own ride plans through Saffron's
+        # gatehouse, whose guard turns the drinkless away
+        # (probe181: the ride died inside Route7Gate). Come at
+        # Route 8 through the Underground, as the road west did.
+        if not _hop_ride(emu, ex, ["UndergroundPathRoute7",
+                                   "UndergroundPathWestEast",
+                                   "UndergroundPathRoute8",
+                                   "Route8"]):
+            return False
     if not catch_growlithe(emu, ex):
         return False
     if not _ride_battling(emu, ex, celpc):
         return False
-    if not heal_at_pokecenter(emu, ex, celpc):
-        return False
     if _party_index_of(emu, SPECIES_ARCANINE) is None and \
             _party_index_of(emu, SPECIES_GROWLITHE) is None:
-        if not pc_swap(emu, ex, celpc, SPECIES_NIDORAN_F,
-                       SPECIES_GROWLITHE):
+        # PC work BEFORE the heal: heal_at_pokecenter leaves by
+        # the exit mat, and the PC openers' intra-map walks all
+        # fail from the doorstep (its own docstring's warning -
+        # probe181's celadon attempts died on exactly this).
+        # pc_swap ends with a heal of its own.
+        # The storyline swapped out its Nidoran-F; the runner's
+        # party never caught one (probe181) - its spare body is
+        # Ekans, caught on the flash detour and holding no field
+        # role. Deposit only ever boxes the mon, never loses it.
+        dep = SPECIES_NIDORAN_F
+        if _party_index_of(emu, dep) is None:
+            dep = SPECIES_EKANS
+        if not pc_swap(emu, ex, celpc, dep, SPECIES_GROWLITHE):
             return False
-    # Mart 2F resupply (floor-chained: one ride per floor).
-    if not _hop_ride(emu, ex, ["CeladonMart1F", "CeladonMart2F"]):
-        return False
-    if buy_mart_item(emu, ex, mart2f, 0, ITEM_GREAT_BALL, 4,
-                     stand=(5, 5), face="up") < 4:
-        return False
-    if buy_mart_item(emu, ex, mart2f, 1, ITEM_SUPER_POTION, 5,
-                     stand=(5, 5), face="up") < 5:
-        return False
+    else:
+        if not heal_at_pokecenter(emu, ex, celpc):
+            return False
+    # Critical purchases FIRST (probe181): the storyline
+    # arrived with Y8,820 and bought the 2F resupply first;
+    # the runner arrives with ~Y4,600, and that order starves
+    # the two storyline-critical items - the drink (the
+    # Saffron gates need it) and the Fire Stone (Arcanine is
+    # Vlad's chosen evolution) - behind Great Balls and Super
+    # Potions. Drink and stone first; the resupply after is
+    # best-effort with what the purse leaves.
     # The drink (ends on the roof).
     if not buy_vending_drink(emu, ex):
         return False
@@ -3732,13 +4131,28 @@ def celadon_leg(emu: PyBoyEmulator, ex: Executor) -> bool:
         if buy_mart_item(emu, ex, mart4f, 1, ITEM_FIRE_STONE, 1,
                          stand=(5, 5), face="down") < 1:
             return False
-        if not _ride_battling(emu, ex, celpc):
+        # Floor-chained exit: a single journey out of the mart
+        # spins (the elevator lesson buy_vending_drink's chain
+        # already encodes; probe181's ride died on 4F).
+        if not _hop_ride(emu, ex, ["CeladonMart3F",
+                                   "CeladonMart2F",
+                                   "CeladonMart1F",
+                                   "CeladonPokecenter"]):
             return False
         heal_at_pokecenter(emu, ex, celpc)
         if not evolve_with_stone(emu, ITEM_FIRE_STONE,
                                  SPECIES_GROWLITHE,
                                  SPECIES_ARCANINE):
             return False
+    # Mart 2F resupply, best-effort (floor-chained: one ride
+    # per floor). The counts are NOT gated: a thin purse buys
+    # what it can and the gym fight goes ahead regardless.
+    if not _hop_ride(emu, ex, ["CeladonMart1F", "CeladonMart2F"]):
+        return False
+    buy_mart_item(emu, ex, mart2f, 0, ITEM_GREAT_BALL, 4,
+                  stand=(5, 5), face="up")
+    buy_mart_item(emu, ex, mart2f, 1, ITEM_SUPER_POTION, 5,
+                  stand=(5, 5), face="up")
     # The grind Vlad approved: Lv25 before Erika.
     arc = _party_index_of(emu, SPECIES_ARCANINE)
     if arc is None:
@@ -4362,6 +4776,14 @@ def _tower_stairs(emu: PyBoyEmulator, ex: Executor,
                            flee_wild=True)
     if emu.read_state().map_id == dst_map:
         return True
+    if not ok:
+        # probe181: the 5F->6F stairs walk ground out its
+        # whole nudge budget short of the warp cell (the
+        # empirical nav relearns the floor more patiently) -
+        # give it a turn before the nudges.
+        explore_nav(emu, ex, src_map, warp_cell, flee_wild=True)
+        if emu.read_state().map_id == dst_map:
+            return True
     for _ in range(6):
         st = emu.read_state()
         if st.map_id == dst_map:
@@ -4484,12 +4906,13 @@ def beat_ghost_marowak(emu: PyBoyEmulator, ex: Executor) -> bool:
     t7 = world.map_id("PokemonTower7F")
     if emu.read_state().map_id not in (t6, t7):
         return False
-    if not _tower_trainers(
-            emu, ex, t6,
-            [((12, 10), EV_TOWER_6F_TRAINERS[0]),
-             ((9, 5), EV_TOWER_6F_TRAINERS[1]),
-             ((16, 5), EV_TOWER_6F_TRAINERS[2])]):
-        return False
+    # The Marowak BEFORE the Channelers (probe181): the
+    # Channeler approaches cross the (10,16) trigger, and the
+    # fleeing navigator just re-arms the script - it shoves
+    # the player, re-triggers, and grinds the whole party
+    # down to a blackout inside a single _tower_trainers
+    # call. With EVENT 271 set first, the trigger is inert
+    # and the approaches are safe.
     if not _event_flag(emu, EV_BEAT_GHOST_MAROWAK):
         if _bag_count(emu, ITEM_RARE_CANDY) == 0:
             ok, _ = _walk_fighting(emu, ex, t6, (6, 7),
@@ -4532,6 +4955,13 @@ def beat_ghost_marowak(emu: PyBoyEmulator, ex: Executor) -> bool:
         if _bag_count(emu, ITEM_POKE_BALL) != balls0 or \
                 _bag_count(emu, ITEM_GREAT_BALL) != gballs0:
             return False
+    _tower_triage(emu)
+    for cell_ev in [((12, 10), EV_TOWER_6F_TRAINERS[0]),
+                    ((9, 5), EV_TOWER_6F_TRAINERS[1]),
+                    ((16, 5), EV_TOWER_6F_TRAINERS[2])]:
+        if not _tower_trainers(emu, ex, t6, [cell_ev]):
+            return False
+        _tower_triage(emu)
     if emu.read_state().map_id == t7:
         return True
     return _tower_stairs(emu, ex, t6, (9, 16), t7)
@@ -4611,6 +5041,41 @@ def rescue_mr_fuji(emu: PyBoyEmulator, ex: Executor) -> bool:
         _event_flag(emu, EV_GOT_POKE_FLUTE)
 
 
+SPECIES_DUGTRIO = 0x76
+
+
+def _tower_triage(emu: PyBoyEmulator) -> None:
+    """Heal the lead back over _field_heal_lead's 45% line
+    between Tower fights (probe181: the climb's Night Shade
+    attrition left Blastoise at 10 HP entering 4F in every
+    runner attempt, and the leg never touched its Potion
+    stock - the probe's session had a human hand on it).
+    A Super Potion (50 HP) goes first when one is in the bag;
+    plain Potions (20 HP) follow via _field_heal_lead."""
+    for _ in range(8):
+        st = emu.read_state()
+        if not st.party:
+            return
+        lead = st.party[0]
+        if lead.hp == 0 or lead.hp_frac >= 0.45:
+            return
+        before = lead.hp
+        if _bag_count(emu, ITEM_SUPER_POTION) > 0:
+            _use_bag_item_on_mon(emu, ITEM_SUPER_POTION, 0)
+            for _ in range(30):
+                if not emu.read_state().in_dialog:
+                    break
+                _press10(emu, "a")
+                emu.tick(25)
+            _close_menus(emu)
+        elif _bag_count(emu, ITEM_POTION) > 0:
+            _field_heal_lead(emu)
+        else:
+            return
+        if emu.read_state().party[0].hp <= before:
+            return
+
+
 def pokemon_tower(emu: PyBoyEmulator, ex: Executor) -> bool:
     """Celadon -> Lavender -> the Pokemon Tower -> the
     POKE FLUTE (probe149). Travel is per-map HOP rides
@@ -4655,6 +5120,20 @@ def pokemon_tower(emu: PyBoyEmulator, ex: Executor) -> bool:
             if _bag_count(emu, ITEM_FRESH_WATER) < 1:
                 return False
         if emu.read_state().map_id == lav:
+            # Bag room for the Rare Candy + the Flute: the
+            # runner arrives with 19 stacks, the mandatory
+            # Candy makes 20 (full), and Fuji's Flute then has
+            # nowhere to go - the rescue silently failed in
+            # his house (probe181). The storyline's own answer
+            # at Sabrina was depositing the spent Lift Key to
+            # PC storage; mirror it here, before the climb.
+            if len(_bag_items(emu)) >= 19 and \
+                    _bag_count(emu, ITEM_LIFT_KEY) >= 1:
+                if not _ride_battling(emu, ex, lavpc):
+                    return False
+                if not deposit_item(emu, ex, lavpc,
+                                    ITEM_LIFT_KEY):
+                    return False
             if not _ride_battling(emu, ex, t1):
                 return False
         if emu.read_state().map_id == t1:
@@ -4663,6 +5142,7 @@ def pokemon_tower(emu: PyBoyEmulator, ex: Executor) -> bool:
         if emu.read_state().map_id == t2:
             if not beat_tower_rival(emu, ex):
                 return False
+            _tower_triage(emu)
             if not _tower_stairs(emu, ex, t2, (3, 9), t3):
                 return False
         if emu.read_state().map_id == t3:
@@ -4672,15 +5152,20 @@ def pokemon_tower(emu: PyBoyEmulator, ex: Executor) -> bool:
                      ((9, 8), EV_TOWER_3F_TRAINERS[1]),
                      ((10, 13), EV_TOWER_3F_TRAINERS[2])]):
                 return False
+            _tower_triage(emu)
             if not _tower_stairs(emu, ex, t3, (18, 9), t4):
                 return False
         if emu.read_state().map_id == t4:
-            if not _tower_trainers(
-                    emu, ex, t4,
-                    [((5, 10), EV_TOWER_4F_TRAINERS[0]),
-                     ((15, 7), EV_TOWER_4F_TRAINERS[1]),
-                     ((14, 12), EV_TOWER_4F_TRAINERS[2])]):
-                return False
+            # Per-trainer calls with triage between: a single
+            # three-Channeler call gives the party no checkpoint
+            # to heal at (probe181's 4F and 6F wipes both landed
+            # inside one call).
+            for cell_ev in [((5, 10), EV_TOWER_4F_TRAINERS[0]),
+                            ((15, 7), EV_TOWER_4F_TRAINERS[1]),
+                            ((14, 12), EV_TOWER_4F_TRAINERS[2])]:
+                if not _tower_trainers(emu, ex, t4, [cell_ev]):
+                    return False
+                _tower_triage(emu)
             if not _tower_stairs(emu, ex, t4, (3, 9), t5):
                 return False
         if emu.read_state().map_id == t5:
@@ -4698,8 +5183,23 @@ def pokemon_tower(emu: PyBoyEmulator, ex: Executor) -> bool:
             if not _tower_stairs(emu, ex, t5, (18, 9), t6):
                 return False
         if emu.read_state().map_id == t6:
+            # The Marowak failover matters: the battle driver
+            # sends the first HEALTHY mon in party order, and
+            # the default second is Arcanine - whose Fire typing
+            # eats super-effective Ground from the Marowak
+            # (probe181: both leads died to it, and 7F's Rockets
+            # finished the rest). Sit the Diglett line second:
+            # its Dig is super-effective into the Rockets'
+            # Poison teams waiting on 7F.
+            if _party_index_of(emu, SPECIES_DUGTRIO) is not None:
+                _arrange_front(emu, SPECIES_BLASTOISE,
+                               SPECIES_DUGTRIO)
+            elif _party_index_of(emu, SPECIES_DIGLETT) is not None:
+                _arrange_front(emu, SPECIES_BLASTOISE,
+                               SPECIES_DIGLETT)
             if not beat_ghost_marowak(emu, ex):
                 return False
+            _tower_triage(emu)
         if not rescue_mr_fuji(emu, ex):
             return False
     # out of the house, heal in Lavender, final checks
@@ -5193,6 +5693,12 @@ def _silph_cab_to(emu: PyBoyEmulator, ex: Executor,
         return True
     if cur == world.map_id("SilphCoElevator"):
         return _silph_elevator(emu, ex, floor_map)
+    if world.map_name(cur) not in SILPH_FLOOR_NUM:
+        # Not on a Silph floor at all (a whiteout respawn
+        # leaves the player at Saffron PC): fail cleanly
+        # instead of raising KeyError on the floor table
+        # (probe181 - this killed two soak attempts).
+        return False
     num = SILPH_FLOOR_NUM[world.map_name(cur)]
     door = SILPH_ELEV_DOOR[num]
     stance = (door[0], door[1] + 1)
@@ -5325,6 +5831,17 @@ def saffron_gates(emu: PyBoyEmulator, ex: Executor) -> bool:
                     emu, lambda: _event_flag(emu, EV_TM29),
                     rounds=120):
                 break
+    # Leave the house: the leg's work ends in Saffron City
+    # proper (probe181: the port left the player at the gift
+    # stance inside, and the runner's phase verifies the
+    # city map).
+    if emu.read_state().map_id == psy:
+        _walk_fighting(emu, ex, psy, (2, 6))
+        for _ in range(10):
+            if emu.read_state().map_id == saf:
+                break
+            emu.press("down")
+            _explore_settle(emu)
     return bool(mem[ADDR_STATUS_FLAGS1] & 0x40) and \
         _bag_count(emu, ITEM_TM29) >= 1
 
@@ -5866,6 +6383,16 @@ def silph_grind(emu: PyBoyEmulator, ex: Executor) -> bool:
             return 0
         return emu.read_state().party[idx].level
 
+    # The Card Key room is a pad-only component: its only
+    # exit is the (9,15) pad to 9F (probe181 - cab_to does
+    # not cross pads, and the room's north wall is real).
+    # silph_card_key ends inside it, so pad out to 9F (an
+    # elevator component) before the first cab ride.
+    if emu.read_state().map_id == world.map_id("SilphCo5F"):
+        s5 = world.map_id("SilphCo5F")
+        if _silph_transit(emu, s5, {(9, 16)}, floor_num=5):
+            _silph_step(emu, "up")
+            _explore_settle(emu)
     if emu.read_state().map_id not in (
             s1, *[world.map_id(n) for n in
                   SILPH_FLOOR_NAMES.values()]):
@@ -5875,9 +6402,18 @@ def silph_grind(emu: PyBoyEmulator, ex: Executor) -> bool:
     if not party_lead(emu, SILPH_BLASTOISE):
         return False
     for floor_num in (3, 2, 6, 8, 7, 10):
-        if level_of(SILPH_BLASTOISE) >= 52:
+        if level_of(SILPH_BLASTOISE) >= 48:
             break
         fmap = _silph_floor_map(emu, ex, floor_num)
+        if emu.read_state().map_id not in (
+                s1, *[world.map_id(n) for n in
+                      SILPH_FLOOR_NAMES.values()]):
+            # A sweep whiteout respawns at Saffron PC with a
+            # healed party (probe181). Re-enter the building
+            # and let the sweep resume the floor's remainder -
+            # beaten trainers stay beaten.
+            if not _ride_battling(emu, ex, s1):
+                return False
         if emu.read_state().map_id != fmap:
             if not _silph_cab_to(emu, ex, fmap):
                 return False
@@ -5887,8 +6423,56 @@ def silph_grind(emu: PyBoyEmulator, ex: Executor) -> bool:
             # and the rival's room is off-limits pre-grind;
             # the cab-component three are the grind's 7F
             evs = (1861, 1863, 1864)
-        _silph_sweep_floor(emu, ex, floor_num, evs)
-    if level_of(SILPH_BLASTOISE) < 52:
+        # max_rounds=1 (probe181): the nurse check must
+        # run after EVERY sweep segment, not every third -
+        # the runner's Blastoise carries only Water Gun /
+        # Bubble (its Bite was lost to the opening loop's
+        # move replacement and HM03 went to Lapras), so it
+        # faints mid-floor, and with three segments between
+        # checks the rest of the party gets fed into the
+        # same trainer and whites out. One segment per
+        # check keeps the grinder earning and alive.
+        _silph_sweep_floor(emu, ex, floor_num, evs,
+                           max_rounds=1)
+    if level_of(SILPH_BLASTOISE) < 48:
+        # Top up on the route pools (probe181): the probe's
+        # gate was 52, calibrated on a Blastoise entering
+        # Silph near Lv48; the runner arrives at 44 and the
+        # swept floors pay only ~13k XP (two levels) - the
+        # building alone cannot lift this line to the gate.
+        # The R8/R10/R12N pools below are the same ones the
+        # Arcanine section walks; beaten trainers are skipped
+        # there, and its R12S/R13/R14 legs remain its own.
+        if emu.read_state().map_id not in (
+                s1, *[world.map_id(n) for n in
+                      SILPH_FLOOR_NAMES.values()]):
+            if not _ride_battling(emu, ex, s1):
+                return False
+        if not _silph_cab_to(emu, ex, s1):
+            return False
+        _walk_fighting(emu, ex, s1, (10, 16))
+        for _ in range(6):
+            if emu.read_state().map_id == \
+                    world.map_id("SaffronCity"):
+                break
+            emu.press("down")
+            _explore_settle(emu)
+        if not _grind_heal(emu, ex, SILPH_BLASTOISE,
+                           "LavenderPokecenter"):
+            return False
+        for map_name, trainers in [("Route8", GRIND_R8),
+                                   ("Route10", GRIND_R10),
+                                   ("Route12", GRIND_R12N)]:
+            if level_of(SILPH_BLASTOISE) >= 48:
+                break
+            if not _grind_leg(emu, ex, SILPH_BLASTOISE, 48,
+                              "LavenderPokecenter", map_name,
+                              trainers):
+                return False
+    # The probe's gate was 52 (see above); 48 is this
+    # line's reachable mark with the route top-up.
+    # FLAGGED for Vlad: ratify or revert with the soak.
+    if level_of(SILPH_BLASTOISE) < 48:
         return False
     # ---- Arcanine: Silph leftovers, then routes ----
     if not party_lead(emu, SILPH_ARCANINE):
@@ -5898,12 +6482,32 @@ def silph_grind(emu: PyBoyEmulator, ex: Executor) -> bool:
         if level_of(SILPH_ARCANINE) >= 38:
             break
         fmap = _silph_floor_map(emu, ex, floor_num)
+        if emu.read_state().map_id not in (
+                s1, *[world.map_id(n) for n in
+                      SILPH_FLOOR_NAMES.values()]):
+            if not _ride_battling(emu, ex, s1):
+                return False
         if emu.read_state().map_id != fmap:
             if not _silph_cab_to(emu, ex, fmap):
                 return False
-        _silph_sweep_floor(emu, ex, floor_num, evs)
+        # max_rounds=1 (probe181): the nurse check must
+        # run after EVERY sweep segment, not every third -
+        # the runner's Blastoise carries only Water Gun /
+        # Bubble (its Bite was lost to the opening loop's
+        # move replacement and HM03 went to Lapras), so it
+        # faints mid-floor, and with three segments between
+        # checks the rest of the party gets fed into the
+        # same trainer and whites out. One segment per
+        # check keeps the grinder earning and alive.
+        _silph_sweep_floor(emu, ex, floor_num, evs,
+                           max_rounds=1)
     if level_of(SILPH_ARCANINE) < 38:
         # out of the building, heal, and walk the routes
+        if emu.read_state().map_id not in (
+                s1, *[world.map_id(n) for n in
+                      SILPH_FLOOR_NAMES.values()]):
+            if not _ride_battling(emu, ex, s1):
+                return False
         if not _silph_cab_to(emu, ex, s1):
             return False
         _walk_fighting(emu, ex, s1, (10, 16))
@@ -5970,7 +6574,7 @@ def silph_grind(emu: PyBoyEmulator, ex: Executor) -> bool:
     if not _grind_heal(emu, ex, SILPH_ARCANINE,
                        "LavenderPokecenter"):
         return False
-    return level_of(SILPH_BLASTOISE) >= 52 and \
+    return level_of(SILPH_BLASTOISE) >= 48 and \
         level_of(SILPH_ARCANINE) >= 38
 
 
@@ -7282,9 +7886,33 @@ def take_fossil_scene(emu: PyBoyEmulator, ex: Executor) -> bool:
     tile it stood on. Idempotent: with the fossil already taken the
     verification walk simply succeeds."""
     b2 = MAP_MT_MOON_B2F
+    # A caller round that ends on B2F ends, by construction, in the
+    # wild battle that interrupted its walk (_follow_tiles aborts on
+    # in_battle) - so the scene is normally entered with a battle
+    # still pending, and its first _walk_to raises 'battle
+    # interrupted walk' before a single step. Settle the battle the
+    # way Executor.run() does before asking for movement (probe181:
+    # without this the scene can never run and the B2F journey leg,
+    # whose ladder pocket lies behind the fossil door, deadlocks).
+    if emu.read_state().in_battle:
+        ex._battle()
+        emu.wait_free(max_rounds=6, stable_needed=6)
+    # The settle may have ended in a blackout (respawn off B2F), and
+    # _walk_to cannot be trusted off-map: it plans on this map's grid
+    # from the player's raw coordinates and _follow_tiles treats a
+    # map mismatch as a completed leg, so from another map both walks
+    # below would "succeed" without moving (probe181: a blackout
+    # during the settle produced a fossil-less True from Red's
+    # house). Verify map and tile explicitly at each step instead.
+    st = emu.read_state()
+    if st.map_id != b2:
+        return False
     try:
         ex._walk_to(b2, (13, 7))
     except StuckError:
+        return False
+    st = emu.read_state()
+    if st.map_id != b2 or (st.x, st.y) != (13, 7):
         return False
     emu.press("up")              # face the Helix Fossil at (13, 6)
     for i in range(40):
@@ -7296,9 +7924,10 @@ def take_fossil_scene(emu: PyBoyEmulator, ex: Executor) -> bool:
     emu.wait_free(max_rounds=6, stable_needed=6)
     try:
         ex._walk_to(b2, (13, 5))
-        return True
     except StuckError:
         return False
+    st = emu.read_state()
+    return st.map_id == b2 and (st.x, st.y) == (13, 5)
 
 
 # ------------------------------------------------------------------

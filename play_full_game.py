@@ -572,16 +572,25 @@ def _ph_vermilion(ctx: Ctx):
     emu, ex, world = ctx.emu, ctx.ex, ctx.world
     cer = world.map_id("CeruleanCity")
     cerpc = world.map_id("CeruleanPokecenter")
+    # The trigger set must include the gym itself: the cascade phase
+    # leaves the player standing inside CeruleanGym, and the executor
+    # rounds meant to bridge the gap propose the Thunder goal, which
+    # the validator blocks (the world model's tile journey south is
+    # Cut-gated) - so the player never steps out and a city-only
+    # trigger never fires (probe181 soak, run stopped at this phase).
+    # eastward's own first ride (to the Pokecenter) exits the gym
+    # without any gated journey, verified live from the gym door.
+    gym = world.map_id("CeruleanGym")
     for _ in range(60):
         if ctx.service_directives() == "stop":
             raise DirectiveStop("stop directive during the Vermilion loop")
         st = emu.read_state()
-        if "Cascade" in st.badges and st.map_id in (cer, cerpc):
+        if "Cascade" in st.badges and st.map_id in (cer, cerpc, gym):
             if rr.eastward_from_cerulean(emu, ex):
                 break
         result = ex.run(max_goals=1)
         st = emu.read_state()
-        if "Cascade" in st.badges and st.map_id in (cer, cerpc):
+        if "Cascade" in st.badges and st.map_id in (cer, cerpc, gym):
             if rr.eastward_from_cerulean(emu, ex):
                 break
         if result.status in ("stuck", "blocked"):

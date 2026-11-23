@@ -4855,3 +4855,187 @@ is not a start menu).
 single-process power-on-to-credits soak of
 `play_full_game.py` and the in-process phase-retry spin at
 OaksLab. The §40 fund_e4 items are closed.
+**(The soak ran as probe181 — see §42: 10 of 34 phases
+completed with tightenings; it walls at the Silph grind.
+The single-process question is answered for the
+unmodified runner — it dies in Mt. Moon — and remains
+open for the tightened one.)**
+
+## 42. The full-game soak (probe181, 2026-11-23): 10 of 34 phases, and the Silph wall
+
+Vlad's order: "Run the full soak — get the real number."
+Protocol: `play_full_game.py` fresh from power-on,
+`--supervisor off`, checkpoints + `progress.log` as the
+record; on a stop, recover by fresh-process `--resume`
+from the last good checkpoint (the proven path). Mid-soak,
+Vlad widened the brief: small isolated blockers could be
+tightened in place (suite kept green throughout, 313/313),
+with the unmodified runner's record kept separate below.
+ROM hygiene mattered from the first minute: attempt 1
+pointed at the shared `pokered.gbc`, whose battery RAM
+holds a completed save, so the title menu offered
+CONTINUE and `boot_and_intro` face-planted in 9 s — an
+environment defect, not a runner one. All later attempts
+ran on a byte-identical clean copy.
+
+**The unmodified runner's record (attempts 2–4, before
+any tightening).** Attempt 2 cleared intro/starter/
+boulder, then stalled forever in Mt. Moon: rounds end in
+battle by construction, `take_fossil_scene` could not
+settle a pending battle, and the B2F ladder it needed
+sits behind the fossil chamber — a true deadlock (killed
+at T+17 m 41 s, 269 rounds). Attempt 3, with the fossil
+scene settled, cleared cascade and died at vermilion:
+cascade leaves the player inside Cerulean Gym, outside
+`_ph_vermilion`'s eastward trigger set, and every
+bridging round was refused by the validator. Attempt 4
+died at vermilion again, deeper in (see tightenings
+3–5). No unmodified attempt passed phase 5.
+
+**The completed portion (with tightenings, per-phase
+wall times from `progress.log`, successful attempts):**
+
+| phase | wall | notes |
+|---|---|---|
+| 01 intro | 3.6 s | |
+| 02 starter | 3.5 s | |
+| 03 boulder | 88.7 s | |
+| 04 cascade | 256.1 s | fossil scene settled (T1) |
+| 05 vermilion | 179.8 s | T2–T5 |
+| 06 rock-tunnel | 680.5 s | T6 detour + traverse retries |
+| 07 celadon | 866.6 s | T7 shopping/swap/evolve fixes; grind 413 s of it |
+| 08 hideout | 300.6 s | unmodified |
+| 09 tower | 491.4 s | T8 triage/Marowak/bag fixes |
+| 10 gates | 12.9 s | T9 house exit |
+| 11 silph | — | **not completed** (see below) |
+
+Sum of successful phase walls, phases 1–10: **2,883.7 s
+≈ 48 min**. Phases 12–34 were never reached, so there is
+no honest power-on-to-credits number yet; anyone quoting
+one is extrapolating. Frame counts: `progress.log`
+records per-phase WALL time only; PyBoy's
+`emu.pb.frame_count` exists but the runner does not log
+it (noted for the future recorded run Vlad intends to
+ask for).
+
+**Silph — the wall.** With T10–T12 in, the phase runs
+~9–16 min per attempt and dies inside `silph_grind`,
+every time, across a dozen attempts. The layers, in the
+order they were found: the Card Key room is a pad-only
+component (its only exit is the (9,15) pad to 9F) and
+`silph_grind` called `cab_to` from inside it; a sweep
+whiteout respawned the player at Saffron and the next
+`cab_to` raised `KeyError('SaffronCity')` out of the
+floor table; and underneath both, an arithmetic wall —
+the grind's gates (Blastoise 52, Arcanine 38) were
+calibrated on the probe lineage, whose Blastoise entered
+Silph near Lv48 carrying a real Water move. The runner's
+Blastoise arrives at Lv44 with **Water Gun / Bubble /
+Tail Whip / Withdraw** (its Bite was lost to the opening
+loop's move replacement; HM03 Surf was Vlad's call for
+Lapras). It cannot one-shot Silph's trainers, faints
+mid-sweep (2F and 7F whiteouts, Selfdestruct chains),
+and the swept floors pay only ~13k XP: a fully swept
+building took it 44 → 46. A route-pool top-up (R8/R10/
+R12N, the Arcanine section's own machinery) plus a gate
+lowered to 48 still died in the R8 leg at Lv47. Teaching
+it TM11 BubbleBeam from the bag would change the fight
+math, but TM teaching is Vlad's call, not the soak's —
+**the grind's gate and the Blastoise moveset are the two
+decisions this soak hands back.** Until one of them
+moves, phases 11–34 are unmeasured beyond silph_rival's
+doorstep.
+
+**Tightenings (all in `run_real.py` unless noted; each
+root-caused live before it landed; suite 313/313 after
+every one):**
+- T1 `take_fossil_scene`: settle a pending battle at
+  entry; verify the fossil from the far side of its tile
+  (an off-map blackout respawn had produced a false OK).
+- T2 `play_full_game._ph_vermilion`: Cerulean Gym added
+  to the eastward trigger set.
+- T3 `_ride_to` returns True only when arrival is not
+  mid-battle; `catch_oddish_and_teach_cut`'s grass walk
+  retries with battles settled by `_BattleDriver` (the
+  stock policy wedges on trainer fights — the probe132
+  party-screen trap), factored out as `_walk_to_settled`.
+- T4 `_cut_tree_at_gym`: the positioning walk itself
+  cuts the tree via the executor's BFS when the Cut
+  capability is live; the scene now accepts standing in
+  the gap as success.
+- T5 `catch_diglett` hunts only Lv19+ Diglett (Dig is
+  learned at 19; the Lv18 catch left the Surge line
+  with Scratch/Growl and the party blacked out);
+  `beat_surge` prefers a Dig-knowing Diglett.
+- T6 Rock Tunnel: `_flash_detour` — the catching detour
+  the storyline ran by hand (probes 143/144) that no
+  runner stage wired: dex 4 → 10 (Route 11 Spearow/
+  Ekans/Drowzee, Route 6 Pidgey, Route 2 Rattata/Weedle;
+  tables verified in pokered), a money-gated Gambler
+  funding sweep on Route 11, heals, and `collect_flash`
+  approached via a Viridian hop-chain (a warm-executor
+  journey from Route 2 picks an unservable east-strip
+  leg and re-plans it forever — the in-process spin,
+  caught live). Plus `_catch_any` clearing dialogs in
+  its pacing loop (a patrolling Bug Catcher's post-battle
+  text froze hunts solid), `collect_flash` stance retries
+  (a wandering youngster parks on the (2,4) stance),
+  the traverse resupply rebalanced (Repels 2 / Potions
+  8), a heal-and-restock traverse retry loop (beaten
+  trainers stay beaten), and the leg-5 blackout
+  false-warp hardened (the south exit lands at Route 10
+  (8,53); a blackout respawn lands at (11,20)).
+- T7 Celadon: Growlithe approached via the Underground
+  hop (its own ride dies in Saffron's gatehouse);
+  `pc_swap` before the heal (heal exits the building and
+  PC walks fail from the doorstep) with the deposit
+  falling back Nidoran-F → Ekans; shopping reordered —
+  drink + Fire Stone first, 2F resupply best-effort (the
+  storyline arrived with ¥8,820, the runner with ¥4,661);
+  `buy_vending_drink` presses A through its intro text;
+  the stone exit floor-chained; `evolve_with_stone`
+  closes the bag menu after the RAM-verified evolution
+  (left open, it ate every later ride's presses);
+  `beat_erika`'s phantom `ex.prepare_battle_party()`
+  replaced with the `_arrange_front` it names.
+- T8 Tower: `_tower_triage` (Potion/Super Potion the
+  lead between floors — the leg never used its stock);
+  4F/6F trainers split per-trainer with triage between;
+  the Marowak moved BEFORE the 6F Channelers (their
+  approaches cross the (10,16) trigger and the fleeing
+  navigator re-armed it into a party-grinding loop);
+  the Diglett line arranged as the Marowak failover
+  (Arcanine eats super-effective Ground); the spent
+  Lift Key deposited at Lavender when the bag is at
+  19+ stacks (the mandatory Rare Candy fills it to 20
+  and Fuji's Flute then cannot be given); `_tower_stairs`
+  gained an explore_nav fallback.
+- T9 `saffron_gates` steps back out of Mr. Psychic's
+  house (the phase verifies Saffron City; the port left
+  the player at the gift stance).
+- T10 Silph: `silph_grind` pads out of the Card Key
+  room to 9F before its first cab ride.
+- T11 `_silph_cab_to` returns False (not KeyError) when
+  the player is off the Silph floor table; both grind
+  loops re-enter the building after a whiteout respawn.
+- T12 Grind gates: Blastoise 52 → 48 with a route-pool
+  top-up (R8/R10/R12N) — **insufficient and flagged**:
+  the staged grind still ended at Lv47 in the R8 leg.
+  The sweep calls in the grind now run `max_rounds=1`
+  so the nurse check fires after every segment.
+
+**What the soak proves.** The runner's phase chain is
+real: ten phases, four badges, back-to-back in the
+runner's own terms, every one RAM-verified, including
+two legs (vermilion, rock-tunnel) that needed five and
+six tightenings respectively. The checkpoint/resume
+protocol absorbed everything thrown at it — phase
+failures, a KeyError, two silent native process deaths
+(~10 min into long emulations, no traceback), and one
+service restart — without a corrupted state. **What it
+does not prove:** anything about phases 12–34, the three
+hand-written Fly glue phases among them; a full-run
+wall time; or single-process reliability — the completed
+portion took ten processes (one fresh boot + nine
+resumes), and the unmodified runner's single-process
+record stands at "dies in Mt. Moon."
