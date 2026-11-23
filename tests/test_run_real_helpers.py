@@ -1552,6 +1552,179 @@ class TestLeagueGuardSwitch(unittest.TestCase):
         self.assertEqual(act, ("move", 56))
 
 
+class TestLeagueAlakazamFix(unittest.TestCase):
+    """probe180: with Arcanine down, the champion branch's
+    Alakazam fallbacks formed a switch cycle (Lapras ->
+    Snorlax -> Lapras, Blastoise -> Snorlax) and no rule
+    ever attacked, so Alakazam Recovered and picked the
+    party off over 70+ turns (the S40 fund_e4 blackouts).
+    The fallback graph is now acyclic - everyone funnels
+    to Snorlax, Snorlax commits - and a general
+    anti-oscillation guard converts a fourth no-progress
+    switch against one enemy into an attack."""
+
+    LAP = (rr.SP_LAPRAS, 222, 222,
+           [rr.MOVE_SING, rr.MOVE_ICE_BEAM, rr.MOVE_SURF,
+            rr.MOVE_STRENGTH], [15, 10, 15, 15])
+    BLA = (rr.SP_BLASTOISE, 221, 221,
+           [rr.MOVE_HYDRO_PUMP, 39, rr.MOVE_BUBBLE,
+            rr.MOVE_WATER_GUN], [5, 30, 30, 15])
+    SNO = (rr.SP_SNORLAX, 236, 236,
+           [rr.MOVE_DOUBLE_EDGE, rr.MOVE_AMNESIA,
+            rr.MOVE_REST, rr.MOVE_BODY_SLAM],
+           [15, 20, 10, 15])
+    ARC = (rr.SP_ARCANINE, 180, 180,
+           [rr.MOVE_BITE, rr.MOVE_LEER, rr.MOVE_EMBER],
+           [25, 30, 25])
+
+    def _snap(self, party, active_idx, enemy):
+        class Mon:
+            def __init__(self, sp, hp, max_hp, moves, pp):
+                self.species_id = sp
+                self.hp = hp
+                self.max_hp = max_hp
+                self.moves = moves
+                self.pp = pp
+                self.status = 0
+                self.level = 50
+
+        class Snap:
+            pass
+        s = Snap()
+        s.party = [Mon(*row) for row in party]
+        s.active = s.party[active_idx]
+        s.active_idx = active_idx
+        s.enemy = enemy
+        s.alive = lambda sp: any(
+            m.species_id == sp and m.hp > 0 for m in s.party)
+        s.mon = lambda sp: next(
+            (m for m in s.party if m.species_id == sp), None)
+        return s
+
+    def _party(self, arc_hp=180, sno_hp=236, lap_hp=222,
+               bla_hp=221):
+        return [(rr.SP_LAPRAS, lap_hp, 222, self.LAP[3],
+                 self.LAP[4]),
+                (rr.SP_BLASTOISE, bla_hp, 221, self.BLA[3],
+                 self.BLA[4]),
+                (rr.SP_SNORLAX, sno_hp, 236, self.SNO[3],
+                 self.SNO[4]),
+                (rr.SP_ARCANINE, arc_hp, 180, self.ARC[3],
+                 self.ARC[4])]
+
+    def setUp(self):
+        self.fs = rr._LEAGUE_FS
+        self.old_fight = self.fs.fight
+        self.fs.fight = "champion"
+        self.fs.reset_fight()
+
+    def tearDown(self):
+        self.fs.fight = self.old_fight
+        self.fs.reset_fight()
+
+    def test_lapras_funnels_to_snorlax_when_arcanine_down(
+            self):
+        s = self._snap(self._party(arc_hp=0), 0,
+                       (rr.SP_ALAKAZAM, 140, 140, 59))
+        self.assertEqual(rr._league_decide(s, "menu"),
+                         ("switch", rr.SP_SNORLAX))
+
+    def test_snorlax_commits_when_arcanine_down(self):
+        s = self._snap(self._party(arc_hp=0), 2,
+                       (rr.SP_ALAKAZAM, 140, 140, 59))
+        self.assertEqual(rr._league_decide(s, "menu"),
+                         ("move", rr.MOVE_BODY_SLAM))
+
+    def test_snorlax_rests_when_low(self):
+        s = self._snap(self._party(arc_hp=0, sno_hp=80), 2,
+                       (rr.SP_ALAKAZAM, 140, 140, 59))
+        self.assertEqual(rr._league_decide(s, "menu"),
+                         ("move", rr.MOVE_REST))
+
+    def test_blastoise_attacks_when_both_answers_down(self):
+        s = self._snap(self._party(arc_hp=0, sno_hp=0), 1,
+                       (rr.SP_ALAKAZAM, 140, 140, 59))
+        self.assertEqual(rr._league_decide(s, "menu"),
+                         ("move", rr.MOVE_HYDRO_PUMP))
+
+    def test_lapras_sings_when_both_answers_down(self):
+        s = self._snap(self._party(arc_hp=0, sno_hp=0), 0,
+                       (rr.SP_ALAKAZAM, 140, 140, 59))
+        self.assertEqual(rr._league_decide(s, "menu"),
+                         ("move", rr.MOVE_SING))
+
+    def test_arcanine_still_the_first_answer(self):
+        s = self._snap(self._party(), 0,
+                       (rr.SP_ALAKAZAM, 140, 140, 59))
+        self.assertEqual(rr._league_decide(s, "menu"),
+                         ("switch", rr.SP_ARCANINE))
+
+    def test_streak_resets_on_damage_and_new_enemy(self):
+        fs = self.fs
+        s = self._snap(self._party(), 0,
+                       (rr.SP_ALAKAZAM, 140, 140, 59))
+        fs.track(s)
+        fs.sw_count = 3
+        hurt = self._snap(self._party(), 0,
+                          (rr.SP_ALAKAZAM, 100, 140, 59))
+        fs.track(hurt)
+        self.assertEqual(fs.sw_count, 0)
+        fs.sw_count = 3
+        nxt = self._snap(self._party(), 0,
+                         (rr.SP_RHYDON, 200, 200, 61))
+        fs.track(nxt)
+        self.assertEqual(fs.sw_count, 0)
+
+    def test_fourth_no_progress_switch_becomes_attack(self):
+        s = self._snap(self._party(), 0,
+                       (rr.SP_ALAKAZAM, 140, 140, 59))
+        # first decide registers the enemy instance and
+        # switches (streak 1); seed the streak to the cap
+        self.assertEqual(rr._league_decide(s, "menu"),
+                         ("switch", rr.SP_ARCANINE))
+        self.fs.sw_count = 3
+        act = rr._league_decide(s, "menu")
+        self.assertEqual(act, ("move", rr.MOVE_ICE_BEAM))
+
+
+class TestStartMenuShowing(unittest.TestCase):
+    """probe180: fly_to's start-menu proof is screen text,
+    not wTopMenuItemY (a persistent byte a leftover menu
+    session leaves stale - the banked post-gauntlet state
+    boots into the POKeDEX with the byte at 3)."""
+
+    def _emu_with_text(self, text):
+        rev = {}
+        for b, ch in rr._LEAGUE_FONT.items():
+            rev.setdefault(ch, b)
+        mem = bytearray(0x10000)
+        from agent.state import ADDR_TILEMAP
+        base = ADDR_TILEMAP
+        for i, ch in enumerate(text):
+            mem[base + i] = rev.get(ch, 0x7F)
+
+        class FakePB:
+            pass
+        pb = FakePB()
+        pb.memory = mem
+
+        class FakeEmu:
+            pass
+        emu = FakeEmu()
+        emu.pb = pb
+        return emu
+
+    def test_start_menu_markers(self):
+        emu = self._emu_with_text(
+            "POKéDEX POKéMON ITEM VLAD SAVE OPTION EXIT")
+        self.assertTrue(rr._start_menu_showing(emu))
+
+    def test_dex_contents_is_not_start_menu(self):
+        emu = self._emu_with_text(
+            "CONTENTS SEEN 142 OWN 124 BULBASAUR IVYSAUR")
+        self.assertFalse(rr._start_menu_showing(emu))
+
+
 class TestHuntPairedPaceDirs(unittest.TestCase):
     """probe171 regression: _hunt_paired referenced
     _PACE_DIRS, which the SS30 port never brought over

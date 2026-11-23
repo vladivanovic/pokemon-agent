@@ -939,10 +939,9 @@ def q_fund_e4(ctx, args):
             f"{done} E4 run(s) complete and the money banked "
             f"({money0} -> {money_now}), but the trip home "
             f"did not complete (ended at "
-            f"{world.map_name(ctx.state().map_id)}; fly_to "
-            f"is known to refuse post-Hall-of-Fame landing "
-            f"states) - the saved state holds the banked "
-            f"money; finish the trip from a fresh boot")
+            f"{world.map_name(ctx.state().map_id)}) - the "
+            f"saved state holds the banked money; finish "
+            f"the trip from a fresh boot")
     money1 = ctx.state().money
     return (f"{done} E4 run(s) complete; money {money0} -> "
             f"{money1} (net {money1 - money0:+d})")

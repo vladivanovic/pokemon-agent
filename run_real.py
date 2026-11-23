@@ -11323,6 +11323,17 @@ def _fly_header_town(emu: PyBoyEmulator):
     return None
 
 
+def _start_menu_showing(emu: PyBoyEmulator) -> bool:
+    """The START menu is on screen, proven by its tilemap
+    text (ITEM and OPTION co-occur only there). A byte
+    check cannot do this job: wTopMenuItemY is a persistent
+    byte set by whatever menu ran last, and a resumed save
+    can boot inside a leftover menu session whose byte is
+    stale (probe180)."""
+    t = _norm_text(_screen_text(emu))
+    return "ITEM" in t and "OPTION" in t
+
+
 def fly_to(emu: PyBoyEmulator, ex: Executor,
            dest_town: str) -> bool:
     """FLY to a visited town (probe160f): party-menu field
@@ -11381,8 +11392,35 @@ def fly_to(emu: PyBoyEmulator, ex: Executor,
             emu.tick(20)
         return mem[ADDR_CURRENT_MENU_ITEM] == want
 
-    press10("start")
-    if not wait_top_y(2) or not steer(1):
+    def acquire_start_menu(rounds=24):
+        """Open the START menu and prove it by screen text.
+        The old gate (press START, wait for wTopMenuItemY
+        == 2) fails on any state that resumes inside a
+        leftover menu session: probe179's banked
+        post-gauntlet checkpoint boots into the POKeDEX
+        contents screen (a relic of the Hall of Fame
+        sequence the checkpoint was saved under), so the
+        START press is eaten by the open dex and the byte
+        keeps the dex's value (3) - fly_to refused in ~2s
+        on a perfectly flyable state (probe180). Close
+        whatever is open with B (one B can also land ON
+        the start menu when the leftover was opened from
+        it), and press START only from a clean field."""
+        for _ in range(rounds):
+            if _start_menu_showing(emu):
+                return True
+            if emu.read_state().in_dialog:
+                press10("a")
+                continue
+            press10("b")
+            emu.tick(30)
+            if _start_menu_showing(emu):
+                return True
+            press10("start")
+            emu.tick(60)
+        return _start_menu_showing(emu)
+
+    if not acquire_start_menu() or not steer(1):
         return False
     press10("a")                              # POKEMON
     if not wait_top_y(1) or not steer(carrier):
@@ -14047,6 +14085,8 @@ class _LeagueFS:
         self.last_active = None
         self.spore_used = False
         self.enemy_turns = 0
+        self.sw_count = 0
+        self.sw_base_hp = None
 
     def track(self, snap: _LeagueSnap):
         self.turn += 1
@@ -14057,6 +14097,14 @@ class _LeagueFS:
                  and ehp > self.enemy_hp + 2):
             self.instance += 1
             self.enemy_turns = 0
+            self.sw_count = 0
+            self.sw_base_hp = ehp
+        elif self.sw_base_hp is not None \
+                and ehp < self.sw_base_hp - 2:
+            # the switch streak has drawn blood since it
+            # began: switching is working - reset it
+            self.sw_count = 0
+            self.sw_base_hp = ehp
         self.enemy_key = key
         self.enemy_hp = ehp
         self.enemy_turns += 1
@@ -14241,6 +14289,31 @@ def _league_decide(snap: _LeagueSnap, kind: str):
     if mv[0] == "move" and mv[1] == MOVE_STUN_SPORE:
         fs.spore_used = True
     mv = _league_guard_switch(snap, fight, esp, mv)
+    if mv[0] == "switch":
+        if fs.sw_count >= 3:
+            # anti-oscillation (probe180): three switches
+            # against this enemy without denting it means
+            # the switch rules are chasing each other -
+            # the champion's Alakazam with Arcanine down
+            # cycled Lapras/Snorlax/Blastoise for 70+
+            # turns while Recover erased the rare chip.
+            # Commit the active mon instead: attack with
+            # its strongest PP'd damaging move.
+            atk = None
+            if a is not None and a.moves:
+                cands = [(_LEAGUE_MOVE_POWER.get(m, 0), m)
+                         for m in a.moves
+                         if _LEAGUE_MOVE_POWER.get(m, 0) > 0
+                         and _league_pp_of(a, m) > 0]
+                if cands:
+                    cands.sort(reverse=True)
+                    atk = cands[0][1]
+            if atk is not None:
+                _plog(f"switch-streak: {fs.sw_count} "
+                      f"switches vs {esp} at {ehp}/{emax} "
+                      f"-> attack {atk}")
+                return ("move", atk)
+        fs.sw_count += 1
     return mv
 
 
@@ -14370,9 +14443,17 @@ def _league_menu_move(snap: _LeagueSnap, fs: _LeagueFS,
         # Stun Spore cameo.
         if asp == SP_LAPRAS:
             if esp == SP_ALAKAZAM:
-                return ("switch", SP_ARCANINE
-                        if snap.alive(SP_ARCANINE)
-                        else SP_SNORLAX)
+                if snap.alive(SP_ARCANINE):
+                    return ("switch", SP_ARCANINE)
+                if snap.alive(SP_SNORLAX):
+                    return ("switch", SP_SNORLAX)
+                # both answers down (probe180): never
+                # switch in a circle - Sing, then Surf
+                if fs.sing_count() == 0 and af > 0.5:
+                    return ("move", MOVE_SING)
+                return ("move", MOVE_SURF
+                        if _league_pp_of(a, MOVE_SURF) > 0
+                        else MOVE_ICE_BEAM)
             if esp == SP_RHYDON:
                 return ("move", MOVE_SURF)
             if esp == SP_GYARADOS:
@@ -14388,9 +14469,18 @@ def _league_menu_move(snap: _LeagueSnap, fs: _LeagueFS,
                     else MOVE_ICE_BEAM)
         if asp == SP_SNORLAX:
             if esp == SP_ALAKAZAM:
-                return ("switch", SP_ARCANINE
-                        if snap.alive(SP_ARCANINE)
-                        else SP_LAPRAS)
+                if snap.alive(SP_ARCANINE):
+                    return ("switch", SP_ARCANINE)
+                # Snorlax IS the fallback answer (Body
+                # Slam vs Alakazam's paper Defence):
+                # commit. Switching to Lapras here closed
+                # the probe179 oscillation cycle - Lapras
+                # sent straight back to Snorlax while
+                # Alakazam Recovered and picked both off.
+                if af < 0.45 and \
+                        _league_pp_of(a, MOVE_REST) > 0:
+                    return ("move", MOVE_REST)
+                return ("move", MOVE_BODY_SLAM)
             if esp == SP_RHYDON:
                 return ("switch", SP_BLASTOISE
                         if snap.alive(SP_BLASTOISE)
@@ -14429,9 +14519,17 @@ def _league_menu_move(snap: _LeagueSnap, fs: _LeagueFS,
                     return ("move", MOVE_HYDRO_PUMP)
                 return ("move", MOVE_WATER_GUN)
             if esp == SP_ALAKAZAM:
-                return ("switch", SP_ARCANINE
-                        if snap.alive(SP_ARCANINE)
-                        else SP_SNORLAX)
+                if snap.alive(SP_ARCANINE):
+                    return ("switch", SP_ARCANINE)
+                if snap.alive(SP_SNORLAX):
+                    return ("switch", SP_SNORLAX)
+                # terminal fallback (probe180): attack -
+                # the fallback graph vs Alakazam is now
+                # acyclic (everyone funnels to Snorlax,
+                # and Snorlax commits)
+                if fs.pumps < 4:
+                    return ("move", MOVE_HYDRO_PUMP)
+                return ("move", MOVE_WATER_GUN)
             return ("move", MOVE_WATER_GUN)
         if asp == SP_ARCANINE:
             if esp == SP_VENUSAUR:

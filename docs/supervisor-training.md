@@ -4654,11 +4654,16 @@ honest with the checkpoint intact — because `fly_to` itself
 in ~2s, no hang, no state written). Root-causing `fly_to` on
 that state class is open driver work; §34's precedent is that
 leg-stage code flew such a state home from a fresh process.
+**(Both defects root-caused and fixed in §41: the refusal was
+a leftover POKéDEX menu session baked into the banked state,
+and the Champion wall was a switch-policy cycle. `fund_e4`
+now stands at 5/5 from the pristine save.)**
 Net assessment: the quest machinery is correct — every outcome
 above was reported truthfully with its money trail — but as a
 money engine `fund_e4` is **unreliable with this party**: the
 Champion fight is the wall, and the trip home from a win
 currently ends at the banked checkpoint, not at a Pokécenter.
+**(Superseded by §41.)**
 
 **Honest limits.**
 - `catch_static` does not travel between maps: the bespoke
@@ -4697,6 +4702,9 @@ currently ends at the banked checkpoint, not at a Pokécenter.
   nets money (banked payouts survive the halving), and no run
   can hang or lose banked money any more. The lobby Revive
   top-up is best-effort (it fired in one of six smokes).
+  **(This bullet is superseded by §41: both driver defects
+  are fixed and the measured record is now 5/5 complete
+  runs from the pristine save.)**
 
 **Tests**: suite 303/303 (268 existing + 35 in
 `tests/test_quests.py`: registry integrity, argument validation,
@@ -4712,3 +4720,138 @@ remains genuinely open is unchanged from §39: a single-process
 power-on-to-credits soak of `play_full_game.py` has still never
 been run, and the in-process phase-retry spin at OaksLab is still
 a known defect. Both are runner concerns, not quest concerns.
+
+## 41. The fund_e4 driver fixes (probe180, 2026-11-23): the switch cycle and the leftover menu — Vlad's decision, both closed
+
+§40 left `fund_e4` correct but unreliable for two driver-level
+reasons. Vlad's call (2026-11-23): "Fix the two driver issues
+so fund_e4 is dependable". Both were root-caused from the
+probe179 artifacts before any code moved, and the pre-fix
+failure was reproduced once more from a pristine copy
+(baseline: Champion BLACKOUT, ¥28,823 → ¥14,411, quest
+FAILED — §40's record exactly).
+
+**Root cause 1 — the Champion switch cycle.** The baseline's
+own log tells it precisely. Arcanine, the designated Alakazam
+answer, engages and Bites it 143 → 72 → 41 (T3–T5), then
+faints. From T6 the fight is a pure switch cycle: Snorlax's
+rule says "switch to Lapras", Lapras's rule says "switch to
+Snorlax" (132 ↔ 19 for 70 turns), Blastoise and even Pidgeot
+get rotated in by the fallback pick — and **no rule ever
+attacks**, because in `_league_menu_move`'s champion branch
+every non-Arcanine member's Alakazam rule is "switch to
+Arcanine, else X", and the else-targets point at each other
+in a cycle (Lapras → Snorlax → Lapras; Blastoise → Snorlax).
+Every switch hands Alakazam a free turn: it hits the
+incoming mon and Recovers off the rare chip (it sat at 41 HP
+— one Body Slam from losing — while Snorlax's rule kept
+ordering a switch). `_league_guard_switch` could not break
+it: it only checks the target is alive, and every cyclic
+target was. The party bled out to the turn cap without
+dealing net damage.
+
+**Fix 1 (two layers, both in `run_real.py`).**
+(a) *Acyclic fallbacks, scoped to the Alakazam matchup:*
+Lapras → Arcanine, else Snorlax, else Sing/Surf (attack);
+Snorlax → Arcanine, else **commit** (Rest when low, else
+Body Slam — Snorlax is the fallback answer: Body Slam
+against Alakazam's paper Defence is the best remaining
+damage in the party); Blastoise → Arcanine, else Snorlax,
+else Hydro Pump/Water Gun. The fallback graph is now a
+funnel with Snorlax as the terminal attacker, not a cycle.
+Arcanine remains the first answer whenever it stands, so
+the storyline's winning line is untouched, as are
+Lorelei → Lance (their branches did not change).
+(b) *A general anti-oscillation guard:* `_LeagueFS.track`
+now keeps a per-enemy-instance switch streak (`sw_count`,
+`sw_base_hp` — reset when the enemy changes or its HP drops
+materially below the streak's base, i.e. when switching has
+drawn blood). In `_league_decide`, a fourth consecutive
+no-progress switch against the same enemy is converted to
+an attack with the active mon's strongest PP'd damaging
+move. This is a policy invariant, not a Champion script:
+switching three times without denting the opponent is
+pathological in any fight. In the proof runs below the
+guard never had to fire — layer (a) fixed the actual
+fight — it stands as the net for any other cycle of the
+same shape (it is unit-tested directly).
+
+**Root cause 2 — `fly_to` vs post-Hall-of-Fame landing
+states.** The §40 framing ("fly_to refuses post-HoF landing
+states") was a symptom, not the mechanism. The banked
+post-gauntlet checkpoint **boots into the POKéDEX contents
+screen**: the checkpoint was saved under the Hall of Fame
+sequence with the dex menu session still live, and a PyBoy
+save state resumes it verbatim (screen-verified at boot,
+no presses). `fly_to` pressed START — eaten by the open
+dex — then waited for `wTopMenuItemY == 2`; that byte
+(0xCC24) is persistent WRAM set by whatever menu ran last,
+and the dex leaves it at 3, so the gate failed in ~2s on a
+perfectly flyable state. The canonical save flies because
+no menu is live at its boot (the byte is stale there too —
+8 — but START genuinely opens the menu and rewrites it).
+§34's fresh-process precedent worked because leg-stage code
+habitually B-backs out of whatever is open before driving
+menus (`_close_menus`, the pc168 hygiene); `fly_to` never
+had that step.
+
+**Fix 2 (`fly_to`, `run_real.py`).** The START-menu gate is
+now acquired, not assumed: a new `_start_menu_showing`
+proves the menu by its tilemap text (ITEM + OPTION
+co-occur only on the start menu), and `fly_to` first
+B-closes whatever session is live — one B can also land ON
+the start menu when the leftover was opened from it — and
+presses START only from a clean field, verifying by screen
+text after each step. The stale-byte gate is gone from the
+acquisition path (the party-menu gate downstream keeps its
+byte check: that menu genuinely opens from a proven start
+menu and writes the byte fresh). `quests.fly` needed no
+change; fund_e4's trip-home failure text no longer names
+the fixed limitation.
+
+**The dependability record (probe180, pristine copies of
+`probe178/s7-final.state`, fixed code):**
+
+| Run | Outcome | Money | Champion fight |
+|---|---|---|---|
+| 1 | ok — complete, home healed at Fuchsia | ¥5,459 → ¥35,258 (+29,799) | 14 turns |
+| 2 | ok | ¥5,459 → ¥35,258 (+29,799) | 11 turns |
+| 3 | ok | ¥5,459 → ¥35,258 (+29,799) | 9 turns |
+| 4 | ok | ¥5,459 → ¥35,258 (+29,799) | 13 turns |
+| 5 | ok | ¥5,459 → ¥35,258 (+29,799) | 42 turns |
+
+**5/5 complete runs, every one the exact full payout, every
+one home and healed** — against §40's 0/3 from the same
+pristine state (and the one pre-fix reproduction above).
+Lorelei → Lance banked their ¥28,823 in every run, as
+before: no regression in the first four fights. The
+identical money trails are the payout table being fixed,
+not identical replays — the Champion fights took different
+lines (9–42 turns). Honest limit: all five runs share the
+CLI's deterministic boot lineage from the one canonical
+save, so this proves the quest dependable *on this save and
+party*, which is the claim §40 needed; it is not a proof
+about arbitrary parties, and the matchup still costs real
+HP (run 1's Lapras fainted in the winning fight — corridor
+care and the lobby heal absorb that, as designed).
+
+**Re-smokes.** `travel` from the banked post-gauntlet state:
+ok (was REFUSED [travel]). `heal` from the same state: ok —
+flew to Fuchsia and healed (was REFUSED [travel]). Refusal
+trio unchanged: `catch_static mewtwo`, `safari_hunt
+tauros`, `game_corner scyther` all refuse `[owned]`, exit 2,
+no state written. Canonical save never mutated (sha256
+`b21f983c…` re-verified after all runs).
+
+**Tests:** 313/313 (303 + 10 new in
+`tests/test_run_real_helpers.py`: the acyclic Alakazam
+fallbacks incl. Snorlax's commit/Rest and the both-down
+terminals, the streak bookkeeping resets, the
+fourth-switch conversion, and `_start_menu_showing`'s
+markers against a fake tilemap — the dex contents screen
+is not a start menu).
+
+**Still open (unchanged, runner concerns):** the
+single-process power-on-to-credits soak of
+`play_full_game.py` and the in-process phase-retry spin at
+OaksLab. The §40 fund_e4 items are closed.
