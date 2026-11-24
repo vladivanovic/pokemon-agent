@@ -5039,3 +5039,227 @@ wall time; or single-process reliability — the completed
 portion took ten processes (one fresh boot + nine
 resumes), and the unmodified runner's single-process
 record stands at "dies in Mt. Moon."
+
+## 43. Soak continuation: the runner finished (2026-11-24)
+
+Vlad's two calls on the §42 Silph wall, both executed as
+given: (1) teach the runner's Blastoise TM11 BubbleBeam;
+(2) revert the silph gate to Blastoise 52 / Arcanine 38
+and redesign the grind properly. The run then went
+11 -> 34 to the credits. **RUN COMPLETE: all 34 phases
+verified**, final state Pallet Town (5,6), 8 badges,
+money 107,943, Hall of Fame room reached and screenshotted
+(`probe181/run5b/hall-of-fame.png`,
+`checkpoints/34-elite-four.state`).
+
+### The teach (authorised, runner lineage only)
+
+`teach_tm_replace` + idempotent `teach_bubblebeam` in
+run_real.py. Live-verified on a copy of the 10-gates
+checkpoint before any run used it: Blastoise
+[130 Skull Bash, 39 Tail Whip, 145 Bubble, 55 Water Gun]
+-> [130, 39, **61 BubbleBeam**, 55] (Bubble strictly
+dominated: 20 pw vs 65, same type/accuracy; learnset
+verified in pokered data). TM11 1 -> 0; every other party
+block byte-identical. The canonical probe178 save was
+never touched. No other TM was taught anywhere in the
+run; bag-space moves were deposits/sales of untaught
+items only.
+
+### The grind redesign (inside the silph phase)
+
+A full Silph sweep pays ~13k XP and Gen 1 trainers never
+respawn, so the XP had to come from renewable pools open
+before Silph. `_silph_pregrind` (run_real.py), inserted
+after the Card Key prologue, gates checked at the old
+ratified values (52/38, comment cites Vlad's decision):
+Lavender anchor -> Blastoise Route 8 trainers (cap 51)
+-> Arcanine R10/R12N trainers -> **the Route 12 Snorlax
+woken and beaten with Blastoise leading** (event 1167;
+the storyline's catch-or-KO call belonged to the probe
+lineage and was already spent there) -> Arcanine R12S/R13
+trainers -> Arcanine R13-grass wild top-up -> Blastoise
+R13/R14/R15 trainers (cap 51) -> Blastoise R13-grass wild
+top-up to 52 -> heal, park in Saffron. Machinery:
+per-leg heal+retry-once else SKIP-logged, wild top-ups
+prompt-aware (DECLINE all; Hydro Pump declined at 52),
+moveset audit after every level-up, order-PP heal gate,
+spin guard. Rehearsal catches worth keeping: a stale Cut
+belief (fixed by `_walk_with_recut`), Route 15's west
+grass pocket is tile-disconnected (7 of 10 R15 trainers
+unreachable from it; absorbed by the R13 top-up by
+design), and a Ditto PP-war that the order-PP gate now
+trips on. **Measured cost, staged rehearsal: ~4,532 s
+including ~650 s of one failed attempt; clean path
+~65-70 min.** Gates met exactly: Blastoise 52, Arcanine
+38, money 62,413 at the park.
+
+**Salvage disclosure.** The first live attempt (run5)
+was killed ~35 min in by a platform service restart,
+mid-pre-grind, with no phase checkpoint. Rather than
+re-grind ~65 min, the silph phase was resumed from the
+rehearsal's verified post-grind state (same lineage,
+same code, gates met), repositioned to Saffron as
+run5b/start2.state. Inside run5b the pre-grind re-pass
+no-ops, so the grind's cost enters the total below from
+the rehearsal measurement, not from a phase wall. The
+same restart killed one later runner instance and two
+diagnosis traces; checkpoints on disk were never lost.
+
+### Silph itself (nine fixes, one root cause)
+
+The phase then took ~13 more hours of diagnosis across
+nine fixes; eight were lineage divergences (exit helper,
+Saffron-side park, true 3F door cell, DFS retry wrapper,
+forced 3F sweep, rival-scene approach order, nurse-first
+rival restructure, bag room for the Master Ball via a
+sale at a 20-stack bag). The root cause of the churn:
+inside `_silph_dfs`, a sight-trigger battle eats the
+step it interrupts, and the walker recorded that edge as
+blocked - one poisoned critical edge made the DFS
+exhaust a floor and report false "unreachable" for
+~20 min at a time. `probe_step` now snapshots a battle
+signature (money + party HP) and retries battle-eaten
+steps. Silph wall (winning attempt): 772.1 s, Master
+Ball acquired (never thrown, as everywhere in this
+programme).
+
+### Phases 12-34: the lineage divergences, compactly
+
+Every phase passed; almost every one needed the same
+class of repair - the port assumed the probe lineage's
+party/bag/box, and the runner's differs. Sabrina: a
+`_gym_step` name collision (the Viridian definition
+shadowed Saffron's; renamed `_viridian_gym_step`), TM46
+refused at a 20-stack bag (deposit fallback), and a
+Disable stalemate - Slowbro Disabled Arcanine's Bite,
+its only other move Roar always fails in trainer
+battles, and Gen 1's switch submenu was not being
+confirmed; the battle driver now falls back to a switch
+when every ranked move is rejected and confirms switches
+by species change. Fuchsia: bag-assert generalised
+(deposit TM24 too). Lapras-surf: deposit-species
+fallback (the runner has no Nidoran-M spare). Super-rod:
+voucher early-return skipped the bag-room step; deposit
+list gained TM28. Dratini: wrapper unpacked a tuple from
+a bool return. Fly-journey glue: the Seafoam return
+crossing was rebuilt segment by segment against live
+tiles (one-way ledge on B1F, a wall at B1F (10,3), the
+x9-column basin connector, B2F x6 detour, B3F row-6
+route) and its exit rewritten to mirror seafoam_crossing's
+proven Surf exit. Snorlax-journey: map-name fix
+(RockTunnelPokecenter), Repel stock-up (the tunnel gates
+on one), stance approached from the Celadon side (the
+body blocks the corridor), and a sleeper swap - which
+needed a **box shuffle** because box 1 was full (20).
+Snorlax catch: `snorlax_catch` generalised - sleeper
+preference Sleep Powder -> Sing -> Hypnosis (the
+runner's Oddish knows no Sleep Powder and cannot learn
+it without a forbidden replacement; a boxed Exeggcute
+with Hypnosis did the job), chip fallback Bubble ->
+Water Gun **capped at exactly one chip** (a second
+Water Gun KO'd the first trial Snorlax at Lv62 crit
+range), Great Balls stocked to 10 first. Fly-house: the
+wrapper performs the route's documented bag-room duty
+(deposit item 0x2A - **the Helix Fossil**, mislabelled
+Moon Stone in my first draft and corrected; it is never
+used by the run and route22_prep deposits it anyway).
+Teach-fly: the R16 gate crossing made explicit (west
+yard -> gate -> east yard -> verified Cut), Pidgey
+withdrawn via the same box shuffle. Prep-grind: Card
+Key deposited first (dead weight after Silph; the
+17-stack assert then holds). R22 rival: the policy
+assumed probe movesets - it sleep-locked itself on an
+Oddish with no Sleep Powder and spammed an Ember the
+runner's Arcanine never learned (~30 phantom picks to
+the turn cap); all branches are now moveset-aware
+(Ember->Bite fallback, Hydro Pump gated on known,
+per-active Water pick BubbleBeam > Water Gun > Bubble).
+The win is narrow (Blastoise fainted, Arcanine 5 HP).
+League-grind: a Mansion Ditto that Transforms into the
+grinder and sleep-stalls past the 60 s fight cap killed
+two attempts at Lv46/Lv31; the abort is now recoverable
+inside the grind (flee and grind on - it fired once in
+the winning attempt, at Lv38). League-assemble: the
+grind ends inside the Mansion, where Fly is refused -
+the wrapper steps out first (retrying around wild
+encounters that race the door), and league_assemble
+itself now walks the last step from the plateau entrance
+into the lobby; stock-up spent exactly 45,400 as
+designed.
+
+**League learn-table disclosure.** `league_grind`
+applies the probe programme's own pre-written learn
+plans from the winning §28 line, and the runner followed
+them: Lapras - Sing accepted over Water Gun (16), Body
+Slam over Growl (25), Ice Beam over Body Slam (38), Mist
+/ Confuse Ray / Hydro Pump declined; Snorlax - Body Slam
+appended into a free slot (35), Double-Edge over
+Headbutt (48), Harden declined. These are the ported
+programme's fixed design, not new choices made during
+this run, but they are move replacements beyond the
+TM11 teach's letter and are recorded here for Vlad's
+visibility. Final League movesets are in the phase-34
+evidence below.
+
+### The Elite Four: Agatha was a policy bug, not levels
+
+Three pre-fix attempts all blacked out at Agatha. Root
+cause, traced: the league policy's anti-Ghost plan for
+Blastoise is Hydro Pump under a pump cap, filler Water
+Gun. The runner's Blastoise knows no Hydro Pump, so the
+decide guard substituted its strongest PP'd damaging
+move **by raw power** - Skull Bash (100, Normal),
+which is **immune** against Ghosts; and Snorlax's
+direct Body Slam plan looped Rest/Body Slam against a
+Haunter for 50+ turns (also immune). Lapras alone cannot
+carry five Ghosts/Poisons. Fixes (all in `_league_decide`
+/ `_LeagueSnap`): the snapshot now carries enemy types;
+the PP-guard substitution ranks by **effective** power
+and never picks an immune move (phantom Hydro Pump ->
+BubbleBeam, exactly the authorised teach paying off);
+a new immunity guard rewrites any directly-returned
+immune damaging move the same way, else switches; the
+Agatha Blastoise filler is moveset-aware (BubbleBeam >
+Water Gun). Post-fix record: Agatha beaten on every
+attempt. Lance cost Lapras (and usually Blastoise) each
+time; the Champion fight aborted twice on a 120 s ride
+timeout at sig (8,0,1) when the team entered half-dead,
+and one trace lost it late (T23) - but with a healthy
+entry the fight plays out: **the winning attempt took
+the Champion with Snorlax as the last mon standing**
+(75/232; Lapras 52, Blastoise 68, Arcanine 52, Oddish,
+Voltorb all fainted), money 107,943, then Oak -> Hall of
+Fame -> credits -> Pallet Town, verified.
+
+Winning-attempt phase walls, phases 11-34 (s):
+silph 772.1, sabrina 93.8, dojo 41.9, fuchsia 99.7,
+lapras-surf 9.1, safari-hunt 214.1, teach-strength 1.3,
+seafoam 65.4, mansion-blaine 62.9, super-rod 58.3,
+dratini 715.9, fly-journey 68.9, bicycle 2.2,
+snorlax-journey 39.6, snorlax 36.5, fly-house 8.7,
+teach-fly 13.6, viridian-gym 21.7, r22-prep-grind 292.7,
+r22-rival 21.6, victory-road 66.0, league-grind 1460.5,
+league-assemble 82.6, elite-four 982.3. Sum: 5,231.4.
+
+### The full-run number, honestly segmented
+
+Phases 1-10 (§42 clean walls): 2,883.7 s. Silph
+pre-grind (rehearsal measurement, incl. ~650 s waste):
+4,532 s. Phases 11-34 (winning attempts): 5,231.4 s.
+**Total: 12,647 s ~ 3 h 31 min** of emulator wall time,
+power-on to credits (~3 h 20-25 min at the grind's clean
+estimate). This excludes every failed attempt, all
+diagnosis, and the restart deaths - run5b alone logged
+17 RUN STOPPED events across ~28 launches, and the true
+machine cost of the continuation was several times the
+headline. What it proves: the ported programme, with the
+tightenings above, plays a fresh Red cartridge start to
+the Hall of Fame end-to-end with per-phase checkpoints
+and no human input. What it does not prove: single-
+process reliability (the winning stretch still needed
+fresh-process resumes; the phase-34 win was the fourth
+Elite Four attempt of its launch set), or pace - the
+number is dominated by two grinds (Silph ~75 min,
+League ~24 min) that exist because the gates were
+calibrated on a different lineage's team.

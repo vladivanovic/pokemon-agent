@@ -382,6 +382,19 @@ def glue_fuchsia_to_cerulean(ctx: Ctx) -> bool:
     # Ladder transit, section-24 anchors.
     if not _step(ctx, sf1, (7, 5), {b1f}):
         return False
+    # B1F west cross (run5b): the model's direct path climbs
+    # the row-3/row-4 ledge (one-way, down only) and the
+    # executor stalls on it; the live route runs south
+    # around the basin and up the west corridor (live-BFS
+    # verified from the stuck state).
+    if not _step(ctx, b1f, (5, 10)):
+        return False
+    if not _step(ctx, b1f, (3, 10)):
+        return False
+    if not _step(ctx, b1f, (3, 3)):
+        return False
+    if not _step(ctx, b1f, (3, 2)):
+        return False
     if not _step(ctx, b1f, (4, 2), {b2f}):
         return False
     # Step off the landing and back on to ride the ladder back up.
@@ -389,20 +402,55 @@ def glue_fuchsia_to_cerulean(ctx: Ctx) -> bool:
     _settle(ctx)
     if not _step(ctx, b2f, (5, 3), {b1f}):
         return False
+    # B1F east cross (run5b): the model's north-strip path
+    # uses (10, 3), a wall live; the live route drops the
+    # ledge to the west platform, rounds the south basin
+    # and climbs the east columns to the (13, 7) ladder
+    # (live-BFS verified).
+    for cell in ((3, 3), (3, 10), (7, 14), (9, 14),
+                 (9, 10), (9, 8), (13, 8)):
+        if not _step(ctx, b1f, cell):
+            return False
     if not _step(ctx, b1f, (13, 7), {b2f}):
         return False
+    # B2F south cross (run5b): the direct x5 column is
+    # blocked live at (5, 11); the live route detours via
+    # the x6 column (live-BFS verified).
+    for cell in ((6, 10), (6, 12), (5, 12)):
+        if not _step(ctx, b2f, cell):
+            return False
     if not _step(ctx, b2f, (5, 13), {b3f}):
         return False
-    if not _step(ctx, b3f, (15, 7), {b3f}):
+    # B3F east cross (run5b): row 7 is blocked live east
+    # of (12, 7); the live route runs along row 6 (BFS
+    # verified). The same-map expect of _step would mask a
+    # short walk, so the final cell is asserted directly.
+    if not _step(ctx, b3f, (12, 6)):
+        return False
+    if not _step(ctx, b3f, (15, 6)):
+        return False
+    rr._step_to_live(emu, ex, b3f, 15, 7, max_steps=60)
+    _settle(ctx)
+    st = ctx.state()
+    if st.map_id != b3f or (st.x, st.y) != (15, 7):
         return False
     if not rr._surf_board(emu, "down"):
         return False
     _settle(ctx, 120)
-    if ctx.state().map_id != b4f:
+    # Exit east exactly as seafoam_crossing does (run5b:
+    # the B4F detour in the original glue draft was wrong -
+    # (23, 9) is a B3F surf cell and the east ladders climb
+    # straight from B3F).
+    st = ctx.state()
+    if st.map_id != b3f or (st.x, st.y) != (15, 8):
         return False
-    if not _step(ctx, b4f, (23, 9), {b4f}):
+    if not rr._surf_walk_to(emu, ex, b3f, (23, 9)):
         return False
-    if not _step(ctx, b4f, (25, 14), {b2f}):
+    if not rr._surf_walk_to(emu, ex, b3f, (25, 14)):
+        return False
+    _settle(ctx)
+    st = ctx.state()
+    if st.map_id != b2f or (st.x, st.y) != (25, 14):
         return False
     if not _step(ctx, b2f, (25, 11), {b1f}):
         return False
@@ -427,6 +475,11 @@ def glue_fuchsia_to_cerulean(ctx: Ctx) -> bool:
     if not rr._hop_ride(emu, ex, hops):
         return False
     rr.heal_at_pokecenter(emu, ex, world.map_id("CeruleanPokecenter"))
+    # heal_at_pokecenter leaves by the exit mat (its
+    # documented contract); the phase ends INSIDE the
+    # center, so step back in (run5b).
+    if ctx.state().map_id != world.map_id("CeruleanPokecenter"):
+        rr._hop_ride(emu, ex, ["CeruleanPokecenter"])
     return ctx.state().map_id == world.map_id("CeruleanPokecenter")
 
 
@@ -436,14 +489,28 @@ def glue_cerulean_to_snorlax(ctx: Ctx) -> bool:
     where snorlax_catch takes over."""
     emu, ex, world = ctx.emu, ctx.ex, ctx.world
     cerpc = world.map_id("CeruleanPokecenter")
-    r10pc = world.map_id("Route10Pokecenter")
+    r10pc = world.map_id("RockTunnelPokecenter")
     r16 = world.map_id("Route16")
+    # traverse_rock_tunnel hard-gates on a Repel at entry
+    # (use_repel); the runner's bag can be out of them by
+    # now (run5b: 0 at the bicycle checkpoint). Stock up at
+    # the Cerulean Mart before departing.
+    if rr._bag_count(emu, rr.ITEM_REPEL) < 3:
+        cmart = world.map_id("CeruleanMart")
+        if not rr._hop_ride(emu, ex, ["CeruleanMart"]):
+            return False
+        rr.buy_mart_item(
+            emu, ex, cmart,
+            rr.CERULEAN_MART_LIST.index(rr.ITEM_REPEL),
+            rr.ITEM_REPEL, 5)
+        if rr._bag_count(emu, rr.ITEM_REPEL) < 1:
+            return False
     if ctx.state().map_id == cerpc:
         if not rr._hop_ride(emu, ex, ["CeruleanCity"]):
             return False
     if not rr._hop_ride(emu, ex, ["Route9", "Route10"]):
         return False
-    if not rr._hop_ride(emu, ex, ["Route10Pokecenter"]):
+    if not rr._hop_ride(emu, ex, ["RockTunnelPokecenter"]):
         return False
     rr.heal_at_pokecenter(emu, ex, r10pc)
     if not rr.traverse_rock_tunnel(emu, ex):
@@ -453,10 +520,43 @@ def glue_cerulean_to_snorlax(ctx: Ctx) -> bool:
             "Route7", "CeladonPokecenter"]
     if not rr._hop_ride(emu, ex, hops):
         return False
-    rr.heal_at_pokecenter(emu, ex, world.map_id("CeladonPokecenter"))
-    if not rr._hop_ride(emu, ex, ["Route16Gate1F", "Route16"]):
-        if not rr._hop_ride(emu, ex, ["Route16"]):
+    # snorlax_catch needs a sleep move in the party. The
+    # runner's party has none (its Oddish is Lv17, its
+    # Lapras Lv15 - Sleep Powder/Sing both one band away,
+    # and learning either would need a forbidden move
+    # replacement), but its box holds a Lv23 Exeggcute
+    # (species 12) with Hypnosis: swap it for the Goldeen
+    # spare (species 118) at this PC (run5b).
+    _sleep_moves = (79, 47, 95)
+    st = ctx.state()
+    if not any(mv in _sleep_moves
+               for mon in st.party for mv in mon.moves):
+        celpc = world.map_id("CeladonPokecenter")
+        # Box 1 is FULL (20 mons - the Dratini filled it),
+        # so a straight swap is refused ("Oops! This Box
+        # is full"). Shuffle via box 2: change box, deposit
+        # Goldeen there, change back, withdraw Exeggcute.
+        # Box 1 ends at 19, leaving room for the Snorlax.
+        if not rr.pc_change_box(emu, ex, celpc, 2):
             return False
+        if not rr.pc_deposit_mon(emu, ex, celpc, 118):
+            return False
+        if not rr.pc_change_box(emu, ex, celpc, 1):
+            return False
+        if not rr.pc_withdraw_mon(emu, ex, celpc, 12):
+            return False
+        st = ctx.state()
+        if not any(mv in _sleep_moves
+                   for mon in st.party for mv in mon.moves):
+            return False
+    rr.heal_at_pokecenter(emu, ex, world.map_id("CeladonPokecenter"))
+    # The stance is EAST of the Snorlax body (26, 10), and
+    # R16's east edge joins Celadon City: approach from
+    # Celadon walking west along the row-10 corridor (the
+    # section-24 route; from the gate side the body itself
+    # blocks the corridor - run5b).
+    if not rr._hop_ride(emu, ex, ["Route16"]):
+        return False
     if not _step(ctx, r16, (27, 10), {r16}):
         return False
     st = ctx.state()
@@ -483,14 +583,58 @@ def glue_teach_fly(ctx: Ctx) -> bool:
     _settle(ctx)
     if ctx.state().map_id != r16:
         return False
-    if not rr._step_to_live(emu, ex, r16, 27, 10, max_steps=300):
+    # West -> east across R16 (run5b): the direct walk to
+    # (27, 10) stalls at the gate's west face - the two
+    # segments join only through the gate's NORTH corridor
+    # and the (34, 9) Cut tree (the fly-house route in
+    # reverse). Cross explicitly.
+    gate = world.map_id("Route16Gate1F")
+    if not rr._step_to_live(emu, ex, r16, 16, 5,
+                            max_steps=300):
         return False
-    if not rr._step_to_live(emu, ex, r16, 34, 9, max_steps=300):
+    for _ in range(8):
+        if ctx.state().map_id == gate:
+            break
+        emu.press("right")
+        _settle(ctx)
+    if ctx.state().map_id != gate:
         return False
-    if not ex._cut_tree(r16, (34, 9)):
+    if not rr._step_to_live(emu, ex, gate, 6, 2,
+                            max_steps=200):
+        return False
+    for _ in range(8):
+        if ctx.state().map_id == r16:
+            break
+        emu.press("right")
+        _settle(ctx)
+    if ctx.state().map_id != r16:
+        return False
+    if not rr._step_to_live(emu, ex, r16, 34, 8,
+                            max_steps=300):
+        return False
+    ex._cut_tree(r16, (34, 9))
+    st = ctx.state()
+    if (st.x, st.y) != (34, 9):
+        return False
+    if not rr._step_to_live(emu, ex, r16, 27, 10,
+                            max_steps=300):
         return False
     if not rr._ride_battling(emu, ex, celpc):
         return False
+    if rr._party_index_of(emu, rr.SPECIES_PIDGEY) is None:
+        # teach_fly's internal swap deposits Diglett; the
+        # runner's party has none, and box 1 is full again
+        # (the Snorlax). Shuffle via box 2, depositing the
+        # Exeggcute (its sleeper job is done) (run5b).
+        if not rr.pc_change_box(emu, ex, celpc, 2):
+            return False
+        if not rr.pc_deposit_mon(emu, ex, celpc, 12):
+            return False
+        if not rr.pc_change_box(emu, ex, celpc, 1):
+            return False
+        if not rr.pc_withdraw_mon(emu, ex, celpc,
+                                  rr.SPECIES_PIDGEY):
+            return False
     if not rr.teach_fly(emu, ex, celpc):
         return False
     st = ctx.state()
@@ -624,8 +768,15 @@ def _ph_lapras_surf(ctx: Ctx):
     for tm in (rr.ITEM_TM24, rr.ITEM_TM29, rr.ITEM_TM46):
         if rr._bag_count(emu, tm):
             rr.deposit_item(emu, ex, rr.MAP_FUCHSIA_PC, tm)
+    # The probe's party carried a spare Nidoran-M to
+    # deposit; the runner's party does not - its spare
+    # is the Lv13 species-48 mon, which takes the same
+    # role (run5b).
+    dep = rr.SPECIES_NIDORAN_M
+    if rr._party_index_of(emu, dep) is None:
+        dep = 48
     return rr.teach_hm_to_boxed(
-        emu, ex, rr.MAP_FUCHSIA_PC, rr.SPECIES_NIDORAN_M,
+        emu, ex, rr.MAP_FUCHSIA_PC, dep,
         rr.SPECIES_LAPRAS, rr.ITEM_HM03_SURF, rr.MOVE_SURF,
         rr._heal_fuchsia_pc)
 
@@ -648,19 +799,149 @@ def _v_super_rod(ctx: Ctx):
 
 
 def _ph_dratini(ctx: Ctx):
-    ok, log = rr.safari_dratini(ctx.emu, ctx.ex)
+    # safari_dratini returns a plain bool (the probe-era
+    # (ok, log) tuple did not survive the port); pass a
+    # log list in for the notes (run5b).
+    log = []
+    ok = rr.safari_dratini(ctx.emu, ctx.ex, log)
     for line in log[-6:]:
         ctx.note(f"  dratini: {line}")
     return ok
 
 
+def _ensure_snorlax_sleeper(ctx: Ctx) -> bool:
+    """snorlax_catch needs a sleep move in the party; if
+    there is none, detour to the Celadon PC, shuffle the
+    boxed Exeggcute (Hypnosis) in for the Goldeen spare
+    via box 2 (box 1 is full), heal, and return to the
+    Route 16 stance (27, 10). No-op when a sleeper is
+    already in the party (the snorlax-journey glue also
+    performs this swap on fresh runs)."""
+    emu, ex, world = ctx.emu, ctx.ex, ctx.world
+    sleep_moves = (79, 47, 95)
+    st = ctx.state()
+    if any(mv in sleep_moves
+           for mon in st.party for mv in mon.moves):
+        return True
+    celpc = world.map_id("CeladonPokecenter")
+    if not rr._hop_ride(emu, ex, ["CeladonPokecenter"]):
+        return False
+    if not rr.pc_change_box(emu, ex, celpc, 2):
+        return False
+    if not rr.pc_deposit_mon(emu, ex, celpc, 118):
+        return False
+    if not rr.pc_change_box(emu, ex, celpc, 1):
+        return False
+    if not rr.pc_withdraw_mon(emu, ex, celpc, 12):
+        return False
+    rr.heal_at_pokecenter(emu, ex, celpc)
+    if not rr._hop_ride(emu, ex, ["Route16"]):
+        return False
+    if not _step(ctx, world.map_id("Route16"), (27, 10),
+                 {world.map_id("Route16")}):
+        return False
+    st = ctx.state()
+    return (st.x, st.y) == (27, 10) and any(
+        mv in sleep_moves for mon in st.party
+        for mv in mon.moves)
+
+
+def _ensure_great_balls(ctx: Ctx, want: int = 10) -> bool:
+    """snorlax_catch throws Great Balls first; the runner
+    reaches Route 16 with only ~3, and a multi-throw catch
+    (sleep cycles, broke-frees) can burn them all and fall
+    to the KO fallback. Stock up at the Celadon Dept Store
+    2F (floor-chained rides, the celadon_leg pattern) and
+    return to the stance."""
+    emu, ex, world = ctx.emu, ctx.ex, ctx.world
+    if rr._bag_count(emu, rr.ITEM_GREAT_BALL) >= want:
+        return True
+    celpc = world.map_id("CeladonPokecenter")
+    mart2f = world.map_id("CeladonMart2F")
+    if not rr._hop_ride(emu, ex, ["CeladonMart1F",
+                                  "CeladonMart2F"]):
+        return False
+    rr.buy_mart_item(emu, ex, mart2f, 0, rr.ITEM_GREAT_BALL,
+                     want, stand=(5, 5), face="up")
+    if not rr._hop_ride(emu, ex, ["CeladonMart1F",
+                                  "CeladonPokecenter"]):
+        return False
+    rr.heal_at_pokecenter(emu, ex, celpc)
+    if not rr._hop_ride(emu, ex, ["Route16"]):
+        return False
+    r16 = world.map_id("Route16")
+    if not _step(ctx, r16, (27, 10), {r16}):
+        return False
+    st = ctx.state()
+    return (st.x, st.y) == (27, 10) and \
+        rr._bag_count(emu, rr.ITEM_GREAT_BALL) >= 6
+
+
+def _ph_fly_house(ctx: Ctx):
+    """route16_fly_house's caller duty (its docstring):
+    bag room first - the girl's HM02 is refused at a full
+    20-stack bag. The runner has no TM stacks left to
+    deposit, so item 0x2A (the Helix Fossil - never used
+    by the run; route22_prep deposits it for the same
+    reason) goes into the Celadon PC instead (run5b)."""
+    emu, ex, world = ctx.emu, ctx.ex, ctx.world
+    if emu.pb.memory[rr.ADDR_NUM_BAG_ITEMS] >= 20:
+        celpc = world.map_id("CeladonPokecenter")
+        if not rr._hop_ride(emu, ex, ["CeladonPokecenter"]):
+            return False
+        if not rr.pc_deposit_item(emu, ex, celpc, 0x2A):
+            return False
+        rr.heal_at_pokecenter(emu, ex, celpc)
+        if not rr._hop_ride(emu, ex, ["Route16"]):
+            return False
+    return rr.route16_fly_house(emu, ex)
+
+
+def _ph_league_assemble(ctx: Ctx):
+    """league_assemble opens with fly_to(Viridian), but
+    league_grind's heal trips end INSIDE the Mansion
+    (they re-enter after healing), where Fly is refused.
+    Step out to Cinnabar first (run5b)."""
+    emu, ex, world = ctx.emu, ctx.ex, ctx.world
+    if emu.read_state().map_id == \
+            world.map_id("PokemonMansion1F"):
+        # The exit walk itself can trigger a wild Mansion
+        # encounter that races the door (run5b): clear and
+        # retry until the player is out on Cinnabar.
+        for _ in range(4):
+            if emu.read_state().in_battle:
+                rr._clear_wild_battle(emu)
+            if rr._exit_mansion(emu, ex):
+                break
+            rr._clear_wild_battle(emu)
+        else:
+            return False
+    return rr.league_assemble(emu, ex)
+
+
 def _ph_snorlax(ctx: Ctx):
+    if not _ensure_snorlax_sleeper(ctx):
+        ctx.note("  snorlax: sleeper swap detour failed")
+        return False
+    if not _ensure_great_balls(ctx):
+        ctx.note("  snorlax: great-ball stock-up failed")
+        return False
     res = rr.snorlax_catch(ctx.emu, ctx.ex)
     ctx.note(f"  snorlax_catch -> {res}")
     return res == "caught"
 
 
 def _ph_prep_grind(ctx: Ctx):
+    emu, ex, world = ctx.emu, ctx.ex, ctx.world
+    # route22_prep asserts a 17-stack bag after its three
+    # key-item deposits; the runner carries one extra
+    # stack, so deposit the Card Key first (dead weight
+    # after Silph Co) (run5b).
+    if len(rr._bag_items(emu)) >= 20 and \
+            rr._bag_count(emu, rr.ITEM_CARD_KEY) >= 1:
+        pc = world.map_id("ViridianPokecenter")
+        if rr._ride_or_cross(emu, ex, pc):
+            rr.deposit_item(emu, ex, pc, rr.ITEM_CARD_KEY)
     spend = rr.route22_prep(ctx.emu, ctx.ex)
     if spend is None or spend is False:
         return False
@@ -780,7 +1061,7 @@ def build_phases() -> list:
               _ph_snorlax,
               lambda ctx: _v_owned(ctx, rr.SPECIES_SNORLAX, "Snorlax")),
         Phase("fly-house", "Route 16 Fly House - HM02 Fly",
-              lambda ctx: rr.route16_fly_house(ctx.emu, ctx.ex),
+              _ph_fly_house,
               lambda ctx: _bag_has(ctx, rr.ITEM_HM02_FLY, "HM02")),
         Phase("teach-fly", "GLUE: Cut tree, Celadon PC, Fly on "
               "Pidgey, fly to Fuchsia",
@@ -803,7 +1084,7 @@ def build_phases() -> list:
               _v_league_grind),
         Phase("league-assemble", "Assemble six at Viridian, stock "
               "up, walk to Indigo",
-              lambda ctx: rr.league_assemble(ctx.emu, ctx.ex),
+              _ph_league_assemble,
               M("IndigoPlateau", "IndigoPlateauLobby")),
         Phase("elite-four", "Lorelei, Bruno, Agatha, Lance, Champion "
               "- Hall of Fame",

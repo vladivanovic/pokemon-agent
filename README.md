@@ -74,13 +74,19 @@ needed).
 
 ## Play the whole game (real ROM)
 
-`play_full_game.py` plays the **entire game in one process** — power-on
+`play_full_game.py` plays the **entire game** — power-on
 → intro → all eight badges → Elite Four → Champion → Hall of Fame — by
 sequencing the same ported leg functions in `run_real.py` that produced
 the completed save line ([`docs/supervisor-training.md`](docs/supervisor-training.md)
-§§1–28). It checkpoints after every phase and retries a failed phase
-from its start checkpoint (max 2 by default, then it stops and reports —
-it never skips a phase silently).
+§§1–28). **A full run has been completed end-to-end** (§43): all 34
+phases verified, ≈3 h 31 min of emulator wall time segmented as
+phases 1–10 (48 min, §42) + the redesigned Silph pre-grind (~75 min,
+measured in rehearsal) + phases 11–34 (87 min) — excluding failed
+attempts and diagnosis. It checkpoints after every phase and retries a
+failed phase from its start checkpoint (max 2 by default, then it
+stops and reports — it never skips a phase silently); the completed
+run used fresh-process `--resume` recoveries between phases, so treat
+"one process, no restarts" as unproven.
 
 Prerequisites: Python ≥ 3.10 and PyBoy:
 
